@@ -17,6 +17,7 @@ from app.models.boards import Board
 from app.models.gateways import Gateway
 from app.models.organizations import Organization
 from app.schemas.gateway_runtime import GatewayRuntimeSyncRequest
+from app.services.openclaw.gateway_agent_pack import STARTER_PACK_PRIMARY_MODEL_REF
 from app.services.openclaw import runtime_control
 from app.services.openclaw.runtime_control import (
     DEFAULT_PRIMARY_MODEL_REF,
@@ -385,6 +386,9 @@ async def test_reconcile_gateway_runtime_repairs_stuck_agents(
             async def _fake_sync_model_policies(self, **_kwargs: object) -> bool:
                 return True
 
+            async def _fake_available_models(_gateway: Gateway) -> list[str]:
+                return [STARTER_PACK_PRIMARY_MODEL_REF]
+
             monkeypatch.setattr(service, "_get_existing_agent_token", _fake_get_existing_token)
             monkeypatch.setattr(
                 runtime_control.AgentLifecycleOrchestrator,
@@ -396,6 +400,7 @@ async def test_reconcile_gateway_runtime_repairs_stuck_agents(
                 "sync_model_policies",
                 _fake_sync_model_policies,
             )
+            monkeypatch.setattr(service, "available_models", _fake_available_models)
 
             result = await service.reconcile_gateway_runtime(
                 gateway=gateway,
@@ -406,5 +411,66 @@ async def test_reconcile_gateway_runtime_repairs_stuck_agents(
             assert str(agent.id) in repaired_calls
             assert agent.id in result.repaired_agents
             assert result.synced_models is True
+    finally:
+        await engine.dispose()
+
+
+@pytest.mark.asyncio
+async def test_reconcile_gateway_runtime_backfills_gateway_starter_pack(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    engine = await _make_engine()
+    session_maker = async_sessionmaker(engine, class_=AsyncSession, expire_on_commit=False)
+    try:
+        async with session_maker() as session:
+            org = Organization(id=uuid4(), name="Personal Engineering")
+            gateway = Gateway(
+                id=uuid4(),
+                organization_id=org.id,
+                name="VM Gateway",
+                url="ws://gateway.example/ws",
+                workspace_root="/tmp/workspaces",
+            )
+            session.add(org)
+            session.add(gateway)
+            await session.commit()
+            await session.refresh(gateway)
+
+            service = GatewayRuntimeControlService(session)
+            auth = AuthContext(actor_type="user", user=SimpleNamespace(id=uuid4()))
+
+            async def _fake_sync_model_policies(self, **_kwargs: object) -> bool:
+                return True
+
+            async def _fake_available_models(_gateway: Gateway) -> list[str]:
+                return [STARTER_PACK_PRIMARY_MODEL_REF]
+
+            monkeypatch.setattr(
+                GatewayRuntimeControlService,
+                "sync_model_policies",
+                _fake_sync_model_policies,
+            )
+            monkeypatch.setattr(service, "available_models", _fake_available_models)
+
+            result = await service.reconcile_gateway_runtime(
+                gateway=gateway,
+                auth=auth,
+                request=GatewayRuntimeSyncRequest(repair_stuck_agents=False, sync_models=True),
+            )
+
+            agents = list(await Agent.objects.filter_by(gateway_id=gateway.id).all(session))
+            assert result.synced_models is True
+            assert len(agents) == 5
+            by_name = {agent.name: agent for agent in agents}
+            assert f"{gateway.name} Gateway Agent" in by_name
+            assert f"{gateway.name} Lead" in by_name
+            assert f"{gateway.name} Builder" in by_name
+            assert f"{gateway.name} Reviewer" in by_name
+            assert f"{gateway.name} Security" in by_name
+            assert by_name[f"{gateway.name} Lead"].model_profile == "general"
+            assert by_name[f"{gateway.name} Builder"].model_profile == "coder"
+            assert by_name[f"{gateway.name} Security"].model_profile == "budget"
+            assert by_name[f"{gateway.name} Builder"].model_primary == STARTER_PACK_PRIMARY_MODEL_REF
+            assert gateway.model_profiles is not None
     finally:
         await engine.dispose()

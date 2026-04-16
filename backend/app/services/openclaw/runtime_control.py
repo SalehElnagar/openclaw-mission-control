@@ -26,6 +26,14 @@ from app.schemas.telemetry import UsageSampleCreate
 from app.services.activity_log import actor_fields_from_auth, record_activity
 from app.services.openclaw.constants import DEFAULT_HEARTBEAT_CONFIG
 from app.services.openclaw.db_service import OpenClawDBService
+from app.services.openclaw.gateway_agent_pack import (
+    MAIN_AGENT_SPEC,
+    MANAGED_GATEWAY_AGENT_SPECS,
+    STARTER_PACK_PRIMARY_MODEL_REF,
+    GatewayManagedAgentSpec,
+    apply_gateway_managed_agent_spec,
+    runtime_agent_identifier,
+)
 from app.services.openclaw.gateway_rpc import GatewayConfig as GatewayClientConfig
 from app.services.openclaw.gateway_rpc import OpenClawGatewayError, openclaw_call
 from app.services.openclaw.internal.agent_key import agent_key as runtime_agent_id
@@ -390,55 +398,88 @@ class GatewayRuntimeControlService(OpenClawDBService):
     """Manage safe Mission Control -> OpenClaw runtime synchronization."""
 
     async def _find_main_agent(self, gateway: Gateway) -> Agent | None:
+        return await self._find_gateway_agent_by_session_key(
+            gateway=gateway,
+            session_key=MAIN_AGENT_SPEC.session_key(gateway),
+        )
+
+    async def _find_gateway_agent_by_session_key(
+        self,
+        *,
+        gateway: Gateway,
+        session_key: str,
+    ) -> Agent | None:
         return (
             await Agent.objects.filter_by(gateway_id=gateway.id)
             .filter(col(Agent.board_id).is_(None))
+            .filter(col(Agent.openclaw_session_id) == session_key)
             .first(self.session)
         )
 
     async def _upsert_main_agent_record(self, gateway: Gateway) -> tuple[Agent, bool]:
-        changed = False
-        agent = await self._find_main_agent(gateway)
-        session_key = GatewayAgentIdentity.session_key(gateway)
-        main_name = f"{gateway.name} Gateway Agent"
-        identity_profile = _default_main_identity_profile()
-        if agent is None:
-            agent = Agent(
-                name=main_name,
-                status="provisioning",
-                board_id=None,
-                gateway_id=gateway.id,
-                is_board_lead=False,
-                openclaw_session_id=session_key,
-                heartbeat_config=DEFAULT_HEARTBEAT_CONFIG.copy(),
-                identity_profile=identity_profile,
-            )
-            self.session.add(agent)
-            changed = True
-        if agent.name != main_name:
-            agent.name = main_name
-            changed = True
-        if agent.gateway_id != gateway.id:
-            agent.gateway_id = gateway.id
-            changed = True
-        if agent.board_id is not None:
-            agent.board_id = None
-            changed = True
-        if agent.is_board_lead:
-            agent.is_board_lead = False
-            changed = True
-        if agent.openclaw_session_id != session_key:
-            agent.openclaw_session_id = session_key
-            changed = True
-        if agent.heartbeat_config is None:
-            agent.heartbeat_config = DEFAULT_HEARTBEAT_CONFIG.copy()
-            changed = True
-        if agent.identity_profile is None:
-            agent.identity_profile = identity_profile
-            changed = True
+        return await self._upsert_gateway_agent_record(gateway=gateway, spec=MAIN_AGENT_SPEC)
+
+    async def _upsert_gateway_agent_record(
+        self,
+        *,
+        gateway: Gateway,
+        spec: GatewayManagedAgentSpec,
+    ) -> tuple[Agent, bool]:
+        existing = await self._find_gateway_agent_by_session_key(
+            gateway=gateway,
+            session_key=spec.session_key(gateway),
+        )
+        agent, changed = apply_gateway_managed_agent_spec(
+            gateway=gateway,
+            spec=spec,
+            agent=existing,
+        )
         if changed:
             self.session.add(agent)
         return agent, changed
+
+    async def _ensure_gateway_managed_agents(self, gateway: Gateway) -> list[Agent]:
+        changed = False
+        for spec in MANAGED_GATEWAY_AGENT_SPECS:
+            _agent, spec_changed = await self._upsert_gateway_agent_record(
+                gateway=gateway,
+                spec=spec,
+            )
+            changed = changed or spec_changed
+        if changed:
+            await self.session.commit()
+        return list(await Agent.objects.filter_by(gateway_id=gateway.id).all(self.session))
+
+    async def _ensure_gateway_default_model_profiles(
+        self,
+        *,
+        gateway: Gateway,
+        available_models: Iterable[str],
+    ) -> bool:
+        available = set(available_models)
+        if STARTER_PACK_PRIMARY_MODEL_REF not in available:
+            return False
+        profiles = _load_model_profiles(gateway)
+        changed = False
+        for profile_name in PROFILE_NAMES:
+            selection = _profile_selection(profiles, profile_name)
+            if selection is not None and selection.primary_model:
+                continue
+            setattr(
+                profiles,
+                profile_name,
+                ModelSelection(
+                    primary_model=STARTER_PACK_PRIMARY_MODEL_REF,
+                    fallback_models=[],
+                ),
+            )
+            changed = True
+        if changed:
+            gateway.default_model_profile = "general"
+            gateway.model_profiles = profiles.model_dump(mode="json", exclude_none=True)
+            self.session.add(gateway)
+            await self.session.commit()
+        return changed
 
     async def _gateway_models_payload(self, gateway: Gateway) -> object:
         return await openclaw_call("models.list", config=_gateway_client_config(gateway))
@@ -521,6 +562,13 @@ class GatewayRuntimeControlService(OpenClawDBService):
                 status_code=status.HTTP_502_BAD_GATEWAY,
                 detail="Gateway did not return any runtime models for validation.",
             )
+        if (
+            gateway.model_profiles in ({}, None)
+            and DEFAULT_PRIMARY_MODEL_REF in desired_refs
+            and DEFAULT_PRIMARY_MODEL_REF not in available
+            and STARTER_PACK_PRIMARY_MODEL_REF in available
+        ):
+            desired_refs.discard(DEFAULT_PRIMARY_MODEL_REF)
         unsupported = sorted(desired_refs - available)
         if unsupported:
             raise HTTPException(
@@ -558,11 +606,7 @@ class GatewayRuntimeControlService(OpenClawDBService):
         agent: Agent,
     ) -> str | None:
         control_plane = OpenClawGatewayControlPlane(_gateway_client_config(gateway))
-        gateway_agent_id = (
-            GatewayAgentIdentity.openclaw_agent_id(gateway)
-            if agent.board_id is None
-            else runtime_agent_id(agent)
-        )
+        gateway_agent_id = runtime_agent_identifier(gateway, agent)
         try:
             payload = await control_plane.get_agent_file_payload(
                 agent_id=gateway_agent_id, name="TOOLS.md"
@@ -662,11 +706,7 @@ class GatewayRuntimeControlService(OpenClawDBService):
         for agent in managed_agents:
             resolved = resolve_agent_model_selection(gateway=gateway, agent=agent)
             payload = _model_payload(resolved)
-            agent_key = (
-                GatewayAgentIdentity.openclaw_agent_id(gateway)
-                if agent.board_id is None
-                else runtime_agent_id(agent)
-            )
+            agent_key = runtime_agent_identifier(gateway, agent)
             selection_by_id[agent_key] = payload
             if resolved is not None and resolved.primary_model:
                 desired_refs.add(resolved.primary_model)
@@ -847,13 +887,18 @@ class GatewayRuntimeControlService(OpenClawDBService):
     ) -> GatewayRuntimeSyncResponse:
         """Idempotently repair stuck provisioning and sync model/runtime state."""
         warnings: list[str] = []
-        main_agent, created = await self._upsert_main_agent_record(gateway)
-        if created:
-            self.session.add(main_agent)
-            await self.session.commit()
-            await self.session.refresh(main_agent)
-
-        all_agents = list(await Agent.objects.filter_by(gateway_id=gateway.id).all(self.session))
+        all_agents = await self._ensure_gateway_managed_agents(gateway)
+        available_models = []
+        try:
+            available_models = await self.available_models(gateway)
+        except OpenClawGatewayError:
+            available_models = []
+        if available_models:
+            await self._ensure_gateway_default_model_profiles(
+                gateway=gateway,
+                available_models=available_models,
+            )
+            all_agents = list(await Agent.objects.filter_by(gateway_id=gateway.id).all(self.session))
         repaired_agents: list[Any] = []
         skipped_agents: list[Any] = []
         if request.repair_stuck_agents:

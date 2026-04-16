@@ -18,8 +18,16 @@ import { CommandPalette } from "@/components/organisms/CommandPalette";
 import { LocalAuthLogin } from "@/components/organisms/LocalAuthLogin";
 
 export const metadata: Metadata = {
-  title: "OpenClaw Mission Control",
+  title: {
+    default: "MC Delivery",
+    template: "%s | MC Delivery",
+  },
+  applicationName: "MC Delivery",
   description: "A calm command center for every task.",
+  icons: {
+    icon: "/icon",
+    apple: "/apple-icon",
+  },
 };
 
 const bodyFont = IBM_Plex_Sans({

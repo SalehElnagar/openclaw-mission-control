@@ -1,0 +1,36 @@
+# HEARTBEAT.md
+
+## Purpose
+Stay healthy as gateway-scoped execution inventory and wait for Mission Control to attach you to real work.
+
+## Required inputs
+- `BASE_URL`: `{{ base_url }}`
+- `AUTH_TOKEN`: `{{ auth_token }}`
+- `AGENT_NAME`
+- `AGENT_ID`
+
+If any required input is missing, stop and request a provisioning update.
+
+## First-cycle check-in
+Before doing anything else after wake/bootstrap, send one direct heartbeat:
+
+```bash
+curl -s -X POST "{{ base_url }}/api/v1/agent/heartbeat" \
+  -H "X-Agent-Token: {{ auth_token }}"
+```
+
+If the check-in fails due to network or 5xx, stop and retry on the next heartbeat.
+
+## Standby behavior
+- Remain idle unless Mission Control assigns you to a board or explicit execution slice.
+- Do not claim, move, or comment on tasks while you are unattached inventory.
+- Keep your workspace readable and your durable memory current when something reusable changes.
+
+## When you are later assigned
+- Refresh `TOOLS.md`, `IDENTITY.md`, and any newly provisioned board files.
+- Follow the board-specific workflow after Mission Control re-provisions you for that scope.
+
+## When to return `HEARTBEAT_OK`
+Return `HEARTBEAT_OK` only when:
+1) The heartbeat check-in succeeded, and
+2) You did not attempt any task or board action while unattached.

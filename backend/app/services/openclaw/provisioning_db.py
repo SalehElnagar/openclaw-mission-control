@@ -59,6 +59,7 @@ from app.services.openclaw.gateway_resolver import (
     optional_gateway_client_config,
     require_gateway_for_board,
 )
+from app.services.openclaw.gateway_agent_pack import is_gateway_main_agent
 from app.services.openclaw.gateway_rpc import GatewayConfig as GatewayClientConfig
 from app.services.openclaw.gateway_rpc import (
     OpenClawGatewayError,
@@ -933,7 +934,7 @@ class AgentLifecycleService(OpenClawDBService):
 
     @staticmethod
     def is_gateway_main(agent: Agent) -> bool:
-        return agent.board_id is None and agent.purpose != "product-planner"
+        return is_gateway_main_agent(agent)
 
     @classmethod
     def to_agent_read(cls, agent: Agent) -> AgentRead:
@@ -1427,17 +1428,28 @@ class AgentLifecycleService(OpenClawDBService):
                 gateway=gateway_for_main,
             )
 
-        if make_main is None and agent.board_id is None and main_gateway is not None:
+        if (
+            make_main is None
+            and agent.board_id is None
+            and main_gateway is not None
+            and is_gateway_main_agent(agent)
+        ):
             return AgentUpdateProvisionTarget(
                 is_main_agent=True,
                 board=None,
                 gateway=main_gateway,
-            )
+        )
 
         if agent.board_id is None:
-            raise HTTPException(
-                status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
-                detail="board_id is required for non-main agents",
+            if main_gateway is None:
+                raise HTTPException(
+                    status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
+                    detail="Gateway agent requires a gateway configuration",
+                )
+            return AgentUpdateProvisionTarget(
+                is_main_agent=False,
+                board=None,
+                gateway=main_gateway,
             )
         board = await self.require_board(agent.board_id)
         gateway, _client_config = await self.require_gateway(board)

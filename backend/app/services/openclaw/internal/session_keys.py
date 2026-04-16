@@ -18,6 +18,12 @@ def gateway_main_session_key(gateway_id: UUID) -> str:
     return GatewayAgentIdentity.session_key_for_id(gateway_id)
 
 
+def gateway_execution_session_key(gateway_id: UUID, role_key: str) -> str:
+    """Return the deterministic session key for a gateway-scoped execution agent."""
+    normalized_role = role_key.strip().lower().replace("_", "-")
+    return f"{AGENT_SESSION_PREFIX}:mc-{normalized_role}-gateway-{gateway_id}:main"
+
+
 def board_lead_session_key(board_id: UUID) -> str:
     """Return the deterministic session key for a board lead agent."""
     return f"{AGENT_SESSION_PREFIX}:lead-{board_id}:main"

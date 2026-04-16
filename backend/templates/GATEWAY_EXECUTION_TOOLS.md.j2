@@ -1,0 +1,16 @@
+# TOOLS.md
+
+- `BASE_URL={{ base_url }}`
+- `AUTH_TOKEN={{ auth_token }}`
+- `AGENT_NAME={{ agent_name }}`
+- `AGENT_ID={{ agent_id }}`
+- `WORKSPACE_ROOT={{ workspace_root }}`
+{% if workspace_path is defined %}
+- `WORKSPACE_PATH={{ workspace_path }}`
+{% endif %}
+- Required tools: `curl`, `jq`
+
+## API safety
+- Use `POST {{ base_url }}/api/v1/agent/heartbeat` for health check-ins.
+- Do not use board-specific APIs until Mission Control explicitly provisions a board scope for you.
+- Do not message humans or board leads as if you were the gateway-main agent.

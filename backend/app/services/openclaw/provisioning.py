@@ -30,6 +30,7 @@ from app.services.openclaw.constants import (
     DEFAULT_HEARTBEAT_CONFIG,
     DEFAULT_IDENTITY_PROFILE,
     EXTRA_IDENTITY_PROFILE_FIELDS,
+    GATEWAY_EXECUTION_TEMPLATE_MAP,
     HEARTBEAT_AGENT_TEMPLATE,
     HEARTBEAT_LEAD_TEMPLATE,
     IDENTITY_PROFILE_FIELDS,
@@ -52,6 +53,7 @@ from app.services.openclaw.internal.session_keys import (
     board_agent_session_key,
     board_lead_session_key,
 )
+from app.services.openclaw.gateway_agent_pack import is_gateway_main_agent
 from app.services.openclaw.shared import GatewayAgentIdentity
 
 if TYPE_CHECKING:
@@ -483,6 +485,33 @@ def _build_main_context(
         "auth_token": auth_token,
         "main_session_key": GatewayAgentIdentity.session_key(gateway),
         "workspace_root": gateway.workspace_root or "",
+        **user_context,
+        **identity_context,
+    }
+
+
+def _build_gateway_execution_context(
+    agent: Agent,
+    gateway: Gateway,
+    auth_token: str,
+    user: User | None,
+) -> dict[str, str]:
+    base_url = settings.base_url
+    identity_context = _identity_context(agent)
+    user_context = _user_context(user)
+    workspace_root = gateway.workspace_root or ""
+    workspace_path = _workspace_path(agent, workspace_root) if workspace_root else ""
+    return {
+        "agent_name": agent.name,
+        "agent_id": str(agent.id),
+        "is_main_agent": "false",
+        "is_board_lead": "false",
+        "session_key": agent.openclaw_session_id or "",
+        "base_url": base_url,
+        "auth_token": auth_token,
+        "main_session_key": GatewayAgentIdentity.session_key(gateway),
+        "workspace_root": workspace_root,
+        "workspace_path": workspace_path,
         **user_context,
         **identity_context,
     }
@@ -1212,6 +1241,28 @@ class GatewayMainAgentLifecycleManager(BaseAgentLifecycleManager):
         return preserved
 
 
+class GatewayExecutionAgentLifecycleManager(BaseAgentLifecycleManager):
+    """Provisioning manager for gateway-scoped reusable execution agents."""
+
+    def _agent_id(self, agent: Agent) -> str:
+        return _agent_key(agent)
+
+    def _build_context(
+        self,
+        *,
+        agent: Agent,
+        auth_token: str,
+        user: User | None,
+        board: Board | None,
+    ) -> dict[str, str]:
+        _ = board
+        return _build_gateway_execution_context(agent, self._gateway, auth_token, user)
+
+    def _template_overrides(self, agent: Agent) -> dict[str, str] | None:
+        _ = agent
+        return GATEWAY_EXECUTION_TEMPLATE_MAP
+
+
 def _control_plane_for_gateway(gateway: Gateway) -> OpenClawGatewayControlPlane:
     if not gateway.url:
         msg = "Gateway url is required"
@@ -1314,13 +1365,15 @@ class OpenClawGatewayProvisioner:
 
         # Resolve session key and agent type.
         if board is None:
-            session_key = (
-                agent.openclaw_session_id or GatewayAgentIdentity.session_key(gateway) or ""
-            ).strip()
+            session_key = (agent.openclaw_session_id or "").strip()
             if not session_key:
-                msg = "gateway main agent session_key is required"
+                msg = "gateway-scoped agent session_key is required"
                 raise ValueError(msg)
-            manager_type: type[BaseAgentLifecycleManager] = GatewayMainAgentLifecycleManager
+            manager_type: type[BaseAgentLifecycleManager]
+            if is_gateway_main_agent(agent):
+                manager_type = GatewayMainAgentLifecycleManager
+            else:
+                manager_type = GatewayExecutionAgentLifecycleManager
         else:
             session_key = _session_key(agent)
             manager_type = BoardAgentLifecycleManager

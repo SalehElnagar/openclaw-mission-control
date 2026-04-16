@@ -39,6 +39,7 @@ from app.services.board_group_snapshot import build_board_group_snapshot
 from app.services.board_lifecycle import delete_board as delete_board_service
 from app.services.board_snapshot import build_board_snapshot
 from app.services.openclaw.gateway_dispatch import GatewayDispatchService
+from app.services.openclaw.gateway_agent_pack import is_gateway_main_agent
 from app.services.openclaw.gateway_rpc import GatewayConfig as GatewayClientConfig
 from app.services.openclaw.gateway_rpc import OpenClawGatewayError
 from app.services.openclaw.provisioning_db import (
@@ -113,11 +114,12 @@ def _board_update_message(
 
 
 async def _require_gateway_main_agent(session: AsyncSession, gateway: Gateway) -> None:
-    main_agent = (
+    gateway_agents = (
         await Agent.objects.filter_by(gateway_id=gateway.id)
         .filter(col(Agent.board_id).is_(None))
-        .first(session)
+        .all(session)
     )
+    main_agent = next((agent for agent in gateway_agents if is_gateway_main_agent(agent)), None)
     if main_agent is None:
         raise HTTPException(
             status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,

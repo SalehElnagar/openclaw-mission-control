@@ -23,6 +23,13 @@ from app.schemas.gateways import GatewayTemplatesSyncResult
 from app.services.openclaw.constants import DEFAULT_HEARTBEAT_CONFIG
 from app.services.openclaw.db_service import OpenClawDBService
 from app.services.openclaw.error_messages import normalize_gateway_error_message
+from app.services.openclaw.gateway_agent_pack import (
+    MAIN_AGENT_SPEC,
+    MANAGED_GATEWAY_AGENT_SPECS,
+    GatewayManagedAgentSpec,
+    apply_gateway_managed_agent_spec,
+    runtime_agent_identifier,
+)
 from app.services.openclaw.gateway_compat import check_gateway_version_compatibility
 from app.services.openclaw.gateway_rpc import GatewayConfig as GatewayClientConfig
 from app.services.openclaw.gateway_rpc import OpenClawGatewayError, openclaw_call
@@ -105,61 +112,48 @@ class GatewayAdminLifecycleService(OpenClawDBService):
         return gateway
 
     async def find_main_agent(self, gateway: Gateway) -> Agent | None:
+        return await self.find_gateway_agent_by_session_key(
+            gateway=gateway,
+            session_key=MAIN_AGENT_SPEC.session_key(gateway),
+        )
+
+    async def find_gateway_agent_by_session_key(
+        self,
+        *,
+        gateway: Gateway,
+        session_key: str,
+    ) -> Agent | None:
         return (
             await Agent.objects.filter_by(gateway_id=gateway.id)
             .filter(col(Agent.board_id).is_(None))
+            .filter(col(Agent.openclaw_session_id) == session_key)
             .first(self.session)
         )
 
     async def upsert_main_agent_record(self, gateway: Gateway) -> tuple[Agent, bool]:
-        changed = False
-        session_key = GatewayAgentIdentity.session_key(gateway)
-        agent = await self.find_main_agent(gateway)
-        main_agent_name = self.main_agent_manager.build_main_agent_name(gateway)
-        identity_profile = self.main_agent_manager.build_identity_profile()
-        if agent is None:
-            agent = Agent(
-                name=main_agent_name,
-                status="provisioning",
-                board_id=None,
-                gateway_id=gateway.id,
-                is_board_lead=False,
-                openclaw_session_id=session_key,
-                heartbeat_config=DEFAULT_HEARTBEAT_CONFIG.copy(),
-                identity_profile=identity_profile,
-            )
-            self.session.add(agent)
-            changed = True
-        if agent.board_id is not None:
-            agent.board_id = None
-            changed = True
-        if agent.gateway_id != gateway.id:
-            agent.gateway_id = gateway.id
-            changed = True
-        if agent.is_board_lead:
-            agent.is_board_lead = False
-            changed = True
-        if agent.name != main_agent_name:
-            agent.name = main_agent_name
-            changed = True
-        if agent.openclaw_session_id != session_key:
-            agent.openclaw_session_id = session_key
-            changed = True
-        if agent.heartbeat_config is None:
-            agent.heartbeat_config = DEFAULT_HEARTBEAT_CONFIG.copy()
-            changed = True
-        if agent.identity_profile is None:
-            agent.identity_profile = identity_profile
-            changed = True
-        if not agent.status:
-            agent.status = "provisioning"
-            changed = True
+        return await self.upsert_gateway_agent_record(gateway=gateway, spec=MAIN_AGENT_SPEC)
+
+    async def upsert_gateway_agent_record(
+        self,
+        *,
+        gateway: Gateway,
+        spec: GatewayManagedAgentSpec,
+    ) -> tuple[Agent, bool]:
+        existing = await self.find_gateway_agent_by_session_key(
+            gateway=gateway,
+            session_key=spec.session_key(gateway),
+        )
+        agent, changed = apply_gateway_managed_agent_spec(
+            gateway=gateway,
+            spec=spec,
+            agent=existing,
+        )
         if changed:
             agent.updated_at = utcnow()
             self.session.add(agent)
         return agent, changed
 
-    async def gateway_has_main_agent_entry(self, gateway: Gateway) -> bool:
+    async def gateway_has_runtime_agent_entry(self, gateway: Gateway, agent: Agent) -> bool:
         if not gateway.url:
             return False
         config = GatewayClientConfig(
@@ -168,7 +162,7 @@ class GatewayAdminLifecycleService(OpenClawDBService):
             allow_insecure_tls=gateway.allow_insecure_tls,
             disable_device_pairing=gateway.disable_device_pairing,
         )
-        target_id = GatewayAgentIdentity.openclaw_agent_id(gateway)
+        target_id = runtime_agent_identifier(gateway, agent)
         try:
             await openclaw_call("agents.files.list", {"agentId": target_id}, config=config)
         except OpenClawGatewayError as exc:
@@ -273,19 +267,23 @@ class GatewayAdminLifecycleService(OpenClawDBService):
 
     async def ensure_gateway_agents_exist(self, gateways: list[Gateway]) -> None:
         for gateway in gateways:
-            agent, gateway_changed = await self.upsert_main_agent_record(gateway)
-            has_gateway_entry = await self.gateway_has_main_agent_entry(gateway)
-            needs_provision = (
-                gateway_changed or not bool(agent.agent_token_hash) or not has_gateway_entry
-            )
-            if needs_provision:
-                await self.provision_main_agent_record(
-                    gateway,
-                    agent,
-                    user=None,
-                    action="provision",
-                    notify=False,
+            for spec in MANAGED_GATEWAY_AGENT_SPECS:
+                agent, gateway_changed = await self.upsert_gateway_agent_record(
+                    gateway=gateway,
+                    spec=spec,
                 )
+                has_gateway_entry = await self.gateway_has_runtime_agent_entry(gateway, agent)
+                needs_provision = (
+                    gateway_changed or not bool(agent.agent_token_hash) or not has_gateway_entry
+                )
+                if needs_provision:
+                    await self.provision_main_agent_record(
+                        gateway,
+                        agent,
+                        user=None,
+                        action="provision",
+                        notify=False,
+                    )
 
     async def clear_agent_foreign_keys(self, *, agent_id: UUID) -> None:
         now = utcnow()
