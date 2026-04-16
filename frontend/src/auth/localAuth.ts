@@ -8,6 +8,14 @@ import {
 } from "@/auth/localAuthShared";
 
 let localToken: string | null = null;
+const EDGE_LOCAL_AUTH_SENTINEL = "__mc_edge_auth__";
+
+function hasLocalAuthPresenceCookie(): boolean {
+  if (typeof document === "undefined") return false;
+  return document.cookie
+    .split(";")
+    .some((entry) => entry.trim() === `${LOCAL_AUTH_PRESENCE_COOKIE}=1`);
+}
 
 function syncLocalAuthPresenceCookie(present: boolean): void {
   if (typeof document === "undefined") return;
@@ -43,6 +51,9 @@ export function getLocalAuthToken(): string | null {
     }
   } catch {
     // Ignore storage failures (private mode / policy).
+  }
+  if (hasLocalAuthPresenceCookie()) {
+    return EDGE_LOCAL_AUTH_SENTINEL;
   }
   return null;
 }
