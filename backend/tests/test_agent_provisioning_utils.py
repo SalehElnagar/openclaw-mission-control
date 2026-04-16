@@ -463,6 +463,144 @@ async def test_set_agent_files_update_overwrite_writes_preserved_user_md():
 
 
 @pytest.mark.asyncio
+async def test_board_worker_set_agent_files_deletes_stale_bootstrap():
+    class _ControlPlaneStub:
+        def __init__(self):
+            self.writes: list[tuple[str, str]] = []
+            self.deletes: list[str] = []
+
+        async def ensure_agent_session(self, session_key, *, label=None):
+            return None
+
+        async def reset_agent_session(self, session_key):
+            return None
+
+        async def delete_agent_session(self, session_key):
+            return None
+
+        async def upsert_agent(self, registration):
+            return None
+
+        async def delete_agent(self, agent_id, *, delete_files=True):
+            return None
+
+        async def list_agent_files(self, agent_id):
+            return {}
+
+        async def set_agent_file(self, *, agent_id, name, content):
+            self.writes.append((name, content))
+
+        async def delete_agent_file(self, *, agent_id, name):
+            self.deletes.append(name)
+
+        async def patch_agent_heartbeats(self, entries):
+            return None
+
+    @dataclass
+    class _GatewayTiny:
+        id: UUID
+        name: str
+        url: str
+        token: str | None
+        workspace_root: str
+        allow_insecure_tls: bool = False
+        disable_device_pairing: bool = False
+
+    gateway = _GatewayTiny(
+        id=uuid4(),
+        name="G",
+        url="ws://x",
+        token=None,
+        workspace_root="/tmp",
+    )
+    cp = _ControlPlaneStub()
+    mgr = agent_provisioning.BoardAgentLifecycleManager(gateway, cp)  # type: ignore[arg-type]
+
+    await mgr._set_agent_files(
+        agent=SimpleNamespace(is_board_lead=False),
+        agent_id="agent-x",
+        rendered={"AGENTS.md": "managed"},
+        desired_file_names={"AGENTS.md"},
+        existing_files={"BOOTSTRAP.md": {"name": "BOOTSTRAP.md", "missing": False}},
+        action="update",
+    )
+
+    assert cp.writes == [("AGENTS.md", "managed")]
+    assert cp.deletes == ["BOOTSTRAP.md"]
+
+
+@pytest.mark.asyncio
+async def test_board_worker_set_agent_files_neutralizes_stale_bootstrap_when_delete_unsupported():
+    class _ControlPlaneStub:
+        def __init__(self):
+            self.writes: list[tuple[str, str]] = []
+            self.deletes: list[str] = []
+
+        async def ensure_agent_session(self, session_key, *, label=None):
+            return None
+
+        async def reset_agent_session(self, session_key):
+            return None
+
+        async def delete_agent_session(self, session_key):
+            return None
+
+        async def upsert_agent(self, registration):
+            return None
+
+        async def delete_agent(self, agent_id, *, delete_files=True):
+            return None
+
+        async def list_agent_files(self, agent_id):
+            return {}
+
+        async def set_agent_file(self, *, agent_id, name, content):
+            self.writes.append((name, content))
+
+        async def delete_agent_file(self, *, agent_id, name):
+            self.deletes.append(name)
+            raise agent_provisioning.OpenClawGatewayError("unknown method: agents.files.delete")
+
+        async def patch_agent_heartbeats(self, entries):
+            return None
+
+    @dataclass
+    class _GatewayTiny:
+        id: UUID
+        name: str
+        url: str
+        token: str | None
+        workspace_root: str
+        allow_insecure_tls: bool = False
+        disable_device_pairing: bool = False
+
+    gateway = _GatewayTiny(
+        id=uuid4(),
+        name="G",
+        url="ws://x",
+        token=None,
+        workspace_root="/tmp",
+    )
+    cp = _ControlPlaneStub()
+    mgr = agent_provisioning.BoardAgentLifecycleManager(gateway, cp)  # type: ignore[arg-type]
+
+    await mgr._set_agent_files(
+        agent=SimpleNamespace(is_board_lead=False),
+        agent_id="agent-x",
+        rendered={"AGENTS.md": "managed"},
+        desired_file_names={"AGENTS.md"},
+        existing_files={"BOOTSTRAP.md": {"name": "BOOTSTRAP.md", "missing": False}},
+        action="update",
+    )
+
+    assert cp.deletes == ["BOOTSTRAP.md"]
+    assert cp.writes[0] == ("AGENTS.md", "managed")
+    assert cp.writes[1][0] == "BOOTSTRAP.md"
+    assert "Mission Control" in cp.writes[1][1]
+    assert "HEARTBEAT.md" in cp.writes[1][1]
+
+
+@pytest.mark.asyncio
 async def test_control_plane_upsert_agent_create_then_update(monkeypatch):
     calls: list[tuple[str, dict[str, object] | None]] = []
 
@@ -576,6 +714,90 @@ async def test_control_plane_upsert_agent_retries_update_after_create_race(monke
 
 
 @pytest.mark.asyncio
+async def test_control_plane_upsert_agent_retries_transport_error_after_create_restart(
+    monkeypatch,
+):
+    calls: list[tuple[str, dict[str, object] | None]] = []
+    sleeps: list[float] = []
+    update_attempts = 0
+
+    async def _fake_sleep(seconds: float) -> None:
+        sleeps.append(seconds)
+
+    async def _fake_openclaw_call(method, params=None, config=None):
+        nonlocal update_attempts
+        _ = config
+        calls.append((method, params))
+        if method == "agents.create":
+            return {"ok": True}
+        if method == "agents.update":
+            update_attempts += 1
+            if update_attempts < 3:
+                raise agent_provisioning.OpenClawGatewayError("[Errno 111] Connection refused")
+            return {"ok": True}
+        if method == "config.get":
+            return {"hash": None, "config": {"agents": {"list": []}}}
+        if method == "config.patch":
+            return {"ok": True}
+        raise AssertionError(f"Unexpected method: {method}")
+
+    monkeypatch.setattr(agent_provisioning, "openclaw_call", _fake_openclaw_call)
+    monkeypatch.setattr(agent_provisioning.asyncio, "sleep", _fake_sleep)
+    cp = agent_provisioning.OpenClawGatewayControlPlane(
+        agent_provisioning.GatewayClientConfig(url="ws://gateway.example/ws", token=None),
+    )
+    await cp.upsert_agent(
+        agent_provisioning.GatewayAgentRegistration(
+            agent_id="board-agent-a",
+            name="Board Agent A",
+            workspace_path="/tmp/workspace-board-agent-a",
+            heartbeat={"every": "10m", "target": "last", "includeReasoning": False},
+        ),
+    )
+
+    update_calls = [method for method, _ in calls if method == "agents.update"]
+    assert len(update_calls) == 3
+    assert sleeps == [0.75, 0.5, 1.0]
+
+
+@pytest.mark.asyncio
+async def test_control_plane_list_agent_files_retries_transport_error(monkeypatch):
+    calls: list[tuple[str, dict[str, object] | None]] = []
+    sleeps: list[float] = []
+    attempts = 0
+
+    async def _fake_sleep(seconds: float) -> None:
+        sleeps.append(seconds)
+
+    async def _fake_openclaw_call(method, params=None, config=None):
+        nonlocal attempts
+        _ = config
+        calls.append((method, params))
+        if method == "agents.files.list":
+            attempts += 1
+            if attempts < 3:
+                raise agent_provisioning.OpenClawGatewayError("[Errno 111] Connection refused")
+            return {"files": [{"name": "AGENTS.md", "missing": False}]}
+        raise AssertionError(f"Unexpected method: {method}")
+
+    monkeypatch.setattr(agent_provisioning, "openclaw_call", _fake_openclaw_call)
+    monkeypatch.setattr(agent_provisioning.asyncio, "sleep", _fake_sleep)
+    cp = agent_provisioning.OpenClawGatewayControlPlane(
+        agent_provisioning.GatewayClientConfig(url="ws://gateway.example/ws", token=None),
+    )
+
+    files = await cp.list_agent_files("board-agent-a")
+
+    assert files == {"AGENTS.md": {"name": "AGENTS.md", "missing": False}}
+    assert [method for method, _ in calls] == [
+        "agents.files.list",
+        "agents.files.list",
+        "agents.files.list",
+    ]
+    assert sleeps == [0.5, 1.0]
+
+
+@pytest.mark.asyncio
 async def test_control_plane_upsert_agent_missing_after_already_exists_fails_fast(monkeypatch):
     calls: list[tuple[str, dict[str, object] | None]] = []
     sleeps: list[float] = []
@@ -619,6 +841,18 @@ def test_is_missing_agent_error_matches_gateway_agent_not_found() -> None:
     )
     assert not agent_provisioning._is_missing_agent_error(
         agent_provisioning.OpenClawGatewayError("dial tcp: connection refused"),
+    )
+
+
+def test_is_transient_agent_upsert_error_matches_transport_failures() -> None:
+    assert agent_provisioning._is_transient_agent_upsert_error(
+        agent_provisioning.OpenClawGatewayError("[Errno 111] Connection refused"),
+    )
+    assert agent_provisioning._is_transient_agent_upsert_error(
+        agent_provisioning.OpenClawGatewayError("websocket timed out during restart"),
+    )
+    assert not agent_provisioning._is_transient_agent_upsert_error(
+        agent_provisioning.OpenClawGatewayError('agent "mc-abc" not found'),
     )
 
 

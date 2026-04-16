@@ -2,6 +2,7 @@
 
 const APP_LOAD_TIMEOUT_MS = 30_000;
 const LOCAL_AUTH_STORAGE_KEY = "mc_local_auth_token";
+const LOCAL_AUTH_PRESENCE_COOKIE = "mc_local_auth_present";
 const DEFAULT_LOCAL_AUTH_TOKEN =
   "cypress-local-auth-token-0123456789-0123456789-0123456789x";
 
@@ -19,6 +20,7 @@ Cypress.Commands.add("loginWithLocalAuth", (token = DEFAULT_LOCAL_AUTH_TOKEN) =>
   cy.visit("/", {
     onBeforeLoad(win) {
       win.sessionStorage.setItem(LOCAL_AUTH_STORAGE_KEY, token);
+      win.document.cookie = `${LOCAL_AUTH_PRESENCE_COOKIE}=1; Path=/; SameSite=Lax`;
     },
   });
 });
@@ -27,6 +29,7 @@ Cypress.Commands.add("logoutLocalAuth", () => {
   cy.visit("/", {
     onBeforeLoad(win) {
       win.sessionStorage.removeItem(LOCAL_AUTH_STORAGE_KEY);
+      win.document.cookie = `${LOCAL_AUTH_PRESENCE_COOKIE}=0; Path=/; Max-Age=0; SameSite=Lax`;
     },
   });
 });

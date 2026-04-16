@@ -5,6 +5,12 @@ This section covers deploying Mission Control in self-hosted environments.
 > **Goal**
 > A simple, reproducible deploy that preserves the Postgres volume and supports safe upgrades.
 
+## Azure always-on runtime
+
+For private-by-default Azure deployment with always-on Mission Control +
+OpenClaw + worker node-hosts, see
+[azure-always-on-runtime.md](./azure-always-on-runtime.md).
+
 ## Deployment mode: single host (Docker Compose)
 
 ### Prerequisites

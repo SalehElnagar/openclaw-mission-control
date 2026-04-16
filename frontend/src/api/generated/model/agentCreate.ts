@@ -6,6 +6,7 @@
  */
 import type { AgentCreateHeartbeatConfig } from "./agentCreateHeartbeatConfig";
 import type { AgentCreateIdentityProfile } from "./agentCreateIdentityProfile";
+import type { AgentCreateModelFallbackPolicy } from "./agentCreateModelFallbackPolicy";
 
 /**
  * Payload for creating a new agent.
@@ -13,19 +14,27 @@ import type { AgentCreateIdentityProfile } from "./agentCreateIdentityProfile";
 export interface AgentCreate {
   /** Board id that scopes this agent. Omit only when policy allows global agents. */
   board_id?: string | null;
-  /** Runtime heartbeat behavior overrides for this agent. */
-  heartbeat_config?: AgentCreateHeartbeatConfig;
-  /** Optional profile hints used by routing and policy checks. */
-  identity_profile?: AgentCreateIdentityProfile;
-  /** Template that helps define initial intent and behavior. */
-  identity_template?: string | null;
   /**
    * Human-readable agent display name.
    * @minLength 1
    */
   name: string;
-  /** Template representing deeper agent instructions. */
-  soul_template?: string | null;
   /** Current lifecycle state used by coordinator logic. */
   status?: string;
+  /** Runtime heartbeat behavior overrides for this agent. */
+  heartbeat_config?: AgentCreateHeartbeatConfig;
+  /** Optional profile hints used by routing and policy checks. */
+  identity_profile?: AgentCreateIdentityProfile;
+  /** Optional named gateway model profile. */
+  model_profile?: string | null;
+  /** Optional explicit primary model override. */
+  model_primary?: string | null;
+  /** How explicit fallback models interact with the selected profile. */
+  model_fallback_policy?: AgentCreateModelFallbackPolicy;
+  /** Optional ordered fallback model list. */
+  model_fallbacks?: string[] | null;
+  /** Template that helps define initial intent and behavior. */
+  identity_template?: string | null;
+  /** Template representing deeper agent instructions. */
+  soul_template?: string | null;
 }

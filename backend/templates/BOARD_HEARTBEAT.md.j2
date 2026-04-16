@@ -128,6 +128,13 @@ jq -r '
 - On first cycle after wake/bootstrap, run heartbeat check-in immediately (do not wait for cadence).
 - Keep cadence conservative unless there is a clear latency need.
 
+## First-Cycle Check-In
+- Before OpenAPI downloads, `jq` filtering, task pulls, or memory work, send one immediate heartbeat check-in.
+- Use a direct `curl` invocation for that first check-in. Do not wrap it in `bash -lc`, shell pipelines, or multi-step scripts.
+- Do not run local bootstrap checks (`command -v`, package probes, or shell loops) before the first heartbeat succeeds.
+- Until the first heartbeat succeeds, do not create/update memory files and do not post task comments.
+- If the first check-in fails due to network or 5xx, stop and retry on the next heartbeat.
+
 ## Non-Negotiable Rules
 - Task updates go only to task comments (never chat/web status spam).
 - Comments must be concise markdown with evidence.
@@ -136,12 +143,16 @@ jq -r '
 - If pre-flight fails due to 5xx/network, do not write memory or task updates.
 
 ## Pre-Flight Checks (Every Heartbeat)
-1) Confirm `BASE_URL`, `AUTH_TOKEN`, and `BOARD_ID` from `TOOLS.md` match this workspace.
-2) Verify API access:
+1) If this is the first cycle after wake/bootstrap, check in first:
+- `POST {{ base_url }}/api/v1/agent/heartbeat`
+- Header: `X-Agent-Token: {{ auth_token }}`
+- The first-cycle check-in must be a single direct `curl` command. Do not prepend tool checks or wrapper scripts.
+2) Confirm `BASE_URL`, `AUTH_TOKEN`, and `BOARD_ID` from `TOOLS.md` match this workspace.
+3) Verify API access:
 - `GET {{ base_url }}/healthz`
 - `GET {{ base_url }}/api/v1/agent/boards`
 - `GET {{ base_url }}/api/v1/agent/boards/{{ board_id }}/tasks`
-3) If any check fails, stop and retry next heartbeat.
+4) If any check fails, stop and retry next heartbeat.
 
 ## Shared Context Pull
 Before execution:
@@ -158,6 +169,12 @@ Before execution:
 4) Keep assignment/staffing healthy; create/retire specialists when needed.
 5) Unblock actively with concrete decisions and resequencing.
 6) Keep delivery status in `MEMORY.md` current (state, next step, evidence).
+7) Treat downstream Review/Security outcomes as triggers:
+- If a review or security task clears, close or advance the current slice and route the next executable slice if work remains.
+- If the accepted implementation slice references upstream planning, definition, or validation tasks that it now satisfies, reconcile those prerequisite tasks immediately: record the ruling there, request/create any required approvals, and close them instead of leaving them in `inbox`.
+- If reconciling those prerequisites unblocks a dependent validation or delivery task, route that newly unblocked task next.
+- If a review or security task requests changes, route the exact requested changes back to the implementation worker and keep the blocker visible.
+- Do not leave satisfied prerequisite slices open just because the implementation evidence lives on a downstream Builder task.
 
 ### Board Rule Snapshot
 - `require_review_before_done`: `{{ board_rule_require_review_before_done }}`
@@ -168,7 +185,7 @@ Before execution:
 - `max_agents`: `{{ board_rule_max_agents }}`
 {% else %}
 ### Board Worker Loop
-1) Check in via heartbeat endpoint.
+1) Check in via heartbeat endpoint using a direct `curl` call.
 2) Continue one `in_progress` task; else pick one assigned `inbox` task; else run assist mode.
 3) Refresh task context and plan for the active task.
 4) Execute and post only high-signal task comment updates.

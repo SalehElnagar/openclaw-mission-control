@@ -23,6 +23,7 @@ from app.services.task_dependencies import (
     dependency_ids_by_task_id,
     dependency_status_by_id,
 )
+from app.services.task_hierarchy import child_counts_by_parent_id
 
 if TYPE_CHECKING:
     from uuid import UUID
@@ -58,6 +59,7 @@ def _task_to_card(
     *,
     agent_name_by_id: dict[UUID, str],
     counts_by_task_id: dict[UUID, tuple[int, int]],
+    child_count_by_parent_id: dict[UUID, int],
     deps_by_task_id: dict[UUID, list[UUID]],
     dependency_status_by_id_map: dict[UUID, str],
     tag_state_by_task_id: dict[UUID, TagState],
@@ -78,6 +80,7 @@ def _task_to_card(
             "assignee": assignee,
             "approvals_count": approvals_count,
             "approvals_pending_count": approvals_pending_count,
+            "child_count": child_count_by_parent_id.get(task.id, 0),
             "depends_on_task_ids": depends_on_task_ids,
             "tag_ids": tag_state.tag_ids,
             "tags": tag_state.tags,
@@ -100,6 +103,10 @@ async def build_board_snapshot(session: AsyncSession, board: Board) -> BoardSnap
     tag_state_by_task_id = await load_tag_state(
         session,
         task_ids=task_ids,
+    )
+    child_count_by_parent_id = await child_counts_by_parent_id(
+        session,
+        parent_ids=task_ids,
     )
 
     deps_by_task_id = await dependency_ids_by_task_id(
@@ -176,6 +183,7 @@ async def build_board_snapshot(session: AsyncSession, board: Board) -> BoardSnap
             task,
             agent_name_by_id=agent_name_by_id,
             counts_by_task_id=counts_by_task_id,
+            child_count_by_parent_id=child_count_by_parent_id,
             deps_by_task_id=deps_by_task_id,
             dependency_status_by_id_map=dependency_status_by_id_map,
             tag_state_by_task_id=tag_state_by_task_id,

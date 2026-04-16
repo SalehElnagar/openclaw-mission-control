@@ -20,6 +20,7 @@ class BoardGroup(TenantScoped, table=True):
 
     id: UUID = Field(default_factory=uuid4, primary_key=True)
     organization_id: UUID = Field(foreign_key="organizations.id", index=True)
+    product_id: UUID | None = Field(default=None, foreign_key="products.id", index=True)
     name: str
     slug: str = Field(index=True)
     description: str | None = None

@@ -25,12 +25,15 @@ from app.api.gateway import router as gateway_router
 from app.api.gateways import router as gateways_router
 from app.api.metrics import router as metrics_router
 from app.api.organizations import router as organizations_router
+from app.api.products import router as products_router
 from app.api.skills_marketplace import router as skills_marketplace_router
 from app.api.souls_directory import router as souls_directory_router
 from app.api.tags import router as tags_router
 from app.api.task_custom_fields import router as task_custom_fields_router
 from app.api.tasks import router as tasks_router
+from app.api.telemetry import router as telemetry_router
 from app.api.users import router as users_router
+from app.api.weather import router as weather_router
 from app.core.config import settings
 from app.core.error_handling import install_error_handling
 from app.core.logging import configure_logging, get_logger
@@ -75,8 +78,16 @@ OPENAPI_TAGS = [
         "description": "Aggregated operational and board analytics metrics endpoints.",
     },
     {
+        "name": "telemetry",
+        "description": "Cost and token telemetry ingest plus filtered aggregation endpoints.",
+    },
+    {
         "name": "organizations",
         "description": "Organization profile, membership, and governance management endpoints.",
+    },
+    {
+        "name": "products",
+        "description": "Product folders, product chat, planning, and approval-backed execution.",
     },
     {
         "name": "souls-directory",
@@ -166,6 +177,7 @@ _OPENAPI_EXAMPLE_TAGS = {
     "activity",
     "gateways",
     "metrics",
+    "telemetry",
     "organizations",
     "souls-directory",
     "skills",
@@ -544,7 +556,9 @@ api_v1.include_router(activity_router)
 api_v1.include_router(gateway_router)
 api_v1.include_router(gateways_router)
 api_v1.include_router(metrics_router)
+api_v1.include_router(telemetry_router)
 api_v1.include_router(organizations_router)
+api_v1.include_router(products_router)
 api_v1.include_router(souls_directory_router)
 api_v1.include_router(skills_marketplace_router)
 api_v1.include_router(board_groups_router)
@@ -558,6 +572,7 @@ api_v1.include_router(tasks_router)
 api_v1.include_router(task_custom_fields_router)
 api_v1.include_router(tags_router)
 api_v1.include_router(users_router)
+api_v1.include_router(weather_router)
 app.include_router(api_v1)
 
 add_pagination(app)

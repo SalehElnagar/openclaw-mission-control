@@ -19,6 +19,7 @@ from app.api.deps import (
     require_org_admin,
     require_org_member,
 )
+from app.core.auth import AuthContext, get_auth_context
 from app.core.logging import get_logger
 from app.core.time import utcnow
 from app.db import crud
@@ -28,6 +29,7 @@ from app.models.agents import Agent
 from app.models.board_groups import BoardGroup
 from app.models.boards import Board
 from app.models.gateways import Gateway
+from app.schemas.agents import AgentRead
 from app.schemas.boards import BoardCreate, BoardRead, BoardUpdate
 from app.schemas.common import OkResponse
 from app.schemas.pagination import DefaultLimitOffsetPage
@@ -39,6 +41,13 @@ from app.services.board_snapshot import build_board_snapshot
 from app.services.openclaw.gateway_dispatch import GatewayDispatchService
 from app.services.openclaw.gateway_rpc import GatewayConfig as GatewayClientConfig
 from app.services.openclaw.gateway_rpc import OpenClawGatewayError
+from app.services.openclaw.provisioning_db import (
+    AgentLifecycleService,
+    LeadAgentOptions,
+    LeadAgentRequest,
+    OpenClawProvisioningService,
+)
+from app.services.openclaw.runtime_control import GatewayRuntimeControlService
 from app.services.organizations import OrganizationContext, board_access_filter
 
 if TYPE_CHECKING:
@@ -60,6 +69,7 @@ INCLUDE_SELF_QUERY = Query(default=False)
 INCLUDE_DONE_QUERY = Query(default=False)
 PER_BOARD_TASK_LIMIT_QUERY = Query(default=5, ge=0, le=100)
 AGENT_BOARD_ROLE_TAGS = cast("list[str | Enum]", ["agent-lead", "agent-worker"])
+AUTH_DEP = Depends(get_auth_context)
 _ERR_GATEWAY_MAIN_AGENT_REQUIRED = (
     "gateway must have a gateway main agent before boards can be created or updated"
 )
@@ -496,6 +506,47 @@ def get_board(
 ) -> Board:
     """Get a board by id."""
     return board
+
+
+@router.post("/{board_id}/lead/ensure", response_model=AgentRead)
+async def ensure_board_lead(
+    board_id: UUID,
+    session: AsyncSession = SESSION_DEP,
+    auth: AuthContext = AUTH_DEP,
+    ctx: OrganizationContext = ORG_ADMIN_DEP,
+) -> AgentRead:
+    """Ensure a canonical Mission Control board lead for an existing board."""
+    board = await Board.objects.by_id(board_id).first(session)
+    if board is None or board.organization_id != ctx.organization.id:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Board not found")
+
+    gateway, config = await GatewayDispatchService(session).require_gateway_config_for_board(board)
+    provisioned = await OpenClawProvisioningService(session).ensure_board_lead_defaults(
+        request=LeadAgentRequest(
+            board=board,
+            gateway=gateway,
+            config=config,
+            user=auth.user,
+            options=LeadAgentOptions(
+                agent_name="Lead",
+                identity_profile={
+                    "role": "Board Lead",
+                    "communication_style": "direct, concise, practical",
+                    "emoji": ":gear:",
+                },
+                model_profile="general",
+                model_fallback_policy="profile",
+            ),
+        )
+    )
+    await GatewayRuntimeControlService(session).sync_model_policies(
+        gateway=gateway,
+        agents=[provisioned],
+        auth=auth,
+    )
+    return AgentLifecycleService(session).to_agent_read(
+        AgentLifecycleService.with_computed_status(provisioned),
+    )
 
 
 @router.get("/{board_id}/snapshot", response_model=BoardSnapshot)

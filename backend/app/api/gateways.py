@@ -13,9 +13,16 @@ from app.core.auth import AuthContext, get_auth_context
 from app.db import crud
 from app.db.pagination import paginate
 from app.db.session import get_session
+from app.models.activity_events import ActivityEvent
 from app.models.agents import Agent
 from app.models.gateways import Gateway
 from app.models.skills import GatewayInstalledSkill
+from app.schemas.gateway_runtime import (
+    GatewayRuntimeSummary,
+    GatewayRuntimeSyncRequest,
+    GatewayRuntimeSyncResponse,
+    RuntimeAuditRecordRead,
+)
 from app.schemas.common import OkResponse
 from app.schemas.gateways import (
     GatewayCreate,
@@ -24,7 +31,10 @@ from app.schemas.gateways import (
     GatewayUpdate,
 )
 from app.schemas.pagination import DefaultLimitOffsetPage
+from app.schemas.telemetry import GatewayUsagePullResponse
+from app.services.activity_log import actor_fields_from_auth, record_activity, redact_change_values
 from app.services.openclaw.admin_service import GatewayAdminLifecycleService
+from app.services.openclaw.runtime_control import GatewayRuntimeControlService
 from app.services.openclaw.session_service import GatewayTemplateSyncQuery
 
 if TYPE_CHECKING:
@@ -46,6 +56,21 @@ OVERWRITE_QUERY = Query(default=False)
 LEAD_ONLY_QUERY = Query(default=False)
 BOARD_ID_QUERY = Query(default=None)
 _RUNTIME_TYPE_REFERENCES = (UUID,)
+_GATEWAY_AUDIT_FIELDS = {
+    "name",
+    "url",
+    "workspace_root",
+    "allow_insecure_tls",
+    "disable_device_pairing",
+    "default_model_profile",
+    "model_profiles",
+    "token",
+}
+
+
+def _gateway_audit_payload(values: dict[str, object]) -> dict[str, object]:
+    payload = {key: values.get(key) for key in _GATEWAY_AUDIT_FIELDS if key in values}
+    return redact_change_values(payload) or {}
 
 
 def _template_sync_query(
@@ -96,6 +121,7 @@ async def create_gateway(
 ) -> Gateway:
     """Create a gateway and provision or refresh its main agent."""
     service = GatewayAdminLifecycleService(session)
+    runtime_service = GatewayRuntimeControlService(session)
     await service.assert_gateway_runtime_compatible(
         url=payload.url,
         token=payload.token,
@@ -106,8 +132,24 @@ async def create_gateway(
     gateway_id = uuid4()
     data["id"] = gateway_id
     data["organization_id"] = ctx.organization.id
+    candidate = Gateway.model_validate(data)
+    await runtime_service.assert_model_policies_supported(gateway=candidate, agents=[])
     gateway = await crud.create(session, Gateway, **data)
-    await service.ensure_main_agent(gateway, auth, action="provision")
+    record_activity(
+        session,
+        event_type="gateway.config.created",
+        message=f"Created gateway {gateway.name}.",
+        entity_type="gateway",
+        entity_id=str(gateway.id),
+        new_values=_gateway_audit_payload(data),
+        **actor_fields_from_auth(auth),
+    )
+    await session.commit()
+    await runtime_service.reconcile_gateway_runtime(
+        gateway=gateway,
+        auth=auth,
+        request=GatewayRuntimeSyncRequest(),
+    )
     return gateway
 
 
@@ -136,11 +178,13 @@ async def update_gateway(
 ) -> Gateway:
     """Patch a gateway and refresh the main-agent provisioning state."""
     service = GatewayAdminLifecycleService(session)
+    runtime_service = GatewayRuntimeControlService(session)
     gateway = await service.require_gateway(
         gateway_id=gateway_id,
         organization_id=ctx.organization.id,
     )
     updates = payload.model_dump(exclude_unset=True)
+    before = _gateway_audit_payload(gateway.model_dump())
     if (
         "url" in updates
         or "token" in updates
@@ -163,8 +207,34 @@ async def update_gateway(
                 allow_insecure_tls=next_allow_insecure_tls,
                 disable_device_pairing=next_disable_device_pairing,
             )
+    if updates:
+        candidate_data = gateway.model_dump()
+        candidate_data.update(updates)
+        candidate = Gateway.model_validate(candidate_data)
+        existing_agents = await Agent.objects.filter_by(gateway_id=gateway.id).all(session)
+        await runtime_service.assert_model_policies_supported(
+            gateway=candidate,
+            agents=existing_agents,
+        )
     await crud.patch(session, gateway, updates)
-    await service.ensure_main_agent(gateway, auth, action="update")
+    if updates:
+        record_activity(
+            session,
+            event_type="gateway.config.updated",
+            message=f"Updated gateway {gateway.name}.",
+            entity_type="gateway",
+            entity_id=str(gateway.id),
+            previous_values=before,
+            new_values=_gateway_audit_payload(gateway.model_dump()),
+            details={"updated_fields": sorted(updates.keys())},
+            **actor_fields_from_auth(auth),
+        )
+        await session.commit()
+        await runtime_service.reconcile_gateway_runtime(
+            gateway=gateway,
+            auth=auth,
+            request=GatewayRuntimeSyncRequest(),
+        )
     return gateway
 
 
@@ -183,6 +253,92 @@ async def sync_gateway_templates(
         organization_id=ctx.organization.id,
     )
     return await service.sync_templates(gateway, query=sync_query, auth=auth)
+
+
+@router.get("/{gateway_id}/runtime", response_model=GatewayRuntimeSummary)
+async def get_gateway_runtime(
+    gateway_id: UUID,
+    session: AsyncSession = SESSION_DEP,
+    ctx: OrganizationContext = ORG_ADMIN_DEP,
+) -> GatewayRuntimeSummary:
+    """Return runtime connectivity and model policy state for one gateway."""
+    service = GatewayAdminLifecycleService(session)
+    gateway = await service.require_gateway(
+        gateway_id=gateway_id,
+        organization_id=ctx.organization.id,
+    )
+    return await GatewayRuntimeControlService(session).runtime_summary(gateway=gateway)
+
+
+@router.post("/{gateway_id}/runtime/reconcile", response_model=GatewayRuntimeSyncResponse)
+async def reconcile_gateway_runtime(
+    gateway_id: UUID,
+    payload: GatewayRuntimeSyncRequest,
+    session: AsyncSession = SESSION_DEP,
+    auth: AuthContext = AUTH_DEP,
+    ctx: OrganizationContext = ORG_ADMIN_DEP,
+) -> GatewayRuntimeSyncResponse:
+    """Idempotently repair runtime provisioning and sync model policy."""
+    service = GatewayAdminLifecycleService(session)
+    gateway = await service.require_gateway(
+        gateway_id=gateway_id,
+        organization_id=ctx.organization.id,
+    )
+    return await GatewayRuntimeControlService(session).reconcile_gateway_runtime(
+        gateway=gateway,
+        auth=auth,
+        request=payload,
+    )
+
+
+@router.post("/{gateway_id}/telemetry/pull", response_model=GatewayUsagePullResponse)
+async def pull_gateway_telemetry(
+    gateway_id: UUID,
+    session: AsyncSession = SESSION_DEP,
+    auth: AuthContext = AUTH_DEP,
+    ctx: OrganizationContext = ORG_ADMIN_DEP,
+) -> GatewayUsagePullResponse:
+    """Pull usage/cost telemetry directly from the gateway RPC surface."""
+    service = GatewayAdminLifecycleService(session)
+    gateway = await service.require_gateway(
+        gateway_id=gateway_id,
+        organization_id=ctx.organization.id,
+    )
+    ingested = await GatewayRuntimeControlService(session).pull_gateway_usage(
+        gateway=gateway,
+        auth=auth,
+    )
+    return GatewayUsagePullResponse(gateway_id=gateway.id, ingested_samples=ingested)
+
+
+@router.get("/{gateway_id}/audit", response_model=DefaultLimitOffsetPage[RuntimeAuditRecordRead])
+async def list_gateway_audit(
+    gateway_id: UUID,
+    session: AsyncSession = SESSION_DEP,
+    ctx: OrganizationContext = ORG_ADMIN_DEP,
+) -> LimitOffsetPage[RuntimeAuditRecordRead]:
+    """List gateway-scoped audit records."""
+    service = GatewayAdminLifecycleService(session)
+    await service.require_gateway(
+        gateway_id=gateway_id,
+        organization_id=ctx.organization.id,
+    )
+    statement = (
+        ActivityEvent.objects.filter_by(entity_type="gateway", entity_id=str(gateway_id))
+        .order_by(col(ActivityEvent.created_at).desc())
+        .statement
+    )
+
+    def _transform(items: list[object]) -> list[RuntimeAuditRecordRead]:
+        rows: list[RuntimeAuditRecordRead] = []
+        for item in items:
+            if not isinstance(item, ActivityEvent):
+                msg = "Expected ActivityEvent items from gateway audit query"
+                raise TypeError(msg)
+            rows.append(RuntimeAuditRecordRead.model_validate(item, from_attributes=True))
+        return rows
+
+    return await paginate(session, statement, transformer=_transform)
 
 
 @router.delete("/{gateway_id}", response_model=OkResponse)

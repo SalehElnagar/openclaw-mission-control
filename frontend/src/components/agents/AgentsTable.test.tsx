@@ -143,4 +143,18 @@ describe("AgentsTable", () => {
     // disableSorting keeps incoming data order.
     expect(screen.getAllByRole("row")[1]).toHaveTextContent("Zulu");
   });
+
+  it("labels board leads in the agent identity column", () => {
+    render(
+      <AgentsTable
+        agents={[buildAgent({ name: "Lead", is_board_lead: true })]}
+        boards={[buildBoard({ name: "Requirements" })]}
+        showActions={false}
+      />,
+    );
+
+    expect(
+      screen.getByRole("link", { name: /Lead ID agent-1 .*Board lead/i }),
+    ).toBeInTheDocument();
+  });
 });

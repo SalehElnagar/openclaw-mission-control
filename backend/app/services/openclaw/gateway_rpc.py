@@ -546,6 +546,25 @@ async def send_message(
     return await openclaw_call("chat.send", params, config=config)
 
 
+async def create_session(
+    session_key: str,
+    *,
+    config: GatewayConfig,
+    label: str | None = None,
+    model: str | None = None,
+    message: str | None = None,
+) -> object:
+    """Create a session and optionally send the first prompt."""
+    params: dict[str, Any] = {"key": session_key}
+    if label:
+        params["label"] = label
+    if model:
+        params["model"] = model
+    if message:
+        params["message"] = message
+    return await openclaw_call("sessions.create", params, config=config)
+
+
 async def get_chat_history(
     session_key: str,
     config: GatewayConfig,
@@ -568,9 +587,26 @@ async def ensure_session(
     *,
     config: GatewayConfig,
     label: str | None = None,
+    model: str | None = None,
 ) -> object:
     """Ensure a session exists and optionally update its label."""
     params: dict[str, Any] = {"key": session_key}
     if label:
         params["label"] = label
+    if model:
+        params["model"] = model
     return await openclaw_call("sessions.patch", params, config=config)
+
+
+async def wait_for_agent_run(
+    *,
+    run_id: str,
+    config: GatewayConfig,
+    timeout_ms: int = 45_000,
+) -> object:
+    """Wait for a gateway agent run to complete."""
+    return await openclaw_call(
+        "agent.wait",
+        {"runId": run_id, "timeoutMs": timeout_ms},
+        config=config,
+    )

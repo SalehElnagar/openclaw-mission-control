@@ -4,13 +4,24 @@
  * Mission Control API
  * OpenAPI spec version: 0.1.0
  */
+import type { ActivityEventRead } from "./activityEventRead";
+import type { BoardGroupAgenda } from "./boardGroupAgenda";
+import type { BoardGroupAgentWorkload } from "./boardGroupAgentWorkload";
 import type { BoardGroupBoardSnapshot } from "./boardGroupBoardSnapshot";
+import type { BoardGroupMemoryRead } from "./boardGroupMemoryRead";
 import type { BoardGroupRead } from "./boardGroupRead";
+import type { BoardGroupTaskSummary } from "./boardGroupTaskSummary";
 
 /**
  * Top-level board-group snapshot response payload.
  */
 export interface BoardGroupSnapshot {
-  boards?: BoardGroupBoardSnapshot[];
   group?: BoardGroupRead | null;
+  boards?: BoardGroupBoardSnapshot[];
+  pending_approvals_count?: number;
+  blocked_tasks?: BoardGroupTaskSummary[];
+  activity_feed?: ActivityEventRead[];
+  agenda?: BoardGroupAgenda;
+  agent_workload?: BoardGroupAgentWorkload[];
+  memory_preview?: BoardGroupMemoryRead[];
 }

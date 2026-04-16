@@ -7,8 +7,10 @@ from uuid import UUID
 
 from sqlmodel import Field, SQLModel
 
+from app.schemas.activity_events import ActivityEventRead
 from app.schemas.agents import AgentRead
 from app.schemas.approvals import ApprovalRead
+from app.schemas.board_group_memory import BoardGroupMemoryRead
 from app.schemas.board_groups import BoardGroupRead
 from app.schemas.board_memory import BoardMemoryRead
 from app.schemas.boards import BoardRead
@@ -18,8 +20,10 @@ from app.schemas.tasks import TaskRead
 RUNTIME_ANNOTATION_TYPES = (
     datetime,
     UUID,
+    ActivityEventRead,
     AgentRead,
     ApprovalRead,
+    BoardGroupMemoryRead,
     BoardGroupRead,
     BoardMemoryRead,
     BoardRead,
@@ -52,13 +56,18 @@ class BoardGroupTaskSummary(SQLModel):
     id: UUID
     board_id: UUID
     board_name: str
+    parent_task_id: UUID | None = None
     title: str
     status: str
     priority: str
+    child_count: int = 0
     assigned_agent_id: UUID | None = None
     assignee: str | None = None
     due_at: datetime | None = None
     in_progress_at: datetime | None = None
+    depends_on_task_ids: list[UUID] = Field(default_factory=list)
+    blocked_by_task_ids: list[UUID] = Field(default_factory=list)
+    is_blocked: bool = False
     tags: list[TagRef] = Field(default_factory=list)
     created_at: datetime
     updated_at: datetime
@@ -72,8 +81,30 @@ class BoardGroupBoardSnapshot(SQLModel):
     tasks: list[BoardGroupTaskSummary] = Field(default_factory=list)
 
 
+class BoardGroupAgenda(SQLModel):
+    """Agenda buckets derived from due dates across the board group."""
+
+    overdue: list[BoardGroupTaskSummary] = Field(default_factory=list)
+    today: list[BoardGroupTaskSummary] = Field(default_factory=list)
+    upcoming: list[BoardGroupTaskSummary] = Field(default_factory=list)
+
+
+class BoardGroupAgentWorkload(SQLModel):
+    """Agent workload summary used by the operations cockpit."""
+
+    agent: AgentRead
+    active_task_count: int = 0
+    current_task: BoardGroupTaskSummary | None = None
+
+
 class BoardGroupSnapshot(SQLModel):
     """Top-level board-group snapshot response payload."""
 
     group: BoardGroupRead | None = None
     boards: list[BoardGroupBoardSnapshot] = Field(default_factory=list)
+    pending_approvals_count: int = 0
+    blocked_tasks: list[BoardGroupTaskSummary] = Field(default_factory=list)
+    activity_feed: list[ActivityEventRead] = Field(default_factory=list)
+    agenda: BoardGroupAgenda = Field(default_factory=BoardGroupAgenda)
+    agent_workload: list[BoardGroupAgentWorkload] = Field(default_factory=list)
+    memory_preview: list[BoardGroupMemoryRead] = Field(default_factory=list)

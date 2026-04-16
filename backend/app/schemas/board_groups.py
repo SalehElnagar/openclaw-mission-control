@@ -16,6 +16,7 @@ class BoardGroupBase(SQLModel):
     name: str
     slug: str
     description: str | None = None
+    product_id: UUID | None = None
 
 
 class BoardGroupCreate(BoardGroupBase):
@@ -28,6 +29,7 @@ class BoardGroupUpdate(SQLModel):
     name: str | None = None
     slug: str | None = None
     description: str | None = None
+    product_id: UUID | None = None
 
 
 class BoardGroupRead(BoardGroupBase):

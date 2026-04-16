@@ -4,19 +4,27 @@
  * Mission Control API
  * OpenAPI spec version: 0.1.0
  */
+import type { GatewayModelProfiles } from "./gatewayModelProfiles";
+import type { GatewayReadDefaultModelProfile } from "./gatewayReadDefaultModelProfile";
 
 /**
  * Gateway payload returned from read endpoints.
  */
 export interface GatewayRead {
-  allow_insecure_tls?: boolean;
-  created_at: string;
-  disable_device_pairing?: boolean;
-  id: string;
   name: string;
-  organization_id: string;
-  token?: string | null;
-  updated_at: string;
   url: string;
   workspace_root: string;
+  allow_insecure_tls?: boolean;
+  disable_device_pairing?: boolean;
+  default_model_profile?: GatewayReadDefaultModelProfile;
+  model_profiles?: GatewayModelProfiles;
+  id: string;
+  organization_id: string;
+  token?: string | null;
+  runtime_sync_generation?: number;
+  last_runtime_sync_at?: string | null;
+  last_runtime_sync_error?: string | null;
+  last_telemetry_collected_at?: string | null;
+  created_at: string;
+  updated_at: string;
 }

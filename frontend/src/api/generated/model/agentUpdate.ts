@@ -13,18 +13,26 @@ import type { AgentUpdateIdentityProfile } from "./agentUpdateIdentityProfile";
 export interface AgentUpdate {
   /** Optional new board assignment. */
   board_id?: string | null;
-  /** Optional heartbeat policy override. */
-  heartbeat_config?: AgentUpdateHeartbeatConfig;
-  /** Optional identity profile update values. */
-  identity_profile?: AgentUpdateIdentityProfile;
-  /** Optional replacement identity template. */
-  identity_template?: string | null;
   /** Whether this agent is treated as the board gateway main. */
   is_gateway_main?: boolean | null;
   /** Optional replacement display name. */
   name?: string | null;
-  /** Optional replacement soul template. */
-  soul_template?: string | null;
   /** Optional replacement lifecycle status. */
   status?: string | null;
+  /** Optional heartbeat policy override. */
+  heartbeat_config?: AgentUpdateHeartbeatConfig;
+  /** Optional named gateway profile override. */
+  model_profile?: string | null;
+  /** Optional explicit primary model override. */
+  model_primary?: string | null;
+  /** Optional fallback policy override. */
+  model_fallback_policy?: "profile" | "explicit-only" | "none" | null;
+  /** Optional explicit fallback models. */
+  model_fallbacks?: string[] | null;
+  /** Optional identity profile update values. */
+  identity_profile?: AgentUpdateIdentityProfile;
+  /** Optional replacement identity template. */
+  identity_template?: string | null;
+  /** Optional replacement soul template. */
+  soul_template?: string | null;
 }

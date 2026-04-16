@@ -3,7 +3,9 @@
 from __future__ import annotations
 
 import asyncio
+import inspect
 import json
+import re
 from collections import deque
 from dataclasses import dataclass
 from datetime import UTC, datetime
@@ -60,6 +62,11 @@ from app.services.mentions import extract_mentions, matches_agent_mention
 from app.services.openclaw.gateway_dispatch import GatewayDispatchService
 from app.services.openclaw.gateway_rpc import GatewayConfig as GatewayClientConfig
 from app.services.openclaw.gateway_rpc import OpenClawGatewayError
+from app.services.openclaw.presence_policy import (
+    paused_board_ids_for_boards,
+    reconcile_scope_presence,
+    set_agent_presence_active,
+)
 from app.services.openclaw.provisioning_db import AgentLifecycleService
 from app.services.organizations import require_board_access
 from app.services.tags import (
@@ -75,6 +82,12 @@ from app.services.task_dependencies import (
     dependent_task_ids,
     replace_task_dependencies,
     validate_dependency_update,
+)
+from app.services.task_hierarchy import child_counts_by_parent_id, validate_parent_task_update
+from app.services.task_scope import (
+    board_ids_share_scope,
+    board_scope_board_ids,
+    resolve_scope_lead,
 )
 
 if TYPE_CHECKING:
@@ -108,6 +121,9 @@ BOARD_WRITE_DEP = Depends(get_board_for_user_write)
 SESSION_DEP = Depends(get_session)
 USER_AUTH_DEP = Depends(require_user_auth)
 TASK_DEP = Depends(get_task_or_404)
+TASK_REFERENCE_RE = re.compile(
+    r"\b[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}\b",
+)
 
 
 @dataclass(frozen=True, slots=True)
@@ -147,6 +163,34 @@ def _blocked_task_error(blocked_by_task_ids: Sequence[UUID]) -> HTTPException:
             "blocked_by_task_ids": [str(value) for value in blocked_by_task_ids],
         },
     )
+
+
+async def _validate_assigned_agent_for_task(
+    session: AsyncSession,
+    *,
+    task_board_id: UUID,
+    assigned_agent_id: UUID | None,
+) -> Agent | None:
+    if assigned_agent_id is None:
+        return None
+    agent = await Agent.objects.by_id(assigned_agent_id).first(session)
+    if agent is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND)
+    if agent.is_board_lead or agent.board_id is None:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Tasks may only be assigned to board-scoped worker agents.",
+        )
+    if not await board_ids_share_scope(
+        session,
+        anchor_board_id=task_board_id,
+        candidate_board_id=agent.board_id,
+    ):
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="Assigned agent must be in the same board scope as the task.",
+        )
+    return agent
 
 
 def _approval_required_for_done_error() -> HTTPException:
@@ -450,7 +494,10 @@ def _lead_created_task(task: Task, lead: Agent) -> bool:
 
     if not task.auto_created or not task.auto_reason:
         return False
-    return task.auto_reason == f"lead_agent:{lead.id}"
+    return task.auto_reason in {
+        f"lead_agent:{lead.id}",
+        f"coordinator_agent:{lead.id}",
+    }
 
 
 async def _reconcile_dependents_for_dependency_toggle(
@@ -566,13 +613,14 @@ async def _send_lead_task_message(
     session_key: str,
     config: GatewayClientConfig,
     message: str,
+    deliver: bool = False,
 ) -> OpenClawGatewayError | None:
     return await dispatch.try_send_agent_message(
         session_key=session_key,
         config=config,
         agent_name="Lead Agent",
         message=message,
-        deliver=False,
+        deliver=deliver,
     )
 
 
@@ -583,14 +631,68 @@ async def _send_agent_task_message(
     config: GatewayClientConfig,
     agent_name: str,
     message: str,
+    deliver: bool = False,
 ) -> OpenClawGatewayError | None:
     return await dispatch.try_send_agent_message(
         session_key=session_key,
         config=config,
         agent_name=agent_name,
         message=message,
-        deliver=False,
+        deliver=deliver,
     )
+
+
+
+
+def _supports_keyword_argument(func: object, keyword: str) -> bool:
+    try:
+        params = inspect.signature(func).parameters.values()
+    except (TypeError, ValueError):
+        return False
+    return any(
+        param.name == keyword or param.kind is inspect.Parameter.VAR_KEYWORD
+        for param in params
+    )
+
+
+async def _send_lead_task_message_compat(
+    *,
+    dispatch: GatewayDispatchService,
+    session_key: str,
+    config: GatewayClientConfig,
+    message: str,
+    deliver: bool = False,
+) -> OpenClawGatewayError | None:
+    kwargs = {
+        'dispatch': dispatch,
+        'session_key': session_key,
+        'config': config,
+        'message': message,
+    }
+    if _supports_keyword_argument(_send_lead_task_message, 'deliver'):
+        kwargs['deliver'] = deliver
+    return await _send_lead_task_message(**kwargs)
+
+
+async def _send_agent_task_message_compat(
+    *,
+    dispatch: GatewayDispatchService,
+    session_key: str,
+    config: GatewayClientConfig,
+    agent_name: str,
+    message: str,
+    deliver: bool = False,
+) -> OpenClawGatewayError | None:
+    kwargs = {
+        'dispatch': dispatch,
+        'session_key': session_key,
+        'config': config,
+        'agent_name': agent_name,
+        'message': message,
+    }
+    if _supports_keyword_argument(_send_agent_task_message, 'deliver'):
+        kwargs['deliver'] = deliver
+    return await _send_agent_task_message(**kwargs)
 
 
 def _assignment_notification_message(*, board: Board, task: Task, agent: Agent) -> str:
@@ -672,8 +774,15 @@ async def _wake_agent_online_for_task(
 ) -> None:
     if not agent.openclaw_session_id:
         return
+    if board.id in await paused_board_ids_for_boards(session, [board.id]):
+        return
     service = AgentLifecycleService(session)
     try:
+        await set_agent_presence_active(
+            session,
+            agent=agent,
+            board_name=board.name,
+        )
         await service.commit_heartbeat(agent=agent, status_value="online")
         record_activity(
             session,
@@ -693,6 +802,33 @@ async def _wake_agent_online_for_task(
             board_id=board.id,
         )
     await session.commit()
+
+
+def _should_wake_lead_for_new_task(
+    *,
+    board: Board,
+    task: Task,
+) -> bool:
+    if task.parent_task_id is not None:
+        return False
+    return board.name.strip().lower() in {"requirements", "ready"}
+
+
+async def _reconcile_presence_after_task_change(
+    session: AsyncSession,
+    *,
+    board_id: UUID,
+) -> None:
+    try:
+        await reconcile_scope_presence(session, board_id=board_id)
+    except Exception as exc:  # pragma: no cover - best effort policy sync
+        record_activity(
+            session,
+            event_type="task.presence_reconcile_failed",
+            message=f"Presence reconcile failed: {exc!s}",
+            board_id=board_id,
+        )
+        await session.commit()
 
 
 async def _notify_agent_on_task_assign(
@@ -718,12 +854,13 @@ async def _notify_agent_on_task_assign(
     if config is None:
         return
     message = _assignment_notification_message(board=board, task=task, agent=agent)
-    error = await _send_agent_task_message(
+    error = await _send_agent_task_message_compat(
         dispatch=dispatch,
         session_key=agent.openclaw_session_id,
         config=config,
         agent_name=agent.name,
         message=message,
+        deliver=True,
     )
     if error is None:
         record_activity(
@@ -771,12 +908,13 @@ async def _notify_agent_on_task_rework(
         task=task,
         feedback=feedback,
     )
-    error = await _send_agent_task_message(
+    error = await _send_agent_task_message_compat(
         dispatch=dispatch,
         session_key=agent.openclaw_session_id,
         config=config,
         agent_name=agent.name,
         message=message,
+        deliver=True,
     )
     if error is None:
         record_activity(
@@ -822,13 +960,17 @@ async def _notify_lead_on_task_create(
     board: Board,
     task: Task,
 ) -> None:
-    lead = (
-        await Agent.objects.filter_by(board_id=board.id)
-        .filter(col(Agent.is_board_lead).is_(True))
-        .first(session)
-    )
+    lead = await resolve_scope_lead(session, board_id=board.id)
     if lead is None or not lead.openclaw_session_id:
         return
+    if _should_wake_lead_for_new_task(board=board, task=task):
+        await _wake_agent_online_for_task(
+            session=session,
+            board=board,
+            task=task,
+            agent=lead,
+            reason="new_top_level_task",
+        )
     dispatch = GatewayDispatchService(session)
     config = await dispatch.optional_gateway_config_for_board(board)
     if config is None:
@@ -845,13 +987,19 @@ async def _notify_lead_on_task_create(
     message = (
         "NEW TASK ADDED\n"
         + "\n".join(details)
-        + "\n\nTake action: triage, assign, or plan next steps."
+        + "\n\nTake action now:\n"
+        + "1. Triage the epic/task and confirm the next executable slices.\n"
+        + "2. Use `GET /api/v1/agent/boards` to discover all boards in your visible scope.\n"
+        + "3. Use `GET /api/v1/agent/agents` to discover board-scoped worker agents you can route.\n"
+        + "4. Create or update downstream tasks using the documented agent board routes.\n"
+        + "5. If a routing or permission boundary blocks you, record the exact blocker in board memory."
     )
-    error = await _send_lead_task_message(
+    error = await _send_lead_task_message_compat(
         dispatch=dispatch,
         session_key=lead.openclaw_session_id,
         config=config,
         message=message,
+        deliver=True,
     )
     if error is None:
         record_activity(
@@ -881,11 +1029,7 @@ async def _notify_lead_on_task_unassigned(
     board: Board,
     task: Task,
 ) -> None:
-    lead = (
-        await Agent.objects.filter_by(board_id=board.id)
-        .filter(col(Agent.is_board_lead).is_(True))
-        .first(session)
-    )
+    lead = await resolve_scope_lead(session, board_id=board.id)
     if lead is None or not lead.openclaw_session_id:
         return
     dispatch = GatewayDispatchService(session)
@@ -906,11 +1050,12 @@ async def _notify_lead_on_task_unassigned(
         + "\n".join(details)
         + "\n\nTake action: assign a new owner or adjust the plan."
     )
-    error = await _send_lead_task_message(
+    error = await _send_lead_task_message_compat(
         dispatch=dispatch,
         session_key=lead.openclaw_session_id,
         config=config,
         message=message,
+        deliver=True,
     )
     if error is None:
         record_activity(
@@ -1271,6 +1416,10 @@ async def _task_read_page(
         board_id=board_id,
         task_ids=task_ids,
     )
+    child_count_by_parent_id = await child_counts_by_parent_id(
+        session,
+        parent_ids=task_ids,
+    )
 
     output: list[TaskRead] = []
     for task in tasks:
@@ -1286,6 +1435,7 @@ async def _task_read_page(
             TaskRead.model_validate(task, from_attributes=True).model_copy(
                 update={
                     "depends_on_task_ids": dep_list,
+                    "child_count": child_count_by_parent_id.get(task.id, 0),
                     "tag_ids": tag_state.tag_ids,
                     "tags": tag_state.tags,
                     "blocked_by_task_ids": blocked_by,
@@ -1306,6 +1456,7 @@ async def _stream_task_state(
     dict[UUID, list[UUID]],
     dict[UUID, str],
     dict[UUID, TagState],
+    dict[UUID, int],
     dict[UUID, TaskCustomFieldValues],
 ]:
     task_ids = [
@@ -1317,6 +1468,10 @@ async def _stream_task_state(
     tag_state_by_task_id = await load_tag_state(
         session,
         task_ids=list({*task_ids}),
+    )
+    child_count_by_parent_id = await child_counts_by_parent_id(
+        session,
+        parent_ids=list({*task_ids}),
     )
     deps_map = await dependency_ids_by_task_id(
         session,
@@ -1332,14 +1487,26 @@ async def _stream_task_state(
         task_ids=list({*task_ids}),
     )
     if not dep_ids:
-        return deps_map, {}, tag_state_by_task_id, custom_field_values_by_task_id
+        return (
+            deps_map,
+            {},
+            tag_state_by_task_id,
+            child_count_by_parent_id,
+            custom_field_values_by_task_id,
+        )
 
     dep_status = await dependency_status_by_id(
         session,
         board_id=board_id,
         dependency_ids=list({*dep_ids}),
     )
-    return deps_map, dep_status, tag_state_by_task_id, custom_field_values_by_task_id
+    return (
+        deps_map,
+        dep_status,
+        tag_state_by_task_id,
+        child_count_by_parent_id,
+        custom_field_values_by_task_id,
+    )
 
 
 def _task_event_payload(
@@ -1349,15 +1516,22 @@ def _task_event_payload(
     deps_map: dict[UUID, list[UUID]],
     dep_status: dict[UUID, str],
     tag_state_by_task_id: dict[UUID, TagState],
+    child_count_by_parent_id: dict[UUID, int] | None = None,
     custom_field_values_by_task_id: dict[UUID, TaskCustomFieldValues] | None = None,
 ) -> dict[str, object]:
     resolved_custom_field_values_by_task_id = custom_field_values_by_task_id or {}
+    resolved_child_count_by_parent_id = child_count_by_parent_id or {}
+    activity = ActivityEventRead.model_validate(event).model_dump(
+        mode="json",
+        exclude={"board_id", "route_name", "route_params"},
+        exclude_none=True,
+    )
+    activity["agent_id"] = (
+        str(event.agent_id) if event.agent_id is not None else None
+    )
     payload: dict[str, object] = {
         "type": event.event_type,
-        "activity": ActivityEventRead.model_validate(event).model_dump(
-            mode="json",
-            exclude={"board_id", "route_name", "route_params"},
-        ),
+        "activity": activity,
     }
     if event.event_type == "task.comment":
         payload["comment"] = _serialize_comment(event)
@@ -1379,6 +1553,7 @@ def _task_event_payload(
         .model_copy(
             update={
                 "depends_on_task_ids": dep_list,
+                "child_count": resolved_child_count_by_parent_id.get(task.id, 0),
                 "tag_ids": tag_state.tag_ids,
                 "tags": tag_state.tags,
                 "blocked_by_task_ids": blocked_by,
@@ -1410,12 +1585,16 @@ async def _task_event_generator(
 
         async with async_session_maker() as session:
             rows = await _fetch_task_events(session, board_id, last_seen)
-            deps_map, dep_status, tag_state_by_task_id, custom_field_values_by_task_id = (
-                await _stream_task_state(
-                    session,
-                    board_id=board_id,
-                    rows=rows,
-                )
+            (
+                deps_map,
+                dep_status,
+                tag_state_by_task_id,
+                child_count_by_parent_id,
+                custom_field_values_by_task_id,
+            ) = await _stream_task_state(
+                session,
+                board_id=board_id,
+                rows=rows,
             )
 
         for event, task in rows:
@@ -1434,6 +1613,7 @@ async def _task_event_generator(
                 deps_map=deps_map,
                 dep_status=dep_status,
                 tag_state_by_task_id=tag_state_by_task_id,
+                child_count_by_parent_id=child_count_by_parent_id,
                 custom_field_values_by_task_id=custom_field_values_by_task_id,
             )
             yield {"event": "task", "data": json.dumps(payload)}
@@ -1495,7 +1675,9 @@ async def create_task(
     auth: AuthContext = USER_AUTH_DEP,
 ) -> TaskRead:
     """Create a task and initialize dependency rows."""
-    data = payload.model_dump(exclude={"depends_on_task_ids", "tag_ids", "custom_field_values"})
+    data = payload.model_dump(
+        exclude={"depends_on_task_ids", "tag_ids", "custom_field_values"},
+    )
     depends_on_task_ids = list(payload.depends_on_task_ids)
     tag_ids = list(payload.tag_ids)
     custom_field_values = dict(payload.custom_field_values)
@@ -1504,6 +1686,17 @@ async def create_task(
     task.board_id = board.id
     if task.created_by_user_id is None and auth.user is not None:
         task.created_by_user_id = auth.user.id
+    task.parent_task_id = await validate_parent_task_update(
+        session,
+        board_id=board.id,
+        task_id=task.id,
+        parent_task_id=task.parent_task_id,
+    )
+    await _validate_assigned_agent_for_task(
+        session,
+        task_board_id=board.id,
+        assigned_agent_id=task.assigned_agent_id,
+    )
 
     normalized_deps = await validate_dependency_update(
         session,
@@ -1572,6 +1765,7 @@ async def create_task(
                 task=task,
                 agent=assigned_agent,
             )
+    await _reconcile_presence_after_task_change(session, board_id=board.id)
     return await _task_read_response(
         session,
         task=task,
@@ -1635,7 +1829,7 @@ async def update_task(
         custom_field_values=custom_field_values or {},
         custom_field_values_set=custom_field_values_set,
     )
-    if actor.actor_type == "agent" and actor.agent and actor.agent.is_board_lead:
+    if actor.actor_type == "agent" and _is_task_coordinator_agent(actor.agent):
         return await _apply_lead_task_update(session, update=update)
 
     if actor.actor_type == "agent":
@@ -1654,6 +1848,16 @@ async def delete_task_and_related_records(
     task: Task,
 ) -> None:
     """Delete a task and associated relational records, then commit."""
+    anchor_board_id = task.board_id
+    child_rows = list(
+        await session.exec(
+            select(Task).where(col(Task.parent_task_id) == task.id),
+        ),
+    )
+    for child in child_rows:
+        child.parent_task_id = None
+        child.updated_at = utcnow()
+        session.add(child)
     await crud.delete_where(
         session,
         ActivityEvent,
@@ -1709,6 +1913,8 @@ async def delete_task_and_related_records(
     )
     await session.delete(task)
     await session.commit()
+    if anchor_board_id is not None:
+        await _reconcile_presence_after_task_change(session, board_id=anchor_board_id)
 
 
 @router.delete("/{task_id}", response_model=OkResponse)
@@ -1802,7 +2008,10 @@ async def _comment_targets(
     mention_names = extract_mentions(message)
     targets: dict[UUID, Agent] = {}
     if mention_names and task.board_id:
-        for agent in await Agent.objects.filter_by(board_id=task.board_id).all(session):
+        scope_board_ids = await board_scope_board_ids(session, board_id=task.board_id)
+        for agent in await Agent.objects.by_field_in("board_id", scope_board_ids).all(
+            session,
+        ):
             if matches_agent_mention(agent, mention_names):
                 targets[agent.id] = agent
     if not mention_names and task.assigned_agent_id:
@@ -1811,6 +2020,34 @@ async def _comment_targets(
         )
         if assigned_agent:
             targets[assigned_agent.id] = assigned_agent
+
+    if (
+        actor.actor_type == "agent"
+        and actor.agent
+        and _is_task_coordinator_agent(actor.agent)
+        and task.board_id is not None
+        and task.status == "review"
+    ):
+        previous_worker_id = await _last_worker_who_moved_task_to_review(
+            session,
+            task_id=task.id,
+            board_id=task.board_id,
+            lead_agent_id=actor.agent.id,
+        )
+        if previous_worker_id is not None:
+            previous_worker = await Agent.objects.by_id(previous_worker_id).first(session)
+            if previous_worker is not None:
+                targets[previous_worker.id] = previous_worker
+
+    if (
+        actor.actor_type == "agent"
+        and actor.agent
+        and task.board_id is not None
+        and not actor.agent.is_board_lead
+    ):
+        scope_lead = await resolve_scope_lead(session, board_id=task.board_id)
+        if scope_lead is not None:
+            targets[scope_lead.id] = scope_lead
 
     if actor.actor_type == "agent" and actor.agent:
         targets.pop(actor.agent.id, None)
@@ -1851,6 +2088,41 @@ async def _notify_task_comment_targets(
         if not agent.openclaw_session_id:
             continue
         mentioned = matches_agent_mention(agent, request.mention_names)
+        if agent.is_board_lead:
+            await _wake_agent_online_for_task(
+                session=session,
+                board=board,
+                task=request.task,
+                agent=agent,
+                reason="task_comment",
+            )
+            header = "LEAD TASK MENTION" if mentioned else "LEAD TASK UPDATE"
+            action_line = (
+                "You were mentioned in this task comment."
+                if mentioned
+                else "A downstream task comment needs lead attention."
+            )
+            notification = (
+                f"{header}\n"
+                f"Board: {board.name}\n"
+                f"Task: {request.task.title}\n"
+                f"Task ID: {request.task.id}\n"
+                f"From: {actor_name}\n\n"
+                f"{action_line}\n\n"
+                f"Comment:\n{snippet}\n\n"
+                "Take action now:\n"
+                "1. Review the thread and current task state.\n"
+                "2. Record the ruling or blocker in task comments.\n"
+                "3. Route the next concrete step if execution should continue."
+            )
+            await _send_lead_task_message_compat(
+                dispatch=dispatch,
+                session_key=agent.openclaw_session_id,
+                config=config,
+                message=notification,
+                deliver=True,
+            )
+            continue
         header = "TASK MENTION" if mentioned else "NEW TASK COMMENT"
         action_line = (
             "You were mentioned in this comment."
@@ -1874,7 +2146,267 @@ async def _notify_task_comment_targets(
             config=config,
             agent_name=agent.name,
             message=notification,
+            deliver=True,
         )
+
+
+def _downstream_outcome_state(*, board: Board, task: Task, actor: ActorContext, message: str) -> str | None:
+    if actor.actor_type != "agent" or actor.agent is None or actor.agent.is_board_lead:
+        return None
+    if task.assigned_agent_id != actor.agent.id:
+        return None
+    if board.slug not in {"review", "security-review"}:
+        return None
+
+    normalized = " ".join(message.lower().split())
+    cleared_patterns = (
+        "final code-level review pass",
+        "final review pass",
+        "no further review findings",
+        "no further findings",
+        "no further code changes are requested",
+        "review blocker as cleared",
+        "review blocker is cleared",
+        "review blocker as closed",
+        "security blocker as closed",
+        "security blocker is closed",
+        "no residual issue",
+        "issue from this review as resolved",
+        "treat the review blocker as cleared",
+    )
+    changes_requested_patterns = (
+        "concrete code-level issue",
+        "concrete review blocker",
+        "would not call this review clean",
+        "requested changes",
+        "changes requested",
+        "remaining blocker",
+        "still cannot make a code-level review call",
+        "defect",
+    )
+
+    if any(pattern in normalized for pattern in cleared_patterns):
+        return "cleared"
+    if any(pattern in normalized for pattern in changes_requested_patterns):
+        return "changes_requested"
+    return None
+
+
+def _extract_task_reference_ids(*values: str | None) -> list[UUID]:
+    reference_ids: list[UUID] = []
+    seen: set[UUID] = set()
+    for value in values:
+        if not value:
+            continue
+        for match in TASK_REFERENCE_RE.findall(value):
+            try:
+                task_id = UUID(match)
+            except ValueError:
+                continue
+            if task_id in seen:
+                continue
+            seen.add(task_id)
+            reference_ids.append(task_id)
+    return reference_ids
+
+
+async def _referenced_scope_tasks_for_task(
+    session: AsyncSession,
+    *,
+    task: Task,
+) -> tuple[list[Task], list[Task], dict[UUID, str]]:
+    if task.board_id is None:
+        return [], [], {}
+    reference_ids = _extract_task_reference_ids(task.title, task.description)
+    reference_ids = [task_id for task_id in reference_ids if task_id != task.id]
+    if not reference_ids:
+        return [], [], {}
+
+    scope_board_ids = await board_scope_board_ids(session, board_id=task.board_id)
+    if not scope_board_ids:
+        return [], [], {}
+
+    referenced = list(
+        await session.exec(
+            select(Task).where(
+                col(Task.id).in_(reference_ids),
+                col(Task.board_id).in_(scope_board_ids),
+            ),
+        ),
+    )
+    open_referenced = [item for item in referenced if item.status != "done"]
+
+    dependent_ids: list[UUID] = []
+    if open_referenced:
+        dependent_ids = list(
+            {
+                *await session.exec(
+                    select(col(TaskDependency.task_id)).where(
+                        col(TaskDependency.depends_on_task_id).in_(
+                            [item.id for item in open_referenced],
+                        ),
+                    ),
+                ),
+            },
+        )
+
+    dependents: list[Task] = []
+    if dependent_ids:
+        dependents = list(
+            await session.exec(
+                select(Task).where(
+                    col(Task.id).in_(dependent_ids),
+                    col(Task.board_id).in_(scope_board_ids),
+                    col(Task.status) != "done",
+                ),
+            ),
+        )
+
+    board_ids = {
+        *(item.board_id for item in open_referenced if item.board_id is not None),
+        *(item.board_id for item in dependents if item.board_id is not None),
+    }
+    board_name_by_id: dict[UUID, str] = {}
+    if board_ids:
+        boards = await Board.objects.by_ids(list(board_ids)).all(session)
+        board_name_by_id = {item.id: item.name for item in boards}
+    return open_referenced, dependents, board_name_by_id
+
+
+def _format_referenced_task_lines(
+    tasks: list[Task],
+    *,
+    board_name_by_id: dict[UUID, str],
+) -> list[str]:
+    lines: list[str] = []
+    for item in tasks:
+        board_name = board_name_by_id.get(item.board_id) if item.board_id is not None else None
+        board_prefix = f"[{board_name}] " if board_name else ""
+        lines.append(f"- {board_prefix}{item.title} ({item.id}) status={item.status}")
+    return lines
+
+
+async def _notify_scope_lead_on_downstream_outcome(
+    session: AsyncSession,
+    *,
+    task: Task,
+    actor: ActorContext,
+    message: str,
+) -> None:
+    if task.board_id is None:
+        return
+    board = await Board.objects.by_id(task.board_id).first(session)
+    if board is None:
+        return
+
+    outcome = _downstream_outcome_state(
+        board=board,
+        task=task,
+        actor=actor,
+        message=message,
+    )
+    if outcome is None:
+        return
+
+    lead = await resolve_scope_lead(session, board_id=board.id)
+    if lead is None or not lead.openclaw_session_id:
+        return
+    if actor.actor_type == "agent" and actor.agent and lead.id == actor.agent.id:
+        return
+
+    dispatch = GatewayDispatchService(session)
+    config = await dispatch.optional_gateway_config_for_board(board)
+    if config is None:
+        return
+
+    await _wake_agent_online_for_task(
+        session=session,
+        board=board,
+        task=task,
+        agent=lead,
+        reason=f"{board.slug}_outcome",
+    )
+
+    outcome_label = "cleared" if outcome == "cleared" else "needs changes"
+    header_prefix = "SECURITY" if board.slug == "security-review" else "REVIEW"
+    snippet = _truncate_snippet(message)
+    open_referenced, dependent_tasks, board_name_by_id = await _referenced_scope_tasks_for_task(
+        session,
+        task=task,
+    )
+    reconciliation_context = ""
+    action = (
+        "Take action now:\n"
+        "1. Acknowledge the downstream clearance on the task thread.\n"
+        "2. Close or advance the current slice according to board rules.\n"
+        "3. If this accepted slice satisfies any referenced prerequisite task, record the ruling there, request/create any required approval, and close it instead of leaving it in inbox.\n"
+        "4. If that unblocks a dependent task, route that newly unblocked task next.\n"
+        "5. Only create a fresh Builder implementation slice if a residual implementation gap remains."
+        if outcome == "cleared"
+        else "Take action now:\n"
+        "1. Read the blocker details on the downstream task thread.\n"
+        "2. Route the exact requested changes back to the implementation worker.\n"
+        "3. Keep the current slice visible until the blocker is cleared."
+    )
+    if outcome == "cleared" and open_referenced:
+        reconciliation_lines = [
+            "Open referenced prerequisite tasks:",
+            *_format_referenced_task_lines(
+                open_referenced,
+                board_name_by_id=board_name_by_id,
+            ),
+        ]
+        if dependent_tasks:
+            reconciliation_lines.extend(
+                [
+                    "",
+                    "Open dependent tasks still waiting on those prerequisites:",
+                    *_format_referenced_task_lines(
+                        dependent_tasks,
+                        board_name_by_id=board_name_by_id,
+                    ),
+                ],
+            )
+        reconciliation_context = "\n\nCurrent scope reconciliation context:\n" + "\n".join(
+            reconciliation_lines,
+        )
+    notification = (
+        f"{header_prefix} OUTCOME: {outcome_label.upper()}\n"
+        f"Board: {board.name}\n"
+        f"Task: {task.title}\n"
+        f"Task ID: {task.id}\n"
+        f"From: {_comment_actor_name(actor)}\n\n"
+        f"Latest downstream outcome comment:\n{snippet}\n\n"
+        f"{reconciliation_context}"
+        f"{'' if not reconciliation_context else chr(10) + chr(10)}"
+        f"{action}"
+    )
+    error = await _send_lead_task_message_compat(
+        dispatch=dispatch,
+        session_key=lead.openclaw_session_id,
+        config=config,
+        message=notification,
+        deliver=True,
+    )
+    if error is None:
+        record_activity(
+            session,
+            event_type="task.downstream_outcome_notified",
+            message=f"Lead notified about downstream {outcome_label}: {task.title}.",
+            agent_id=lead.id,
+            task_id=task.id,
+            board_id=board.id,
+        )
+    else:
+        record_activity(
+            session,
+            event_type="task.downstream_outcome_notify_failed",
+            message=f"Downstream outcome notify failed: {error}",
+            agent_id=lead.id,
+            task_id=task.id,
+            board_id=board.id,
+        )
+    await session.commit()
 
 
 @dataclass(slots=True)
@@ -1976,11 +2508,16 @@ async def _task_read_response(
         board_id=board_id,
         task_ids=[task.id],
     )
+    child_count_by_parent_id = await child_counts_by_parent_id(
+        session,
+        parent_ids=[task.id],
+    )
     if task.status == "done":
         blocked_ids = []
     return TaskRead.model_validate(task, from_attributes=True).model_copy(
         update={
             "depends_on_task_ids": dep_ids,
+            "child_count": child_count_by_parent_id.get(task.id, 0),
             "tag_ids": tag_state.tag_ids,
             "tags": tag_state.tags,
             "blocked_by_task_ids": blocked_ids,
@@ -2004,6 +2541,10 @@ async def _require_task_user_write_access(
     await require_board_access(session, user=user, board=board, write=True)
 
 
+def _is_task_coordinator_agent(agent: Agent | None) -> bool:
+    return bool(agent and (agent.is_board_lead or agent.board_id is None))
+
+
 def _lead_requested_fields(update: _TaskUpdateInput) -> set[str]:
     requested_fields = set(update.updates)
     if update.comment is not None:
@@ -2019,21 +2560,19 @@ def _lead_requested_fields(update: _TaskUpdateInput) -> set[str]:
 
 def _validate_lead_update_request(update: _TaskUpdateInput) -> None:
     allowed_fields = {
+        "title",
+        "description",
+        "priority",
+        "due_at",
+        "parent_task_id",
         "assigned_agent_id",
         "status",
+        "comment",
         "depends_on_task_ids",
         "tag_ids",
         "custom_field_values",
     }
     requested_fields = _lead_requested_fields(update)
-    if update.comment is not None:
-        raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN,
-            detail=(
-                "Lead comment gate failed: board leads cannot include `comment` in task PATCH. "
-                "Use the task comments endpoint instead."
-            ),
-        )
     disallowed_fields = requested_fields - allowed_fields
     if disallowed_fields:
         disallowed = ", ".join(sorted(disallowed_fields))
@@ -2084,6 +2623,21 @@ async def _lead_effective_dependencies(
     return effective_deps, blocked_by
 
 
+async def _apply_parent_task_update(
+    session: AsyncSession,
+    *,
+    update: _TaskUpdateInput,
+) -> None:
+    if "parent_task_id" not in update.updates:
+        return
+    update.updates["parent_task_id"] = await validate_parent_task_update(
+        session,
+        board_id=update.board_id,
+        task_id=update.task.id,
+        parent_task_id=_optional_assigned_agent_id(update.updates["parent_task_id"]),
+    )
+
+
 async def _normalized_update_tag_ids(
     session: AsyncSession,
     *,
@@ -2113,17 +2667,12 @@ async def _lead_apply_assignment(
     if not assigned_id:
         update.task.assigned_agent_id = None
         return
-    agent = await Agent.objects.by_id(assigned_id).first(session)
-    if agent is None:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND)
-    if agent.is_board_lead:
-        raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN,
-            detail="Board leads cannot assign tasks to themselves.",
-        )
-    if agent.board_id and update.task.board_id and agent.board_id != update.task.board_id:
-        raise HTTPException(status_code=status.HTTP_409_CONFLICT)
-    update.task.assigned_agent_id = agent.id
+    agent = await _validate_assigned_agent_for_task(
+        session,
+        task_board_id=update.board_id,
+        assigned_agent_id=assigned_id,
+    )
+    update.task.assigned_agent_id = agent.id if agent is not None else None
 
 
 async def _last_worker_who_moved_task_to_review(
@@ -2148,7 +2697,15 @@ async def _last_worker_who_moved_task_to_review(
         candidate = await Agent.objects.by_id(candidate_id).first(session)
         if candidate is None:
             continue
-        if candidate.board_id != board_id or candidate.is_board_lead:
+        if (
+            candidate.is_board_lead
+            or candidate.board_id is None
+            or not await board_ids_share_scope(
+                session,
+                anchor_board_id=board_id,
+                candidate_board_id=candidate.board_id,
+            )
+        ):
             continue
         return candidate.id
     return None
@@ -2165,30 +2722,6 @@ async def _lead_apply_status(
     if "status" not in update.updates:
         return
     target_status = _required_status_value(update.updates["status"])
-    # Leads may set `in_progress` when simultaneously assigning an agent to an
-    # inbox task (assignment-and-start shortcut).
-    if update.task.status != "review":
-        assigning_agent = "assigned_agent_id" in update.updates and bool(
-            _optional_assigned_agent_id(update.updates["assigned_agent_id"])
-        )
-        if update.task.status == "inbox" and target_status == "in_progress" and assigning_agent:
-            update.task.status = target_status
-            return
-        raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN,
-            detail=(
-                "Lead status gate failed: board leads can only change status when the current "
-                f"task status is `review` (current: `{update.task.status}`)."
-            ),
-        )
-    if target_status not in {"done", "inbox"}:
-        raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN,
-            detail=(
-                "Lead status target gate failed: review tasks can only move to `done` or "
-                f"`inbox` (requested: `{target_status}`)."
-            ),
-        )
     if target_status == "inbox":
         update.task.assigned_agent_id = await _last_worker_who_moved_task_to_review(
             session,
@@ -2196,6 +2729,26 @@ async def _lead_apply_status(
             board_id=update.board_id,
             lead_agent_id=lead_agent.id,
         )
+        update.task.previous_in_progress_at = update.task.in_progress_at
+        update.task.in_progress_at = None
+    elif target_status == "review":
+        update.task.previous_in_progress_at = update.task.in_progress_at
+        update.task.assigned_agent_id = None
+        update.task.in_progress_at = None
+    elif target_status == "in_progress":
+        effective_assignee_id = update.task.assigned_agent_id
+        if "assigned_agent_id" in update.updates:
+            effective_assignee_id = _optional_assigned_agent_id(
+                update.updates["assigned_agent_id"],
+            )
+        if effective_assignee_id is None:
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="Lead status gate failed: `in_progress` requires an assigned agent.",
+            )
+        update.task.in_progress_at = utcnow()
+    elif target_status == "done":
+        update.task.previous_in_progress_at = update.task.in_progress_at
         update.task.in_progress_at = None
     update.task.status = target_status
 
@@ -2232,7 +2785,7 @@ async def _lead_notify_new_assignee(
             and update.task.status == "inbox"
             and update.actor.actor_type == "agent"
             and update.actor.agent
-            and update.actor.agent.is_board_lead
+            and _is_task_coordinator_agent(update.actor.agent)
         ):
             await _notify_agent_on_task_rework(
                 session=session,
@@ -2258,6 +2811,11 @@ async def _apply_lead_task_update(
     if update.actor.actor_type != "agent" or update.actor.agent is None:
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN)
     _validate_lead_update_request(update)
+    await _apply_parent_task_update(session, update=update)
+    for key, value in update.updates.items():
+        if key in {"assigned_agent_id", "status"}:
+            continue
+        setattr(update.task, key, value)
     _effective_deps, blocked_by = await _lead_effective_dependencies(
         session,
         update=update,
@@ -2335,7 +2893,9 @@ async def _apply_lead_task_update(
     )
     await session.commit()
     await session.refresh(update.task)
+    await _record_task_comment_from_update(session, update=update)
     await _lead_notify_new_assignee(session, update=update)
+    await _reconcile_presence_after_task_change(session, board_id=update.board_id)
     return await _task_read_response(
         session,
         task=update.task,
@@ -2355,6 +2915,7 @@ async def _apply_non_lead_agent_task_rules(
         and update.actor.agent.board_id
         and update.task.board_id
         and update.actor.agent.board_id != update.task.board_id
+        and update.task.assigned_agent_id != update.actor.agent.id
     ):
         raise _task_update_forbidden_error(
             code="task_board_mismatch",
@@ -2432,6 +2993,7 @@ async def _apply_admin_task_rules(
     update: _TaskUpdateInput,
 ) -> None:
     admin_normalized_deps: list[UUID] | None = None
+    await _apply_parent_task_update(session, update=update)
     update.normalized_tag_ids = await _normalized_update_tag_ids(
         session,
         update=update,
@@ -2492,11 +3054,11 @@ async def _apply_admin_task_rules(
         update.updates.get("assigned_agent_id"),
     )
     if assigned_agent_id:
-        agent = await Agent.objects.by_id(assigned_agent_id).first(session)
-        if agent is None:
-            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND)
-        if agent.board_id and update.task.board_id and agent.board_id != update.task.board_id:
-            raise HTTPException(status_code=status.HTTP_409_CONFLICT)
+        await _validate_assigned_agent_for_task(
+            session,
+            task_board_id=update.board_id,
+            assigned_agent_id=assigned_agent_id,
+        )
 
 
 async def _record_task_comment_from_update(
@@ -2506,9 +3068,10 @@ async def _record_task_comment_from_update(
 ) -> None:
     if update.comment is None or not update.comment.strip():
         return
+    message = update.comment.strip()
     event = ActivityEvent(
         event_type="task.comment",
-        message=update.comment,
+        message=message,
         task_id=update.task.id,
         board_id=update.task.board_id,
         agent_id=(
@@ -2519,6 +3082,28 @@ async def _record_task_comment_from_update(
     )
     session.add(event)
     await session.commit()
+    targets, mention_names = await _comment_targets(
+        session,
+        task=update.task,
+        message=message,
+        actor=update.actor,
+    )
+    await _notify_task_comment_targets(
+        session,
+        request=_TaskCommentNotifyRequest(
+            task=update.task,
+            actor=update.actor,
+            message=message,
+            targets=targets,
+            mention_names=mention_names,
+        ),
+    )
+    await _notify_scope_lead_on_downstream_outcome(
+        session,
+        task=update.task,
+        actor=update.actor,
+        message=message,
+    )
 
 
 async def _record_task_update_activity(
@@ -2557,11 +3142,7 @@ async def _assign_review_task_to_lead(
 ) -> None:
     if update.task.status != "review" or update.previous_status == "review":
         return
-    lead = (
-        await Agent.objects.filter_by(board_id=update.board_id)
-        .filter(col(Agent.is_board_lead).is_(True))
-        .first(session)
-    )
+    lead = await resolve_scope_lead(session, board_id=update.board_id)
     if lead is None:
         return
     update.task.assigned_agent_id = lead.id
@@ -2626,7 +3207,7 @@ async def _notify_task_update_assignment_changes(
         and update.task.status == "inbox"
         and update.actor.actor_type == "agent"
         and update.actor.agent
-        and update.actor.agent.is_board_lead
+        and _is_task_coordinator_agent(update.actor.agent)
     ):
         current_board = await _board()
         if current_board:
@@ -2739,6 +3320,7 @@ async def _finalize_updated_task(
     await _record_task_comment_from_update(session, update=update)
     await _record_task_update_activity(session, update=update)
     await _notify_task_update_assignment_changes(session, update=update)
+    await _reconcile_presence_after_task_change(session, board_id=update.board_id)
 
     return await _task_read_response(
         session,
@@ -2781,5 +3363,11 @@ async def create_task_comment(
             targets=targets,
             mention_names=mention_names,
         ),
+    )
+    await _notify_scope_lead_on_downstream_outcome(
+        session,
+        task=task,
+        actor=actor,
+        message=payload.message,
     )
     return event

@@ -34,6 +34,11 @@ class Task(TenantScoped, table=True):
         foreign_key="users.id",
         index=True,
     )
+    parent_task_id: UUID | None = Field(
+        default=None,
+        foreign_key="tasks.id",
+        index=True,
+    )
     assigned_agent_id: UUID | None = Field(
         default=None,
         foreign_key="agents.id",

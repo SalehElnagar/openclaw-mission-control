@@ -6,6 +6,7 @@ const AGENT_STATUS_DOT_CLASS_BY_STATUS: Record<string, string> = {
   online: "bg-emerald-500",
   busy: "bg-amber-500",
   provisioning: "bg-amber-500",
+  standby: "bg-sky-400",
   updating: "bg-sky-500",
   deleting: "bg-rose-500",
   offline: "bg-slate-400",

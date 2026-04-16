@@ -16,7 +16,7 @@ from app.api import approvals as approvals_api
 from app.api import board_memory as board_memory_api
 from app.api import board_onboarding as onboarding_api
 from app.api import tasks as tasks_api
-from app.api.deps import ActorContext, get_board_or_404, get_task_or_404
+from app.api.deps import ActorContext, get_board_or_404
 from app.core.agent_auth import AgentAuthContext, get_agent_auth_context
 from app.db.pagination import paginate
 from app.db.session import get_session
@@ -62,6 +62,8 @@ from app.services.task_dependencies import (
     dependency_status_by_id,
     validate_dependency_update,
 )
+from app.services.task_hierarchy import validate_parent_task_update
+from app.services.task_scope import board_ids_share_scope, board_scope_board_ids
 
 if TYPE_CHECKING:
     from collections.abc import Sequence
@@ -77,7 +79,6 @@ router = APIRouter(prefix="/agent", tags=["agent"])
 SESSION_DEP = Depends(get_session)
 AGENT_CTX_DEP = Depends(get_agent_auth_context)
 BOARD_DEP = Depends(get_board_or_404)
-TASK_DEP = Depends(get_task_or_404)
 BOARD_ID_QUERY = Query(default=None)
 TASK_STATUS_QUERY = Query(default=None, alias="status")
 IS_CHAT_QUERY = Query(default=None)
@@ -87,6 +88,27 @@ AGENT_LEAD_TAGS = cast("list[str | Enum]", ["agent-lead"])
 AGENT_MAIN_TAGS = cast("list[str | Enum]", ["agent-main"])
 AGENT_BOARD_TAGS = cast("list[str | Enum]", ["agent-lead", "agent-worker"])
 AGENT_ALL_ROLE_TAGS = cast("list[str | Enum]", ["agent-lead", "agent-worker", "agent-main"])
+
+
+async def _get_agent_task_or_404(
+    task_id: UUID,
+    board: Board = BOARD_DEP,
+    session: AsyncSession = SESSION_DEP,
+) -> Task:
+    """Load a task for the board named in the agent route.
+
+    Agent routes enforce scope access separately via `_guard_board_access`
+    or `_guard_task_access`, so this loader only verifies that the task
+    belongs to the board path parameter.
+    """
+
+    task = await Task.objects.by_id(task_id).first(session)
+    if task is None or task.board_id != board.id:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND)
+    return task
+
+
+TASK_DEP = Depends(_get_agent_task_or_404)
 
 
 def _coerce_agent_items(items: Sequence[Any]) -> list[Agent]:
@@ -218,9 +240,72 @@ def _payload_preview_with_limit(
     return _truncate_preview(raw, max_chars), True
 
 
-def _guard_board_access(agent_ctx: AgentAuthContext, board: Board) -> None:
-    allowed = not (agent_ctx.agent.board_id and agent_ctx.agent.board_id != board.id)
+async def _visible_scope_board_ids(
+    session: AsyncSession,
+    *,
+    agent_ctx: AgentAuthContext,
+) -> list[UUID]:
+    actor = agent_ctx.agent
+    if actor.board_id is None:
+        gateway = await Gateway.objects.by_id(actor.gateway_id).first(session)
+        if gateway is None:
+            return []
+        return list(
+            await session.exec(
+                select(col(Board.id))
+                .where(col(Board.organization_id) == gateway.organization_id)
+                .order_by(col(Board.created_at).desc()),
+            ),
+        )
+    if actor.is_board_lead:
+        return await board_scope_board_ids(session, board_id=actor.board_id)
+    return [actor.board_id]
+
+
+async def _guard_board_access(
+    session: AsyncSession,
+    *,
+    agent_ctx: AgentAuthContext,
+    board: Board,
+) -> None:
+    allowed = board.id in await _visible_scope_board_ids(
+        session,
+        agent_ctx=agent_ctx,
+    )
     OpenClawAuthorizationPolicy.require_board_write_access(allowed=allowed)
+
+
+async def _can_coordinate_board(
+    session: AsyncSession,
+    *,
+    agent_ctx: AgentAuthContext,
+    board: Board,
+) -> bool:
+    actor = agent_ctx.agent
+    if actor.board_id is None:
+        return actor.gateway_id == board.gateway_id
+    if not actor.is_board_lead:
+        return False
+    return await board_ids_share_scope(
+        session,
+        anchor_board_id=actor.board_id,
+        candidate_board_id=board.id,
+    )
+
+
+async def _require_task_coordinator_for_board(
+    session: AsyncSession,
+    *,
+    agent_ctx: AgentAuthContext,
+    board: Board,
+) -> Agent:
+    allowed = await _can_coordinate_board(
+        session,
+        agent_ctx=agent_ctx,
+        board=board,
+    )
+    OpenClawAuthorizationPolicy.require_board_write_access(allowed=allowed)
+    return agent_ctx.agent
 
 
 def _require_board_lead(agent_ctx: AgentAuthContext) -> Agent:
@@ -230,10 +315,57 @@ def _require_board_lead(agent_ctx: AgentAuthContext) -> Agent:
     )
 
 
-def _guard_task_access(agent_ctx: AgentAuthContext, task: Task) -> None:
-    allowed = not (
-        agent_ctx.agent.board_id and task.board_id and agent_ctx.agent.board_id != task.board_id
-    )
+async def _guard_task_access(
+    session: AsyncSession,
+    *,
+    agent_ctx: AgentAuthContext,
+    task: Task,
+) -> None:
+    actor = agent_ctx.agent
+    task_board_id = task.board_id
+    allowed = False
+    if task_board_id is not None:
+        if actor.board_id is None:
+            board = await Board.objects.by_id(task_board_id).first(session)
+            allowed = board is not None and board.gateway_id == actor.gateway_id
+        elif actor.board_id == task_board_id:
+            allowed = True
+        elif actor.is_board_lead:
+            allowed = await board_ids_share_scope(
+                session,
+                anchor_board_id=actor.board_id,
+                candidate_board_id=task_board_id,
+            )
+        elif task.assigned_agent_id == actor.id:
+            allowed = await board_ids_share_scope(
+                session,
+                anchor_board_id=actor.board_id,
+                candidate_board_id=task_board_id,
+            )
+    OpenClawAuthorizationPolicy.require_board_write_access(allowed=allowed)
+
+
+async def _guard_task_comment_read_access(
+    session: AsyncSession,
+    *,
+    agent_ctx: AgentAuthContext,
+    task: Task,
+) -> None:
+    actor = agent_ctx.agent
+    task_board_id = task.board_id
+    allowed = False
+    if task_board_id is not None:
+        if actor.board_id is None:
+            board = await Board.objects.by_id(task_board_id).first(session)
+            allowed = board is not None and board.gateway_id == actor.gateway_id
+        elif actor.board_id == task_board_id:
+            allowed = True
+        else:
+            allowed = await board_ids_share_scope(
+                session,
+                anchor_board_id=actor.board_id,
+                candidate_board_id=task_board_id,
+            )
     OpenClawAuthorizationPolicy.require_board_write_access(allowed=allowed)
 
 
@@ -366,21 +498,9 @@ async def list_boards(
     Board-scoped agents typically see only their assigned board.
     Main agents may see multiple boards when permitted by auth scope.
     """
-    statement = select(Board)
-    if agent_ctx.agent.board_id:
-        statement = statement.where(col(Board.id) == agent_ctx.agent.board_id)
-    else:
-        # Main agents (board_id=None) must be scoped to their organization
-        # via their gateway to prevent cross-tenant board leakage.
-        gateway = await Gateway.objects.by_id(agent_ctx.agent.gateway_id).first(session)
-        if gateway is None:
-            raise HTTPException(
-                status_code=status.HTTP_403_FORBIDDEN,
-                detail="Agent gateway not found; cannot determine organization scope.",
-            )
-        statement = statement.where(
-            col(Board.organization_id) == gateway.organization_id,
-        )
+    statement = select(Board).where(
+        col(Board.id).in_(await _visible_scope_board_ids(session, agent_ctx=agent_ctx)),
+    )
     statement = statement.order_by(col(Board.created_at).desc())
     return await paginate(session, statement)
 
@@ -438,8 +558,9 @@ async def list_boards(
         ],
     },
 )
-def get_board(
+async def get_board(
     board: Board = BOARD_DEP,
+    session: AsyncSession = SESSION_DEP,
     agent_ctx: AgentAuthContext = AGENT_CTX_DEP,
 ) -> Board:
     """Return one board if the authenticated agent can access it.
@@ -447,7 +568,11 @@ def get_board(
     Use this when an agent needs board metadata (objective, status, target date)
     before planning or posting updates.
     """
-    _guard_board_access(agent_ctx, board)
+    await _guard_board_access(
+        session,
+        agent_ctx=agent_ctx,
+        board=board,
+    )
     return board
 
 
@@ -515,13 +640,20 @@ async def list_agents(
     """
     statement = select(Agent)
     if agent_ctx.agent.board_id:
+        visible_board_ids = await _visible_scope_board_ids(
+            session,
+            agent_ctx=agent_ctx,
+        )
         if board_id:
             OpenClawAuthorizationPolicy.require_board_write_access(
-                allowed=board_id == agent_ctx.agent.board_id,
+                allowed=board_id in visible_board_ids,
             )
-        statement = statement.where(Agent.board_id == agent_ctx.agent.board_id)
+            statement = statement.where(col(Agent.board_id) == board_id)
+        else:
+            statement = statement.where(col(Agent.board_id).in_(visible_board_ids))
     elif board_id:
         statement = statement.where(Agent.board_id == board_id)
+    statement = statement.where(col(Agent.hidden).is_(False))
     statement = statement.order_by(col(Agent.created_at).desc())
 
     def _transform(items: Sequence[Any]) -> Sequence[Any]:
@@ -576,7 +708,11 @@ async def list_tasks(
     - worker: fetch assigned inbox/in-progress tasks
     - lead: fetch unassigned inbox tasks for delegation
     """
-    _guard_board_access(agent_ctx, board)
+    await _guard_board_access(
+        session,
+        agent_ctx=agent_ctx,
+        board=board,
+    )
     return await tasks_api.list_tasks(
         status_filter=filters.status_filter,
         assigned_agent_id=filters.assigned_agent_id,
@@ -616,7 +752,11 @@ async def list_tags(
 
     Use returned ids in task create/update payloads (`tag_ids`).
     """
-    _guard_board_access(agent_ctx, board)
+    await _guard_board_access(
+        session,
+        agent_ctx=agent_ctx,
+        board=board,
+    )
     tags = (
         await session.exec(
             select(Tag)
@@ -680,7 +820,11 @@ async def get_webhook_payload(
     the response payload is returned as a truncated string preview.
     """
 
-    _guard_board_access(agent_ctx, board)
+    await _guard_board_access(
+        session,
+        agent_ctx=agent_ctx,
+        board=board,
+    )
 
     payload = (
         await session.exec(
@@ -783,13 +927,16 @@ async def create_task(
     session: AsyncSession = SESSION_DEP,
     agent_ctx: AgentAuthContext = AGENT_CTX_DEP,
 ) -> TaskRead:
-    """Create a task as the board lead.
+    """Create a task as the board lead or gateway coordinator.
 
-    Lead-only endpoint. Supports dependency-aware creation via
+    Coordinator-only endpoint. Supports dependency-aware creation via
     `depends_on_task_ids`, optional `tag_ids`, and `custom_field_values`.
     """
-    _guard_board_access(agent_ctx, board)
-    _require_board_lead(agent_ctx)
+    coordinator = await _require_task_coordinator_for_board(
+        session,
+        agent_ctx=agent_ctx,
+        board=board,
+    )
     data = payload.model_dump(
         exclude={"depends_on_task_ids", "tag_ids", "custom_field_values"},
     )
@@ -800,7 +947,13 @@ async def create_task(
     task = Task.model_validate(data)
     task.board_id = board.id
     task.auto_created = True
-    task.auto_reason = f"lead_agent:{agent_ctx.agent.id}"
+    task.auto_reason = f"coordinator_agent:{coordinator.id}"
+    task.parent_task_id = await validate_parent_task_update(
+        session,
+        board_id=board.id,
+        task_id=task.id,
+        parent_task_id=task.parent_task_id,
+    )
 
     normalized_deps = await validate_dependency_update(
         session,
@@ -832,16 +985,12 @@ async def create_task(
             },
         )
     if task.assigned_agent_id:
-        agent = await Agent.objects.by_id(task.assigned_agent_id).first(session)
-        if agent is None:
-            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND)
-        if agent.is_board_lead:
-            raise HTTPException(
-                status_code=status.HTTP_403_FORBIDDEN,
-                detail="Board leads cannot assign tasks to themselves.",
-            )
-        if agent.board_id and agent.board_id != board.id:
-            raise HTTPException(status_code=status.HTTP_409_CONFLICT)
+        assigned_agent = await tasks_api._validate_assigned_agent_for_task(
+            session,
+            task_board_id=board.id,
+            assigned_agent_id=task.assigned_agent_id,
+        )
+        task.assigned_agent_id = assigned_agent.id if assigned_agent is not None else None
     session.add(task)
     # Ensure the task exists in the DB before inserting dependency rows.
     await session.flush()
@@ -870,8 +1019,8 @@ async def create_task(
         session,
         event_type="task.created",
         task_id=task.id,
-        message=f"Task created by lead: {task.title}.",
-        agent_id=agent_ctx.agent.id,
+        message=f"Task created by coordinator: {task.title}.",
+        agent_id=coordinator.id,
         board_id=task.board_id,
     )
     await session.commit()
@@ -931,7 +1080,11 @@ async def update_task(
 
     Supports status, assignment, dependencies, and optional inline comment.
     """
-    _guard_task_access(agent_ctx, task)
+    await _guard_task_access(
+        session,
+        agent_ctx=agent_ctx,
+        task=task,
+    )
     return await tasks_api.update_task(
         payload=payload,
         task=task,
@@ -1015,7 +1168,11 @@ async def list_task_comments(
 
     Read this before posting updates to avoid duplicate or low-value comments.
     """
-    _guard_task_access(agent_ctx, task)
+    await _guard_task_comment_read_access(
+        session,
+        agent_ctx=agent_ctx,
+        task=task,
+    )
     return await tasks_api.list_task_comments(
         task=task,
         session=session,
@@ -1052,7 +1209,11 @@ async def create_task_comment(
 
     This is the primary collaboration/log surface for task progress.
     """
-    _guard_task_access(agent_ctx, task)
+    await _guard_task_access(
+        session,
+        agent_ctx=agent_ctx,
+        task=task,
+    )
     return await tasks_api.create_task_comment(
         payload=payload,
         task=task,
@@ -1092,7 +1253,11 @@ async def list_board_memory(
 
     Use `is_chat=false` for durable context and `is_chat=true` for board chat.
     """
-    _guard_board_access(agent_ctx, board)
+    await _guard_board_access(
+        session,
+        agent_ctx=agent_ctx,
+        board=board,
+    )
     return await board_memory_api.list_board_memory(
         is_chat=is_chat,
         board=board,
@@ -1134,7 +1299,11 @@ async def create_board_memory(
 
     Use tags to indicate purpose (e.g. `chat`, `decision`, `plan`, `handoff`).
     """
-    _guard_board_access(agent_ctx, board)
+    await _guard_board_access(
+        session,
+        agent_ctx=agent_ctx,
+        board=board,
+    )
     return await board_memory_api.create_board_memory(
         payload=payload,
         board=board,
@@ -1174,7 +1343,11 @@ async def list_approvals(
 
     Use status filtering to process pending approvals efficiently.
     """
-    _guard_board_access(agent_ctx, board)
+    await _guard_board_access(
+        session,
+        agent_ctx=agent_ctx,
+        board=board,
+    )
     return await approvals_api.list_approvals(
         status_filter=status_filter,
         board=board,
@@ -1214,7 +1387,11 @@ async def create_approval(
 
     Include `task_id` or `task_ids` to scope the decision precisely.
     """
-    _guard_board_access(agent_ctx, board)
+    await _guard_board_access(
+        session,
+        agent_ctx=agent_ctx,
+        board=board,
+    )
     return await approvals_api.create_approval(
         payload=payload,
         board=board,
@@ -1253,7 +1430,11 @@ async def update_onboarding(
 
     Used during structured objective/success-metric intake loops.
     """
-    _guard_board_access(agent_ctx, board)
+    await _guard_board_access(
+        session,
+        agent_ctx=agent_ctx,
+        board=board,
+    )
     return await onboarding_api.agent_onboarding_update(
         payload=payload,
         board=board,
@@ -1434,7 +1615,11 @@ async def nudge_agent(
 
     Lead-only endpoint for stale or blocked in-progress work.
     """
-    _guard_board_access(agent_ctx, board)
+    await _guard_board_access(
+        session,
+        agent_ctx=agent_ctx,
+        board=board,
+    )
     _require_board_lead(agent_ctx)
     coordination = GatewayCoordinationService(session)
     await coordination.nudge_board_agent(
@@ -1554,7 +1739,11 @@ async def get_agent_soul(
 
     Allowed for board lead, or for an agent reading its own SOUL.
     """
-    _guard_board_access(agent_ctx, board)
+    await _guard_board_access(
+        session,
+        agent_ctx=agent_ctx,
+        board=board,
+    )
     OpenClawAuthorizationPolicy.require_board_lead_or_same_actor(
         actor_agent=agent_ctx.agent,
         target_agent_id=agent_id,
@@ -1668,7 +1857,11 @@ async def update_agent_soul(
 
     Lead-only endpoint. Persists as `soul_template` for future reprovisioning.
     """
-    _guard_board_access(agent_ctx, board)
+    await _guard_board_access(
+        session,
+        agent_ctx=agent_ctx,
+        board=board,
+    )
     _require_board_lead(agent_ctx)
     coordination = GatewayCoordinationService(session)
     await coordination.update_agent_soul(
@@ -1759,7 +1952,11 @@ async def delete_board_agent(
 
     Cleans up runtime/session state through lifecycle services.
     """
-    _guard_board_access(agent_ctx, board)
+    await _guard_board_access(
+        session,
+        agent_ctx=agent_ctx,
+        board=board,
+    )
     _require_board_lead(agent_ctx)
     service = AgentLifecycleService(session)
     return await service.delete_agent_as_lead(
@@ -1849,7 +2046,11 @@ async def ask_user_via_gateway_main(
 
     Lead-only endpoint for situations where board chat is not responsive.
     """
-    _guard_board_access(agent_ctx, board)
+    await _guard_board_access(
+        session,
+        agent_ctx=agent_ctx,
+        board=board,
+    )
     _require_board_lead(agent_ctx)
     coordination = GatewayCoordinationService(session)
     return await coordination.ask_user_via_gateway_main(

@@ -46,7 +46,7 @@ type AgentsTableProps = {
 
 const DEFAULT_EMPTY_ICON = (
   <svg
-    className="h-16 w-16 text-slate-300"
+    className="h-16 w-16 text-quiet"
     viewBox="0 0 24 24"
     fill="none"
     stroke="currentColor"
@@ -60,6 +60,15 @@ const DEFAULT_EMPTY_ICON = (
     <path d="M16 3.13a4 4 0 0 1 0 7.75" />
   </svg>
 );
+
+const modelSummary = (agent: AgentRead) => {
+  const profileName = agent.model_profile ?? "—";
+  const primaryModel = agent.model_primary ?? "Not configured";
+  return { profile: profileName, model: primaryModel };
+};
+
+const agentSubtitle = (agent: AgentRead) =>
+  agent.is_board_lead ? `ID ${agent.id} · Board lead` : `ID ${agent.id}`;
 
 export function AgentsTable({
   agents,
@@ -108,19 +117,41 @@ export function AgentsTable({
           linkifyCell({
             href: `/agents/${row.original.id}`,
             label: row.original.name,
-            subtitle: `ID ${row.original.id}`,
+            subtitle: agentSubtitle(row.original),
           }),
       },
       {
         accessorKey: "status",
         header: "Status",
-        cell: ({ row }) => pillCell(row.original.status),
+        cell: ({ row }) => (
+          <div className="space-y-1">
+            {pillCell(row.original.status)}
+            {row.original.status_reason ? (
+              <p className="max-w-[20rem] text-xs text-muted">
+                {row.original.status_reason}
+              </p>
+            ) : null}
+          </div>
+        ),
+      },
+      {
+        id: "model_profile",
+        header: "Model policy",
+        cell: ({ row }) => {
+          const summary = modelSummary(row.original);
+          return (
+            <div className="space-y-0.5">
+              <p className="text-sm font-medium text-strong">{summary.model}</p>
+              <p className="text-xs text-muted">Profile: {summary.profile}</p>
+            </div>
+          );
+        },
       },
       {
         accessorKey: "openclaw_session_id",
         header: "Session",
         cell: ({ row }) => (
-          <span className="text-sm text-slate-700">
+          <span className="text-sm text-muted">
             {truncate(row.original.openclaw_session_id)}
           </span>
         ),
@@ -131,7 +162,7 @@ export function AgentsTable({
         cell: ({ row }) => {
           const boardId = row.original.board_id;
           if (!boardId) {
-            return <span className="text-sm text-slate-700">—</span>;
+            return <span className="text-sm text-muted">—</span>;
           }
           const boardName = boardNameById.get(boardId) ?? boardId;
           return linkifyCell({
@@ -186,7 +217,7 @@ export function AgentsTable({
             }
           : undefined
       }
-      rowClassName="hover:bg-slate-50"
+      rowClassName="hover:bg-[color:var(--surface-muted)]"
       cellClassName="px-6 py-4"
       emptyState={
         emptyState

@@ -70,6 +70,13 @@ class ProvisionOptions:
 
 _ROLE_SOUL_MAX_CHARS = 24_000
 _ROLE_SOUL_WORD_RE = re.compile(r"[a-z0-9]+")
+_NEUTRALIZED_BOOTSTRAP_MD = """# BOOTSTRAP.md
+
+This workspace is already provisioned by Mission Control.
+
+Read `AGENTS.md`, `TOOLS.md`, and `HEARTBEAT.md`, then continue normal operation.
+Do not run interactive bootstrap or onboarding steps from a gateway default template.
+"""
 
 
 def _is_missing_session_error(exc: OpenClawGatewayError) -> bool:
@@ -98,6 +105,30 @@ def _is_missing_agent_error(exc: OpenClawGatewayError) -> bool:
     return "agent" in message and "not found" in message
 
 
+def _is_transient_agent_upsert_error(exc: OpenClawGatewayError) -> bool:
+    """Return whether an upsert failure likely came from a gateway restart window.
+
+    Current OpenClaw versions can perform a full process restart after ``agents.create``.
+    During that brief window, follow-up ``agents.update`` calls fail with transport
+    errors like ``Connection refused`` instead of a structured RPC error.
+    """
+
+    message = str(exc).lower()
+    if not message:
+        return False
+    return any(
+        marker in message
+        for marker in (
+            "connection refused",
+            "connection reset",
+            "timed out",
+            "timeout",
+            "temporarily unavailable",
+            "server disconnected",
+        )
+    )
+
+
 def _repo_root() -> Path:
     return Path(__file__).resolve().parents[3]
 
@@ -109,7 +140,15 @@ def _templates_root() -> Path:
 def _heartbeat_config(agent: Agent) -> dict[str, Any]:
     merged = DEFAULT_HEARTBEAT_CONFIG.copy()
     if isinstance(agent.heartbeat_config, dict):
-        merged.update(agent.heartbeat_config)
+        every = agent.heartbeat_config.get("every")
+        target = agent.heartbeat_config.get("target")
+        include_reasoning = agent.heartbeat_config.get("includeReasoning")
+        if isinstance(every, str) and every.strip():
+            merged["every"] = every
+        if isinstance(target, str) and target.strip():
+            merged["target"] = target
+        if isinstance(include_reasoning, bool):
+            merged["includeReasoning"] = include_reasoning
     return merged
 
 
@@ -595,14 +634,15 @@ class OpenClawGatewayControlPlane(GatewayControlPlane):
             ):
                 raise
 
-        # Gateway hot-reload has a ~500ms debounce after agents.create writes to disk.
-        # agents.update arriving before the reload completes returns "agent not found".
-        # Wait for the reload window before attempting the update.
+        # Gateway reload after agents.create can be either a fast hot-reload or a brief
+        # full-process restart. Wait for the initial reload window before attempting
+        # the follow-up update.
         if agent_just_created:
             await asyncio.sleep(0.75)
 
         # Retry agents.update only when this call just created the agent.
-        # If create reported "already exists", "not found" should fail fast.
+        # If create reported "already exists", "not found" and transport failures
+        # should still fail fast.
         _update_retries = 5
         _update_delay = 0.5
         for _attempt in range(_update_retries):
@@ -620,7 +660,10 @@ class OpenClawGatewayControlPlane(GatewayControlPlane):
             except OpenClawGatewayError as exc:
                 should_retry = (
                     agent_just_created
-                    and _is_missing_agent_error(exc)
+                    and (
+                        _is_missing_agent_error(exc)
+                        or _is_transient_agent_upsert_error(exc)
+                    )
                     and _attempt < _update_retries - 1
                 )
                 if should_retry:
@@ -640,11 +683,26 @@ class OpenClawGatewayControlPlane(GatewayControlPlane):
         )
 
     async def list_agent_files(self, agent_id: str) -> dict[str, dict[str, Any]]:
-        payload = await openclaw_call(
-            "agents.files.list",
-            {"agentId": agent_id},
-            config=self._config,
-        )
+        _list_retries = 5
+        _list_delay = 0.5
+        for _attempt in range(_list_retries):
+            try:
+                payload = await openclaw_call(
+                    "agents.files.list",
+                    {"agentId": agent_id},
+                    config=self._config,
+                )
+                break
+            except OpenClawGatewayError as exc:
+                should_retry = (
+                    _is_transient_agent_upsert_error(exc)
+                    and _attempt < _list_retries - 1
+                )
+                if should_retry:
+                    await asyncio.sleep(_list_delay)
+                    _list_delay = min(_list_delay * 2, 4.0)
+                    continue
+                raise
         if not isinstance(payload, dict):
             return {}
         files = payload.get("files") or []
@@ -823,6 +881,11 @@ class BaseAgentLifecycleManager(ABC):
         _ = agent
         return set()
 
+    def _stale_file_fallback_content(self, agent: Agent, *, name: str) -> str | None:
+        if not agent.is_board_lead and name == "BOOTSTRAP.md":
+            return _NEUTRALIZED_BOOTSTRAP_MD
+        return None
+
     async def _set_agent_files(
         self,
         *,
@@ -881,6 +944,16 @@ class BaseAgentLifecycleManager(ABC):
                 await self._control_plane.delete_agent_file(agent_id=agent_id, name=name)
             except OpenClawGatewayError as exc:
                 message = str(exc).lower()
+                fallback_content = self._stale_file_fallback_content(agent, name=name)
+                if fallback_content is not None and any(
+                    marker in message for marker in ("unsupported", "unknown method")
+                ):
+                    await self._control_plane.set_agent_file(
+                        agent_id=agent_id,
+                        name=name,
+                        content=fallback_content,
+                    )
+                    continue
                 if any(
                     marker in message
                     for marker in (
@@ -1006,11 +1079,15 @@ class BoardAgentLifecycleManager(BaseAgentLifecycleManager):
         return super()._file_names(agent)
 
     def _allow_stale_file_deletion(self, agent: Agent) -> bool:
-        return bool(agent.is_board_lead)
+        return True
 
     def _stale_file_candidates(self, agent: Agent) -> set[str]:
         if not agent.is_board_lead:
-            return set()
+            # OpenClaw creates a default BOOTSTRAP.md for fresh agents. Mission Control
+            # workers do not manage BOOTSTRAP.md, and the default bootstrap can block
+            # first heartbeat/check-in by asking for interactive setup instead of
+            # following HEARTBEAT.md immediately.
+            return {"BOOTSTRAP.md"}
         return (
             set(DEFAULT_GATEWAY_FILES)
             | set(LEAD_GATEWAY_FILES)

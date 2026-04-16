@@ -8,6 +8,8 @@ from uuid import UUID
 from pydantic import field_validator
 from sqlmodel import Field, SQLModel
 
+from app.schemas.gateway_runtime import GatewayModelProfiles, ProfileName
+
 RUNTIME_ANNOTATION_TYPES = (datetime, UUID)
 
 
@@ -19,6 +21,23 @@ class GatewayBase(SQLModel):
     workspace_root: str
     allow_insecure_tls: bool = False
     disable_device_pairing: bool = False
+    default_model_profile: ProfileName = "general"
+    model_profiles: GatewayModelProfiles = Field(default_factory=GatewayModelProfiles)
+
+    @field_validator("model_profiles", mode="before")
+    @classmethod
+    def normalize_model_profiles(
+        cls,
+        value: object,
+    ) -> GatewayModelProfiles | object:
+        """Treat null/blank gateway model profiles as an empty profile map."""
+        if value is None:
+            return GatewayModelProfiles()
+        if isinstance(value, GatewayModelProfiles):
+            return value
+        if isinstance(value, dict):
+            return GatewayModelProfiles.model_validate(value)
+        return value
 
 
 class GatewayCreate(GatewayBase):
@@ -47,6 +66,8 @@ class GatewayUpdate(SQLModel):
     workspace_root: str | None = None
     allow_insecure_tls: bool | None = None
     disable_device_pairing: bool | None = None
+    default_model_profile: ProfileName | None = None
+    model_profiles: GatewayModelProfiles | None = None
 
     @field_validator("token", mode="before")
     @classmethod
@@ -59,6 +80,21 @@ class GatewayUpdate(SQLModel):
             return value or None
         return value
 
+    @field_validator("model_profiles", mode="before")
+    @classmethod
+    def normalize_update_model_profiles(
+        cls,
+        value: object,
+    ) -> GatewayModelProfiles | None | object:
+        """Allow PATCH callers to clear or normalize runtime model profiles."""
+        if value is None:
+            return None
+        if isinstance(value, GatewayModelProfiles):
+            return value
+        if isinstance(value, dict):
+            return GatewayModelProfiles.model_validate(value)
+        return value
+
 
 class GatewayRead(GatewayBase):
     """Gateway payload returned from read endpoints."""
@@ -66,6 +102,10 @@ class GatewayRead(GatewayBase):
     id: UUID
     organization_id: UUID
     token: str | None = None
+    runtime_sync_generation: int = 0
+    last_runtime_sync_at: datetime | None = None
+    last_runtime_sync_error: str | None = None
+    last_telemetry_collected_at: datetime | None = None
     created_at: datetime
     updated_at: datetime
 

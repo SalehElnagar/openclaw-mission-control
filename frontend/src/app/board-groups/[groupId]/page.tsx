@@ -2,16 +2,26 @@
 
 export const dynamic = "force-dynamic";
 
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { type ReactNode, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import Link from "next/link";
 import { useParams } from "next/navigation";
 
 import { SignedIn, SignedOut, useAuth } from "@/auth/clerk";
 import {
+  AlertTriangle,
   ArrowUpRight,
+  CalendarRange,
+  ChevronDown,
+  ChevronRight,
+  Clock3,
+  Flame,
+  GitBranch,
   MessageSquare,
   NotebookText,
+  Plus,
   Settings,
+  Sparkles,
+  Users2,
   X,
 } from "lucide-react";
 
@@ -27,65 +37,81 @@ import {
   streamBoardGroupMemoryApiV1BoardGroupsGroupIdMemoryStreamGet,
   useListBoardGroupMemoryApiV1BoardGroupsGroupIdMemoryGet,
 } from "@/api/generated/board-group-memory/board-group-memory";
+import { createTaskApiV1BoardsBoardIdTasksPost } from "@/api/generated/tasks/tasks";
+import {
+  type listAgentsApiV1AgentsGetResponse,
+  useListAgentsApiV1AgentsGet,
+} from "@/api/generated/agents/agents";
 import {
   type getMyMembershipApiV1OrganizationsMeMemberGetResponse,
   useGetMyMembershipApiV1OrganizationsMeMemberGet,
 } from "@/api/generated/organizations/organizations";
 import type {
+  AgentRead,
   BoardGroupHeartbeatApplyResult,
   BoardGroupMemoryRead,
+  BoardGroupTaskSummary,
   OrganizationMemberRead,
 } from "@/api/generated/model";
 import type { BoardGroupBoardSnapshot } from "@/api/generated/model";
+import { ActivityFeed } from "@/components/activity/ActivityFeed";
 import { Markdown } from "@/components/atoms/Markdown";
+import { StatusPill } from "@/components/atoms/StatusPill";
 import { SignedOutPanel } from "@/components/auth/SignedOutPanel";
 import { DashboardSidebar } from "@/components/organisms/DashboardSidebar";
 import { DashboardShell } from "@/components/templates/DashboardShell";
 import { BoardChatComposer } from "@/components/BoardChatComposer";
 import { Button, buttonVariants } from "@/components/ui/button";
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+} from "@/components/ui/dialog";
+import { Input } from "@/components/ui/input";
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select";
+import { Textarea } from "@/components/ui/textarea";
 import { createExponentialBackoff } from "@/lib/backoff";
-import { apiDatetimeToMs } from "@/lib/datetime";
+import { apiDatetimeToMs, localDateInputToUtcIso } from "@/lib/datetime";
 import { formatTimestamp } from "@/lib/formatters";
+import { isSystemActivityEvent } from "@/lib/operator-signal-filters";
 import { cn } from "@/lib/utils";
+import {
+  findWorkflowBacklogBoard,
+  getTaskWorkflowStageKey,
+  getWorkflowStageDefinition,
+  getWorkflowStageDescription,
+  getWorkflowStageLabel,
+  resolveWorkflowStageKey,
+  WORKFLOW_STAGE_ORDER,
+  type WorkflowStageKey,
+} from "@/lib/workflow-stages";
 import { usePageActive } from "@/hooks/usePageActive";
 
-const statusLabel = (value?: string | null) => {
-  switch (value) {
-    case "inbox":
-      return "Inbox";
-    case "in_progress":
-      return "In progress";
-    case "review":
-      return "Review";
-    case "done":
-      return "Done";
-    default:
-      return value || "—";
+const modelBadgeLabel = (agent?: AgentRead | null) => {
+  const modelRef = agent?.model_primary?.trim();
+  if (modelRef) {
+    if (modelRef.includes("codex")) return "Codex gpt-5.4";
+    if (modelRef.includes("model-router")) return "Foundry router";
+    return modelRef.replace(/^.*\//, "").replaceAll("-", " ");
   }
+  if (agent?.model_profile) {
+    return `${agent.model_profile} profile`;
+  }
+  return null;
 };
 
-const statusTone = (value?: string | null) => {
-  switch (value) {
-    case "in_progress":
-      return "bg-emerald-50 text-emerald-700 border-emerald-200";
-    case "review":
-      return "bg-amber-50 text-amber-800 border-amber-200";
-    case "done":
-      return "bg-slate-50 text-slate-600 border-slate-200";
-    default:
-      return "bg-blue-50 text-blue-700 border-blue-200";
-  }
-};
-
-const priorityTone = (value?: string | null) => {
-  switch (value) {
-    case "high":
-      return "bg-rose-50 text-rose-700 border-rose-200";
-    case "low":
-      return "bg-slate-50 text-slate-600 border-slate-200";
-    default:
-      return "bg-indigo-50 text-indigo-700 border-indigo-200";
-  }
+const dueLabel = (value?: string | null) => {
+  if (!value) return null;
+  return `Due ${formatTimestamp(value)}`;
 };
 
 const safeCount = (snapshot: BoardGroupBoardSnapshot, key: string) =>
@@ -101,6 +127,79 @@ const canWriteGroupBoards = (
   return member.board_access.some(
     (access) => access.can_write && boardIds.has(access.board_id),
   );
+};
+
+type CockpitTaskNode = BoardGroupTaskSummary & {
+  children: CockpitTaskNode[];
+};
+
+type WorkflowLane = {
+  key: WorkflowStageKey;
+  label: string;
+  description: string;
+  updatedAt: string | null;
+  tasks: CockpitTaskNode[];
+  boardIds: string[];
+  inboxCount: number;
+  liveCount: number;
+};
+
+const COCKPIT_STATUS_ORDER: Record<string, number> = {
+  in_progress: 0,
+  review: 1,
+  inbox: 2,
+  done: 3,
+};
+
+const COCKPIT_PRIORITY_ORDER: Record<string, number> = {
+  high: 0,
+  medium: 1,
+  low: 2,
+};
+
+const EPIC_PRIORITIES = [
+  { value: "high", label: "High priority" },
+  { value: "medium", label: "Medium priority" },
+  { value: "low", label: "Low priority" },
+] as const;
+
+const compareCockpitTasks = (
+  a: BoardGroupTaskSummary,
+  b: BoardGroupTaskSummary,
+) => {
+  const statusDelta =
+    (COCKPIT_STATUS_ORDER[a.status] ?? 99) -
+    (COCKPIT_STATUS_ORDER[b.status] ?? 99);
+  if (statusDelta !== 0) return statusDelta;
+  const priorityDelta =
+    (COCKPIT_PRIORITY_ORDER[a.priority] ?? 99) -
+    (COCKPIT_PRIORITY_ORDER[b.priority] ?? 99);
+  if (priorityDelta !== 0) return priorityDelta;
+  return b.updated_at.localeCompare(a.updated_at);
+};
+
+const buildCockpitTaskTree = (
+  tasks: BoardGroupTaskSummary[],
+): CockpitTaskNode[] => {
+  const byId = new Map<string, CockpitTaskNode>();
+  tasks.forEach((task) => {
+    byId.set(task.id, { ...task, children: [] });
+  });
+  const roots: CockpitTaskNode[] = [];
+  byId.forEach((node) => {
+    const parentId = node.parent_task_id;
+    if (parentId && byId.has(parentId)) {
+      byId.get(parentId)?.children.push(node);
+      return;
+    }
+    roots.push(node);
+  });
+  const sortNodes = (nodes: CockpitTaskNode[]) => {
+    nodes.sort(compareCockpitTasks);
+    nodes.forEach((node) => sortNodes(node.children));
+  };
+  sortNodes(roots);
+  return roots;
 };
 
 function GroupChatMessageCard({ message }: { message: BoardGroupMemoryRead }) {
@@ -141,23 +240,6 @@ const SSE_RECONNECT_BACKOFF = {
 } as const;
 const HAS_ALL_MENTION_RE = /(^|\s)@all\b/i;
 
-type HeartbeatUnit = "s" | "m" | "h" | "d";
-
-const HEARTBEAT_PRESETS: Array<{
-  label: string;
-  amount: number;
-  unit: HeartbeatUnit;
-}> = [
-  { label: "30s", amount: 30, unit: "s" },
-  { label: "1m", amount: 1, unit: "m" },
-  { label: "2m", amount: 2, unit: "m" },
-  { label: "5m", amount: 5, unit: "m" },
-  { label: "10m", amount: 10, unit: "m" },
-  { label: "15m", amount: 15, unit: "m" },
-  { label: "30m", amount: 30, unit: "m" },
-  { label: "1h", amount: 1, unit: "h" },
-];
-
 export default function BoardGroupDetailPage() {
   const { isSignedIn } = useAuth();
   const params = useParams();
@@ -166,7 +248,10 @@ export default function BoardGroupDetailPage() {
   const isPageActive = usePageActive();
 
   const [includeDone, setIncludeDone] = useState(false);
-  const [perBoardLimit, setPerBoardLimit] = useState(5);
+  const [perBoardLimit, setPerBoardLimit] = useState(10);
+  const [expandedTaskIds, setExpandedTaskIds] = useState<
+    Record<string, boolean>
+  >({});
 
   const [isChatOpen, setIsChatOpen] = useState(false);
   const [chatMessages, setChatMessages] = useState<BoardGroupMemoryRead[]>([]);
@@ -186,21 +271,21 @@ export default function BoardGroupDetailPage() {
   const [isNoteSending, setIsNoteSending] = useState(false);
   const [noteSendError, setNoteSendError] = useState<string | null>(null);
 
-  const [heartbeatAmount, setHeartbeatAmount] = useState("10");
-  const [heartbeatUnit, setHeartbeatUnit] = useState<HeartbeatUnit>("m");
-  const [includeBoardLeads, setIncludeBoardLeads] = useState(false);
+  const [includeBoardLeads, setIncludeBoardLeads] = useState(true);
   const [isHeartbeatApplying, setIsHeartbeatApplying] = useState(false);
   const [heartbeatApplyError, setHeartbeatApplyError] = useState<string | null>(
     null,
   );
   const [heartbeatApplyResult, setHeartbeatApplyResult] =
     useState<BoardGroupHeartbeatApplyResult | null>(null);
-
-  const heartbeatEvery = useMemo(() => {
-    const parsed = Number.parseInt(heartbeatAmount, 10);
-    if (!Number.isFinite(parsed) || parsed <= 0) return "";
-    return `${parsed}${heartbeatUnit}`;
-  }, [heartbeatAmount, heartbeatUnit]);
+  const [showSystemActivity, setShowSystemActivity] = useState(false);
+  const [isEpicDialogOpen, setIsEpicDialogOpen] = useState(false);
+  const [epicTitle, setEpicTitle] = useState("");
+  const [epicDescription, setEpicDescription] = useState("");
+  const [epicPriority, setEpicPriority] = useState<string>("high");
+  const [epicDueDate, setEpicDueDate] = useState("");
+  const [isEpicCreating, setIsEpicCreating] = useState(false);
+  const [epicCreateError, setEpicCreateError] = useState<string | null>(null);
 
   const snapshotQuery =
     useGetBoardGroupSnapshotApiV1BoardGroupsGroupIdSnapshotGet<
@@ -262,6 +347,185 @@ export default function BoardGroupDetailPage() {
     [boardIdSet, member],
   );
   const canManageHeartbeat = Boolean(isAdmin && canWriteGroup);
+  const agentsQuery = useListAgentsApiV1AgentsGet<
+    listAgentsApiV1AgentsGetResponse,
+    ApiError
+  >(
+    { limit: 200 },
+    {
+      query: {
+        enabled: Boolean(isSignedIn && groupId),
+        refetchInterval: 30_000,
+        refetchOnMount: "always",
+        retry: false,
+      },
+    },
+  );
+  const groupTasks = useMemo(
+    () => boards.flatMap((item) => item.tasks ?? []),
+    [boards],
+  );
+  const cockpitRoots = useMemo(
+    () => buildCockpitTaskTree(groupTasks),
+    [groupTasks],
+  );
+  const groupGatewayIds = useMemo(() => {
+    const ids = new Set<string>();
+    boards.forEach((item) => {
+      if (item.board.gateway_id) {
+        ids.add(item.board.gateway_id);
+      }
+    });
+    return ids;
+  }, [boards]);
+  const agents = useMemo<AgentRead[]>(() => {
+    if (agentsQuery.data?.status !== 200) return [];
+    return agentsQuery.data.data.items ?? [];
+  }, [agentsQuery.data]);
+  const workloadAgents = useMemo(() => {
+    const snapshotWorkload = (snapshot?.agent_workload ?? []).map((item) => ({
+      agent: item.agent,
+      activeTaskCount: item.active_task_count ?? 0,
+      currentTask: item.current_task ?? null,
+    }));
+    if (snapshotWorkload.length > 0) {
+      return snapshotWorkload;
+    }
+    const filteredAgents = agents.filter((agent) => {
+      if (agent.board_id && boardIdSet.has(agent.board_id)) {
+        return true;
+      }
+      return Boolean(agent.is_gateway_main && groupGatewayIds.has(agent.gateway_id));
+    });
+    const activeTasksByAgentId = new Map<string, BoardGroupTaskSummary[]>();
+    groupTasks.forEach((task) => {
+      if (!task.assigned_agent_id) return;
+      const current = activeTasksByAgentId.get(task.assigned_agent_id) ?? [];
+      current.push(task);
+      activeTasksByAgentId.set(task.assigned_agent_id, current);
+    });
+    return filteredAgents.map((agent) => {
+      const tasks = [...(activeTasksByAgentId.get(agent.id) ?? [])].sort(
+        compareCockpitTasks,
+      );
+      return {
+        agent,
+        activeTaskCount: tasks.length,
+        currentTask: tasks.find((task) => task.status !== "done") ?? tasks[0] ?? null,
+      };
+    });
+  }, [agents, boardIdSet, groupGatewayIds, groupTasks, snapshot?.agent_workload]);
+  const agentById = useMemo(() => {
+    const map = new Map<string, AgentRead>();
+    workloadAgents.forEach(({ agent }) => {
+      map.set(agent.id, agent);
+    });
+    agents.forEach((agent) => {
+      if (!map.has(agent.id)) {
+        map.set(agent.id, agent);
+      }
+    });
+    return map;
+  }, [agents, workloadAgents]);
+  const taskById = useMemo(() => {
+    const map = new Map<string, BoardGroupTaskSummary>();
+    groupTasks.forEach((task) => {
+      map.set(task.id, task);
+    });
+    return map;
+  }, [groupTasks]);
+  const workflowStageByBoardId = useMemo(() => {
+    const map = new Map<string, WorkflowStageKey>();
+    boards.forEach((item) => {
+      map.set(item.board.id, resolveWorkflowStageKey(item.board));
+    });
+    return map;
+  }, [boards]);
+  const workflowBacklogBoard = useMemo(
+    () => findWorkflowBacklogBoard(boards),
+    [boards],
+  );
+  const workflowLanes = useMemo(() => {
+    const laneMap = new Map<WorkflowStageKey, WorkflowLane>();
+    const ensureLane = (key: WorkflowStageKey) => {
+      const current = laneMap.get(key);
+      if (current) return current;
+      const lane: WorkflowLane = {
+        key,
+        label: getWorkflowStageLabel(key),
+        description: getWorkflowStageDescription(key),
+        updatedAt: null,
+        tasks: [],
+        boardIds: [],
+        inboxCount: 0,
+        liveCount: 0,
+      };
+      laneMap.set(key, lane);
+      return lane;
+    };
+
+    WORKFLOW_STAGE_ORDER.forEach((key) => {
+      if (key !== "other") ensureLane(key);
+    });
+
+    boards.forEach((item) => {
+      const key = resolveWorkflowStageKey(item.board);
+      const lane = ensureLane(key);
+      lane.boardIds.push(item.board.id);
+      lane.inboxCount += safeCount(item, "inbox");
+      lane.liveCount += safeCount(item, "in_progress") + safeCount(item, "review");
+      lane.updatedAt =
+        lane.updatedAt && lane.updatedAt > item.board.updated_at
+          ? lane.updatedAt
+          : item.board.updated_at;
+    });
+
+    cockpitRoots.forEach((task) => {
+      const key =
+        workflowStageByBoardId.get(task.board_id) ?? getTaskWorkflowStageKey(task);
+      ensureLane(key).tasks.push(task);
+    });
+
+    return WORKFLOW_STAGE_ORDER.filter((key) => key !== "other").map((key) => {
+      const lane = ensureLane(key);
+      lane.tasks.sort(compareCockpitTasks);
+      return lane;
+    });
+  }, [boards, cockpitRoots, workflowStageByBoardId]);
+  const agendaOverdue = snapshot?.agenda?.overdue ?? [];
+  const agendaToday = snapshot?.agenda?.today ?? [];
+  const agendaUpcoming = snapshot?.agenda?.upcoming ?? [];
+  const memoryPreview = snapshot?.memory_preview ?? [];
+  const activityFeed = useMemo(() => snapshot?.activity_feed ?? [], [snapshot]);
+  const visibleActivityFeed = useMemo(
+    () =>
+      showSystemActivity
+        ? activityFeed
+        : activityFeed.filter((item) => !isSystemActivityEvent(item)),
+    [activityFeed, showSystemActivity],
+  );
+  const blockedCallouts = snapshot?.blocked_tasks ?? [];
+  const readyAgentCount = workloadAgents.filter(
+    ({ agent }) => agent.status === "online" || agent.status === "standby",
+  ).length;
+  const cockpitSummary = useMemo(() => {
+    const blockedCount = groupTasks.filter((task) => task.is_blocked).length;
+    const parentCount = groupTasks.filter((task) => (task.child_count ?? 0) > 0).length;
+    const assignedCount = groupTasks.filter((task) => task.assigned_agent_id).length;
+    const activeCount = groupTasks.filter(
+      (task) => task.status === "in_progress" || task.status === "review",
+    ).length;
+    return {
+      totalTasks: groupTasks.length,
+      activeCount,
+      blockedCount,
+      parentCount,
+      assignedCount,
+      pendingApprovalsCount: snapshot?.pending_approvals_count ?? 0,
+      dueTodayCount: agendaToday.length,
+      overdueCount: agendaOverdue.length,
+    };
+  }, [agendaOverdue.length, agendaToday.length, groupTasks, snapshot?.pending_approvals_count]);
 
   const chatHistoryQuery =
     useListBoardGroupMemoryApiV1BoardGroupsGroupIdMemoryGet<
@@ -691,18 +955,15 @@ export default function BoardGroupDetailPage() {
     [canWriteGroup, groupId, isSignedIn, mergeNotesMessages, notesBroadcast],
   );
 
-  const applyHeartbeat = useCallback(async () => {
+  const applyStandbyPolicy = useCallback(async () => {
     if (!isSignedIn || !groupId) {
-      setHeartbeatApplyError("Sign in to apply.");
+      setHeartbeatApplyError("Sign in to update the presence policy.");
       return;
     }
     if (!canManageHeartbeat) {
-      setHeartbeatApplyError("Read-only access. You cannot change agent pace.");
-      return;
-    }
-    const trimmed = heartbeatEvery.trim();
-    if (!trimmed) {
-      setHeartbeatApplyError("Heartbeat cadence is required.");
+      setHeartbeatApplyError(
+        "Read-only access. You cannot change the presence policy.",
+      );
       return;
     }
     setIsHeartbeatApplying(true);
@@ -711,26 +972,194 @@ export default function BoardGroupDetailPage() {
       const result =
         await applyBoardGroupHeartbeatApiV1BoardGroupsGroupIdHeartbeatPost(
           groupId,
-          { every: trimmed, include_board_leads: includeBoardLeads },
+          { every: "0m", include_board_leads: includeBoardLeads },
         );
       if (result.status !== 200) {
-        throw new Error("Unable to apply heartbeat.");
+        throw new Error("Unable to apply standby defaults.");
       }
       setHeartbeatApplyResult(result.data);
     } catch (err) {
       setHeartbeatApplyError(
-        err instanceof Error ? err.message : "Unable to apply heartbeat.",
+        err instanceof Error
+          ? err.message
+          : "Unable to apply standby defaults.",
       );
     } finally {
       setIsHeartbeatApplying(false);
     }
+  }, [canManageHeartbeat, groupId, includeBoardLeads, isSignedIn]);
+
+  const resetEpicForm = useCallback(() => {
+    setEpicTitle("");
+    setEpicDescription("");
+    setEpicPriority("high");
+    setEpicDueDate("");
+    setEpicCreateError(null);
+  }, []);
+
+  const handleCreateEpic = useCallback(async () => {
+    if (!isSignedIn) {
+      setEpicCreateError("Sign in to create a new epic.");
+      return;
+    }
+    if (!canWriteGroup) {
+      setEpicCreateError("Read-only access. You cannot create epics here.");
+      return;
+    }
+    if (!workflowBacklogBoard?.board.id) {
+      setEpicCreateError(
+        "No backlog lane is mapped for this workflow. Add a Requirements board first.",
+      );
+      return;
+    }
+    const trimmed = epicTitle.trim();
+    if (!trimmed) {
+      setEpicCreateError("Epic title is required.");
+      return;
+    }
+
+    setIsEpicCreating(true);
+    setEpicCreateError(null);
+    try {
+      const result = await createTaskApiV1BoardsBoardIdTasksPost(
+        workflowBacklogBoard.board.id,
+        {
+          title: trimmed,
+          description: epicDescription.trim() || null,
+          status: "inbox",
+          priority: epicPriority,
+          due_at: localDateInputToUtcIso(epicDueDate),
+        },
+      );
+      if (result.status !== 200) {
+        throw new Error("Unable to create epic.");
+      }
+      setIsEpicDialogOpen(false);
+      resetEpicForm();
+      await snapshotQuery.refetch();
+    } catch (err) {
+      setEpicCreateError(
+        err instanceof Error ? err.message : "Unable to create epic.",
+      );
+    } finally {
+      setIsEpicCreating(false);
+    }
   }, [
-    canManageHeartbeat,
-    groupId,
-    heartbeatEvery,
-    includeBoardLeads,
+    canWriteGroup,
+    epicDescription,
+    epicDueDate,
+    epicPriority,
+    epicTitle,
     isSignedIn,
+    resetEpicForm,
+    snapshotQuery,
+    workflowBacklogBoard,
   ]);
+
+  const toggleTaskExpanded = (taskId: string) => {
+    setExpandedTaskIds((current) => ({
+      ...current,
+      [taskId]: !(current[taskId] ?? true),
+    }));
+  };
+
+  const renderTaskNode = (task: CockpitTaskNode, depth = 0): ReactNode => {
+    const hasChildren = task.children.length > 0;
+    const isExpanded = expandedTaskIds[task.id] ?? true;
+    const assignedAgent = task.assigned_agent_id
+      ? agentById.get(task.assigned_agent_id) ?? null
+      : null;
+    const modelBadge = modelBadgeLabel(assignedAgent);
+    const stageLabel = getWorkflowStageLabel(
+      workflowStageByBoardId.get(task.board_id) ?? getTaskWorkflowStageKey(task),
+    );
+    return (
+      <div key={task.id} className="space-y-3">
+        <div
+          className="rounded-3xl border border-[color:var(--border)] bg-[color:var(--surface)] p-4 shadow-sm"
+          style={{ marginLeft: depth * 18 }}
+        >
+          <div className="flex flex-wrap items-start justify-between gap-3">
+            <div className="min-w-0 flex-1">
+              <div className="flex flex-wrap items-center gap-2">
+                {hasChildren ? (
+                  <button
+                    type="button"
+                    onClick={() => toggleTaskExpanded(task.id)}
+                    className="inline-flex h-7 w-7 items-center justify-center rounded-full border border-[color:var(--border)] bg-[color:var(--surface-muted)] text-muted transition hover:text-strong"
+                    aria-label={isExpanded ? "Collapse subtasks" : "Expand subtasks"}
+                  >
+                    {isExpanded ? (
+                      <ChevronDown className="h-4 w-4" />
+                    ) : (
+                      <ChevronRight className="h-4 w-4" />
+                    )}
+                  </button>
+                ) : (
+                  <span className="inline-flex h-7 w-7 items-center justify-center rounded-full border border-[color:var(--border)] bg-[color:var(--surface-muted)] text-quiet">
+                    <GitBranch className="h-4 w-4" />
+                  </span>
+                )}
+                <Link
+                  href={{
+                    pathname: `/boards/${task.board_id}`,
+                    query: { taskId: task.id },
+                  }}
+                  className="min-w-0 text-sm font-semibold text-strong transition hover:text-[color:var(--accent)]"
+                >
+                  <span className="truncate">{task.title}</span>
+                </Link>
+              </div>
+              <div className="mt-3 flex flex-wrap items-center gap-2 text-xs text-muted">
+                <StatusPill status={task.status} />
+                <span className="rounded-full border border-[color:var(--border)] bg-[color:var(--surface-muted)] px-2 py-1">
+                  {stageLabel}
+                </span>
+                <span className="rounded-full border border-[color:var(--border)] bg-[color:var(--surface-muted)] px-2 py-1">
+                  Priority {task.priority}
+                </span>
+                {task.due_at ? (
+                  <span className="rounded-full border border-[color:var(--border)] bg-[color:var(--surface-muted)] px-2 py-1">
+                    {dueLabel(task.due_at)}
+                  </span>
+                ) : null}
+                {modelBadge ? (
+                  <span className="rounded-full border border-[color:var(--accent-soft)] bg-[color:var(--accent-soft)]/40 px-2 py-1 text-[color:var(--accent-strong)]">
+                    {modelBadge}
+                  </span>
+                ) : null}
+                {(task.child_count ?? 0) > 0 ? (
+                  <span className="rounded-full border border-[color:var(--border)] bg-[color:var(--surface-muted)] px-2 py-1">
+                    {task.child_count} subtasks
+                  </span>
+                ) : null}
+                {(task.blocked_by_task_ids?.length ?? 0) > 0 ? (
+                  <span className="rounded-full border border-amber-300 bg-amber-50 px-2 py-1 text-amber-900">
+                    Blocked by {task.blocked_by_task_ids?.length}
+                  </span>
+                ) : null}
+              </div>
+            </div>
+            <div className="min-w-[12rem] text-right text-xs text-muted">
+              <p>
+                Assignee:{" "}
+                <span className="font-medium text-strong">
+                  {task.assignee ?? "Unassigned"}
+                </span>
+              </p>
+              <p className="mt-1">Stage: {stageLabel}</p>
+              <p className="mt-1">{formatTimestamp(task.updated_at)}</p>
+            </div>
+          </div>
+        </div>
+        {hasChildren && isExpanded ? (
+          <div className="space-y-3">
+            {task.children.map((child) => renderTaskNode(child, depth + 1))}
+          </div>
+        ) : null}
+      </div>
+    );
+  };
 
   return (
     <DashboardShell>
@@ -742,28 +1171,47 @@ export default function BoardGroupDetailPage() {
       </SignedOut>
       <SignedIn>
         <DashboardSidebar />
-        <main className="flex-1 overflow-y-auto bg-slate-50">
-          <div className="sticky top-0 z-30 border-b border-slate-200 bg-white shadow-sm">
+        <main className="flex-1 overflow-y-auto bg-[color:var(--surface-page)]">
+          <div className="sticky top-0 z-30 border-b border-[color:var(--border)] bg-[color:var(--surface)] shadow-sm">
             <div className="px-4 py-4 md:px-8 md:py-6">
               <div className="flex flex-wrap items-start justify-between gap-4">
                 <div className="min-w-0">
-                  <p className="text-xs font-semibold uppercase tracking-wider text-slate-500">
-                    Board group
+                  <p className="text-xs font-semibold uppercase tracking-wider text-quiet">
+                    Main board
                   </p>
-                  <h1 className="mt-2 text-2xl font-semibold tracking-tight text-slate-900">
-                    {group?.name ?? "Group"}
+                  <h1 className="mt-2 text-2xl font-semibold tracking-tight text-strong">
+                    {group?.name ?? "Development"}
                   </h1>
                   {group?.description ? (
-                    <p className="mt-2 max-w-2xl text-sm text-slate-600">
+                    <p className="mt-2 max-w-2xl text-sm text-muted">
                       {group.description}
                     </p>
                   ) : (
-                    <p className="mt-2 text-sm text-slate-400">
-                      No description
+                    <p className="mt-2 text-sm text-quiet">
+                      One operator board for backlog, planning, execution, review,
+                      security, QA, and done.
                     </p>
                   )}
                 </div>
                 <div className="flex flex-wrap items-center gap-2">
+                  <Button
+                    size="sm"
+                    onClick={() => {
+                      setEpicCreateError(null);
+                      setIsEpicDialogOpen(true);
+                    }}
+                    disabled={!canWriteGroup || !workflowBacklogBoard?.board.id}
+                    title={
+                      canWriteGroup
+                        ? workflowBacklogBoard?.board.id
+                          ? "Create a new top-level epic"
+                          : "Backlog lane is not configured"
+                        : "Read-only access"
+                    }
+                  >
+                    <Plus className="mr-2 h-4 w-4" />
+                    New Epic
+                  </Button>
                   {group?.id ? (
                     <Link
                       href={`/board-groups/${group.id}/edit`}
@@ -811,7 +1259,7 @@ export default function BoardGroupDetailPage() {
                     href="/boards"
                     className={buttonVariants({ variant: "ghost", size: "sm" })}
                   >
-                    View boards
+                    Workflow admin
                   </Link>
                 </div>
               </div>
@@ -847,67 +1295,17 @@ export default function BoardGroupDetailPage() {
                   </div>
                 </div>
 
-                <div className="flex flex-wrap items-center gap-2 text-sm text-slate-700">
-                  <span className="text-slate-500">Agent pace</span>
-                  <div className="flex flex-wrap items-center gap-1 rounded-lg border border-slate-200 bg-white p-1">
-                    {HEARTBEAT_PRESETS.map((preset) => {
-                      const value = `${preset.amount}${preset.unit}`;
-                      return (
-                        <button
-                          key={value}
-                          type="button"
-                          className={cn(
-                            "rounded-md px-2.5 py-1 text-xs font-semibold transition-colors",
-                            heartbeatEvery === value
-                              ? "bg-slate-900 text-white"
-                              : "text-slate-600 hover:bg-slate-100 hover:text-slate-900",
-                            !canManageHeartbeat &&
-                              "opacity-50 cursor-not-allowed",
-                          )}
-                          disabled={!canManageHeartbeat}
-                          onClick={() => {
-                            setHeartbeatAmount(String(preset.amount));
-                            setHeartbeatUnit(preset.unit);
-                          }}
-                        >
-                          {preset.label}
-                        </button>
-                      );
-                    })}
-                  </div>
-                  <input
-                    value={heartbeatAmount}
-                    onChange={(event) => setHeartbeatAmount(event.target.value)}
-                    className={cn(
-                      "h-8 w-20 rounded-md border bg-white px-2 text-xs text-slate-900 shadow-sm",
-                      heartbeatEvery
-                        ? "border-slate-200"
-                        : "border-rose-300 focus:border-rose-400 focus:ring-2 focus:ring-rose-100",
-                      !canManageHeartbeat && "opacity-60 cursor-not-allowed",
-                    )}
-                    placeholder="10"
-                    inputMode="numeric"
-                    type="number"
-                    min={1}
-                    step={1}
-                    disabled={!canManageHeartbeat}
-                  />
-                  <select
-                    value={heartbeatUnit}
-                    onChange={(event) =>
-                      setHeartbeatUnit(event.target.value as HeartbeatUnit)
-                    }
-                    className={cn(
-                      "h-8 rounded-md border border-slate-200 bg-white px-2 text-xs text-slate-900 shadow-sm",
-                      !canManageHeartbeat && "opacity-60 cursor-not-allowed",
-                    )}
-                    disabled={!canManageHeartbeat}
-                  >
-                    <option value="s">sec</option>
-                    <option value="m">min</option>
-                    <option value="h">hr</option>
-                    <option value="d">day</option>
-                  </select>
+                <div className="flex flex-wrap items-center gap-3 text-sm text-slate-700">
+                  <span className="text-slate-500">Presence policy</span>
+                  <span className="rounded-full border border-emerald-200 bg-emerald-50 px-3 py-1 text-xs font-semibold text-emerald-700">
+                    Standby by default
+                  </span>
+                  <span className="rounded-full border border-blue-200 bg-blue-50 px-3 py-1 text-xs font-semibold text-blue-700">
+                    Auto-wake on work
+                  </span>
+                  <span className="rounded-full border border-slate-200 bg-white px-3 py-1 text-xs font-semibold text-slate-700">
+                    Lead 30m · Workers 20m while active
+                  </span>
                   <label className="inline-flex items-center gap-2 text-xs text-slate-700">
                     <input
                       type="checkbox"
@@ -918,32 +1316,34 @@ export default function BoardGroupDetailPage() {
                       }
                       disabled={!canManageHeartbeat}
                     />
-                    Include leads
+                    Reset leads too
                   </label>
                   <Button
                     size="sm"
                     variant="outline"
-                    onClick={() => void applyHeartbeat()}
-                    disabled={
-                      isHeartbeatApplying ||
-                      !heartbeatEvery ||
-                      !canManageHeartbeat
-                    }
+                    onClick={() => void applyStandbyPolicy()}
+                    disabled={isHeartbeatApplying || !canManageHeartbeat}
                     title={
                       canManageHeartbeat
-                        ? "Apply heartbeat"
+                        ? "Reset group to standby"
                         : "Read-only access"
                     }
                   >
-                    {isHeartbeatApplying ? "Applying…" : "Apply"}
+                    {isHeartbeatApplying ? "Applying…" : "Reset to standby"}
                   </Button>
                 </div>
                 {!canManageHeartbeat ? (
                   <p className="text-xs text-slate-500">
-                    Read-only access. You cannot change agent pace for this
-                    group.
+                    Read-only access. You cannot change the presence policy for
+                    this group.
                   </p>
-                ) : null}
+                ) : (
+                  <p className="text-xs text-slate-500">
+                    Idle agents stay quiet and healthy in standby. They wake
+                    automatically when real task work appears, then fall back to
+                    standby when the work is complete or paused.
+                  </p>
+                )}
               </div>
             </div>
           </div>
@@ -958,11 +1358,11 @@ export default function BoardGroupDetailPage() {
               {heartbeatApplyResult ? (
                 <div className="rounded-xl border border-slate-200 bg-white p-4 text-sm text-slate-700 shadow-sm">
                   <p className="font-semibold text-slate-900">
-                    Heartbeat applied
+                    Presence policy updated
                   </p>
                   <p className="mt-1 text-slate-600">
                     Updated {heartbeatApplyResult.updated_agent_ids.length}{" "}
-                    agents, failed{" "}
+                    agents to standby defaults, failed{" "}
                     {heartbeatApplyResult.failed_agent_ids.length}.
                   </p>
                 </div>
@@ -982,111 +1382,588 @@ export default function BoardGroupDetailPage() {
                   settings page.
                 </div>
               ) : (
-                <div className="grid gap-6 lg:grid-cols-2">
-                  {boards.map((item) => (
-                    <div
-                      key={item.board.id}
-                      className="overflow-hidden rounded-xl border border-slate-200 bg-white shadow-sm"
-                    >
-                      <div className="border-b border-slate-200 px-6 py-4">
-                        <div className="flex items-start justify-between gap-4">
-                          <div className="min-w-0">
-                            <Link
-                              href={`/boards/${item.board.id}`}
-                              className="group inline-flex items-center gap-2"
-                              title="Open board"
-                            >
-                              <p className="truncate text-sm font-semibold text-slate-900 group-hover:text-blue-600">
-                                {item.board.name}
-                              </p>
-                              <ArrowUpRight className="h-4 w-4 text-slate-400 group-hover:text-blue-600" />
-                            </Link>
-                            <p className="mt-1 text-xs text-slate-500">
-                              Updated {formatTimestamp(item.board.updated_at)}
+                <div className="space-y-6">
+                  <section className="grid gap-4 sm:grid-cols-2 xl:grid-cols-6">
+                    <div className="rounded-2xl border border-[color:var(--border)] bg-[color:var(--surface)] p-4 shadow-sm">
+                      <p className="text-xs uppercase tracking-[0.2em] text-quiet">
+                        Active work
+                      </p>
+                      <p className="mt-2 text-2xl font-semibold text-strong">
+                        {cockpitSummary.activeCount}
+                      </p>
+                    </div>
+                    <div className="rounded-2xl border border-[color:var(--border)] bg-[color:var(--surface)] p-4 shadow-sm">
+                      <p className="text-xs uppercase tracking-[0.2em] text-quiet">
+                        Blocked
+                      </p>
+                      <p className="mt-2 text-2xl font-semibold text-strong">
+                        {cockpitSummary.blockedCount}
+                      </p>
+                    </div>
+                    <div className="rounded-2xl border border-[color:var(--border)] bg-[color:var(--surface)] p-4 shadow-sm">
+                      <p className="text-xs uppercase tracking-[0.2em] text-quiet">
+                        Pending approvals
+                      </p>
+                      <p className="mt-2 text-2xl font-semibold text-strong">
+                        {cockpitSummary.pendingApprovalsCount}
+                      </p>
+                    </div>
+                    <div className="rounded-2xl border border-[color:var(--border)] bg-[color:var(--surface)] p-4 shadow-sm">
+                      <p className="text-xs uppercase tracking-[0.2em] text-quiet">
+                        Ready agents
+                      </p>
+                      <p className="mt-2 text-2xl font-semibold text-strong">
+                        {readyAgentCount}
+                      </p>
+                    </div>
+                    <div className="rounded-2xl border border-[color:var(--border)] bg-[color:var(--surface)] p-4 shadow-sm">
+                      <p className="text-xs uppercase tracking-[0.2em] text-quiet">
+                        Due today
+                      </p>
+                      <p className="mt-2 text-2xl font-semibold text-strong">
+                        {cockpitSummary.dueTodayCount}
+                      </p>
+                    </div>
+                    <div className="rounded-2xl border border-[color:var(--border)] bg-[color:var(--surface)] p-4 shadow-sm">
+                      <p className="text-xs uppercase tracking-[0.2em] text-quiet">
+                        Overdue
+                      </p>
+                      <p className="mt-2 text-2xl font-semibold text-strong">
+                        {cockpitSummary.overdueCount}
+                      </p>
+                    </div>
+                  </section>
+
+                  <section className="grid gap-6 xl:grid-cols-[minmax(0,1.45fr)_360px]">
+                    <div className="space-y-6">
+                      <div className="rounded-3xl border border-[color:var(--border)] bg-[color:var(--surface)] p-6 shadow-sm">
+                        <div className="flex flex-wrap items-start justify-between gap-4">
+                          <div>
+                            <p className="text-xs font-semibold uppercase tracking-[0.24em] text-quiet">
+                              Main board
+                            </p>
+                            <h2 className="mt-2 text-xl font-semibold text-strong">
+                              Epic delivery flow at a glance
+                            </h2>
+                            <p className="mt-2 max-w-2xl text-sm text-muted">
+                              Work now moves through one readable board with
+                              operator-facing stages. Each lane hides the raw
+                              backend board structure while parent epics keep
+                              their subtasks and blockers visible inline.
                             </p>
                           </div>
-                          <div className="flex flex-wrap items-center justify-end gap-2 text-xs">
-                            <span className="rounded-full border border-slate-200 bg-slate-50 px-2 py-0.5 text-slate-700">
-                              Inbox {safeCount(item, "inbox")}
-                            </span>
-                            <span className="rounded-full border border-emerald-200 bg-emerald-50 px-2 py-0.5 text-emerald-800">
-                              In progress {safeCount(item, "in_progress")}
-                            </span>
-                            <span className="rounded-full border border-amber-200 bg-amber-50 px-2 py-0.5 text-amber-900">
-                              Review {safeCount(item, "review")}
-                            </span>
+                          <div className="flex flex-wrap gap-2">
+                            <Button
+                              size="sm"
+                              onClick={() => {
+                                setEpicCreateError(null);
+                                setIsEpicDialogOpen(true);
+                              }}
+                              disabled={!canWriteGroup || !workflowBacklogBoard?.board.id}
+                              title={
+                                canWriteGroup
+                                  ? workflowBacklogBoard?.board.id
+                                    ? "Create a new top-level epic"
+                                    : "Backlog lane is not configured"
+                                  : "Read-only access"
+                              }
+                            >
+                              <Plus className="mr-2 h-4 w-4" />
+                              New Epic
+                            </Button>
+                            <Button
+                              variant="outline"
+                              size="sm"
+                              onClick={() => {
+                                setIsChatOpen(false);
+                                setChatError(null);
+                                setNoteSendError(null);
+                                setIsNotesOpen(true);
+                              }}
+                            >
+                              <NotebookText className="mr-2 h-4 w-4" />
+                              Add note
+                            </Button>
+                            <Link
+                              href="/approvals"
+                              className={buttonVariants({ variant: "ghost", size: "sm" })}
+                            >
+                              Open approvals
+                            </Link>
+                          </div>
+                        </div>
+
+                        <div className="mt-6 overflow-x-auto">
+                          <div className="grid auto-cols-[minmax(300px,1fr)] grid-flow-col gap-4 pb-3">
+                            {workflowLanes.map((lane) => {
+                              return (
+                                <div
+                                  key={lane.key}
+                                  className="rounded-3xl border border-[color:var(--border)] bg-[color:var(--surface-muted)] p-4"
+                                >
+                                  <div className="flex items-start justify-between gap-4">
+                                    <div className="min-w-0">
+                                      <p className="truncate text-sm font-semibold text-strong">
+                                        {lane.label}
+                                      </p>
+                                      <p className="mt-1 text-xs text-muted">
+                                        {lane.description}
+                                      </p>
+                                      <p className="mt-2 text-[11px] uppercase tracking-[0.2em] text-quiet">
+                                        Updated {formatTimestamp(lane.updatedAt)}
+                                      </p>
+                                    </div>
+                                    <div className="flex flex-col items-end gap-2 text-[11px]">
+                                      <span className="rounded-full border border-[color:var(--border)] bg-[color:var(--surface)] px-2 py-1 text-muted">
+                                        Inbox {lane.inboxCount}
+                                      </span>
+                                      <span className="rounded-full border border-[color:var(--accent-soft)] bg-[color:var(--accent-soft)]/30 px-2 py-1 text-[color:var(--accent-strong)]">
+                                        Live {lane.liveCount}
+                                      </span>
+                                    </div>
+                                  </div>
+
+                                  <div className="mt-4 space-y-3">
+                                    {lane.tasks.length > 0 ? (
+                                      lane.tasks.map((task) => renderTaskNode(task))
+                                    ) : (
+                                      <div className="rounded-2xl border border-dashed border-[color:var(--border)] bg-[color:var(--surface)] p-5 text-sm text-muted">
+                                        No visible epics in this stage yet.
+                                      </div>
+                                    )}
+                                  </div>
+                                </div>
+                              );
+                            })}
                           </div>
                         </div>
                       </div>
 
-                      <div className="px-6 py-4">
-                        {item.tasks && item.tasks.length > 0 ? (
-                          <ul className="space-y-3">
-                            {item.tasks.map((task) => (
-                              <li key={task.id}>
-                                <Link
-                                  href={{
-                                    pathname: `/boards/${item.board.id}`,
-                                    query: { taskId: task.id },
-                                  }}
-                                  className="block rounded-lg border border-slate-200 bg-slate-50/40 p-3 transition hover:border-blue-200 hover:bg-blue-50/40 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-500 focus-visible:ring-offset-2"
-                                  title="Open task on board"
-                                >
-                                  <div className="flex flex-wrap items-center justify-between gap-2">
-                                    <div className="flex min-w-0 items-center gap-2">
-                                      <span
-                                        className={cn(
-                                          "inline-flex flex-shrink-0 items-center rounded-full border px-2 py-0.5 text-[11px] font-semibold",
-                                          statusTone(task.status),
-                                        )}
-                                      >
-                                        {statusLabel(task.status)}
-                                      </span>
-                                      <span
-                                        className={cn(
-                                          "inline-flex flex-shrink-0 items-center rounded-full border px-2 py-0.5 text-[11px] font-semibold",
-                                          priorityTone(task.priority),
-                                        )}
-                                      >
-                                        {task.priority}
-                                      </span>
-                                      <p className="truncate text-sm font-medium text-slate-900">
-                                        {task.title}
-                                      </p>
-                                    </div>
-                                    <p className="text-xs text-slate-500">
-                                      {formatTimestamp(task.updated_at)}
-                                    </p>
-                                  </div>
-                                  <div className="mt-2 flex flex-wrap items-center justify-between gap-2 text-xs text-slate-600">
-                                    <p className="truncate">
-                                      Assignee:{" "}
-                                      <span className="font-medium text-slate-900">
-                                        {task.assignee ?? "Unassigned"}
-                                      </span>
-                                    </p>
-                                    <p className="font-mono text-[11px] text-slate-400">
-                                      {task.id}
-                                    </p>
-                                  </div>
-                                </Link>
-                              </li>
-                            ))}
-                          </ul>
-                        ) : (
-                          <p className="text-sm text-slate-500">
-                            No tasks in this snapshot.
+                      <div className="rounded-3xl border border-[color:var(--border)] bg-[color:var(--surface)] p-6 shadow-sm">
+                        <div className="flex items-center gap-2">
+                          <Users2 className="h-4 w-4 text-quiet" />
+                          <p className="text-xs font-semibold uppercase tracking-[0.24em] text-quiet">
+                            Agent workload
                           </p>
-                        )}
+                        </div>
+                        <p className="mt-2 text-sm text-muted">
+                          Who is working on what, which stage they are in, and
+                          which model policy is currently attached.
+                        </p>
+                        <div className="mt-5 grid gap-4 lg:grid-cols-2">
+                          {workloadAgents.length > 0 ? (
+                            workloadAgents.map(({ agent, activeTaskCount, currentTask }) => (
+                              <div
+                                key={agent.id}
+                                className="rounded-2xl border border-[color:var(--border)] bg-[color:var(--surface-muted)] p-4"
+                              >
+                                <div className="flex items-start justify-between gap-3">
+                                  <div className="min-w-0">
+                                    <p className="truncate text-sm font-semibold text-strong">
+                                      {agent.name}
+                                    </p>
+                                    <p className="mt-1 text-xs text-muted">
+                                      {agent.status_reason ?? "No status context yet."}
+                                    </p>
+                                  </div>
+                                  <StatusPill status={agent.status ?? "offline"} />
+                                </div>
+                                <div className="mt-4 grid gap-3 text-sm text-muted">
+                                  <div className="flex items-center justify-between gap-3">
+                                    <span>Active tasks</span>
+                                    <span className="font-medium text-strong">
+                                      {activeTaskCount}
+                                    </span>
+                                  </div>
+                                  <div className="flex items-start justify-between gap-3">
+                                    <span>Current task</span>
+                                    <span className="max-w-[14rem] text-right font-medium text-strong">
+                                      {currentTask?.title ?? "No active task"}
+                                    </span>
+                                  </div>
+                                  <div className="flex items-start justify-between gap-3">
+                                    <span>Stage</span>
+                                    <span className="max-w-[14rem] text-right text-strong">
+                                      {currentTask
+                                        ? getWorkflowStageLabel(getTaskWorkflowStageKey(currentTask))
+                                        :
+                                        (agent.is_gateway_main
+                                          ? "Gateway control"
+                                          : "Unassigned")}
+                                    </span>
+                                  </div>
+                                  <div className="flex items-start justify-between gap-3">
+                                    <span>Model</span>
+                                    <span className="max-w-[14rem] text-right text-strong">
+                                      {modelBadgeLabel(agent) ?? "Default policy"}
+                                    </span>
+                                  </div>
+                                </div>
+                              </div>
+                            ))
+                          ) : (
+                            <div className="rounded-2xl border border-dashed border-[color:var(--border)] bg-[color:var(--surface-muted)] p-6 text-sm text-muted">
+                              No group agents are visible yet.
+                            </div>
+                          )}
+                        </div>
                       </div>
                     </div>
-                  ))}
+
+                    <div className="space-y-6">
+                      <div className="rounded-3xl border border-[color:var(--border)] bg-[color:var(--surface)] p-6 shadow-sm">
+                        <div className="flex items-center justify-between gap-3">
+                          <div className="flex items-center gap-2">
+                            <Sparkles className="h-4 w-4 text-quiet" />
+                            <p className="text-xs font-semibold uppercase tracking-[0.24em] text-quiet">
+                              Live activity
+                            </p>
+                          </div>
+                          <label className="inline-flex items-center gap-2 text-xs text-muted">
+                            <input
+                              type="checkbox"
+                              className="h-4 w-4 rounded border-[color:var(--border)]"
+                              checked={showSystemActivity}
+                              onChange={(event) =>
+                                setShowSystemActivity(event.target.checked)
+                              }
+                            />
+                            Show system
+                          </label>
+                        </div>
+                        <div className="mt-5">
+                          <ActivityFeed
+                            isLoading={snapshotQuery.isLoading}
+                            items={visibleActivityFeed}
+                            renderItem={(item) => {
+                              const relatedTask = item.task_id
+                                ? taskById.get(item.task_id) ?? null
+                                : null;
+                              return (
+                                <div
+                                  key={item.id}
+                                  className="rounded-2xl border border-[color:var(--border)] bg-[color:var(--surface-muted)] p-4"
+                                >
+                                  <div className="flex items-start justify-between gap-3">
+                                    <div className="min-w-0">
+                                      <p className="text-sm font-semibold text-strong">
+                                        {item.message ?? item.event_type}
+                                      </p>
+                                      <p className="mt-1 text-xs text-muted">
+                                        {(item.actor_label ?? item.actor_type ?? "System") +
+                                          " · " +
+                                          formatTimestamp(item.created_at)}
+                                      </p>
+                                    </div>
+                                    <span className="rounded-full border border-[color:var(--border)] bg-[color:var(--surface)] px-2 py-1 text-[11px] text-muted">
+                                      {item.event_type}
+                                    </span>
+                                  </div>
+                                  {relatedTask ? (
+                                    <Link
+                                      href={{
+                                        pathname: `/boards/${relatedTask.board_id}`,
+                                        query: { taskId: relatedTask.id },
+                                      }}
+                                      className="mt-3 inline-flex items-center gap-2 text-xs font-medium text-[color:var(--accent)]"
+                                    >
+                                      Open {relatedTask.title}
+                                      <ArrowUpRight className="h-3.5 w-3.5" />
+                                    </Link>
+                                  ) : null}
+                                </div>
+                              );
+                            }}
+                          />
+                        </div>
+                      </div>
+
+                      <div className="rounded-3xl border border-[color:var(--border)] bg-[color:var(--surface)] p-6 shadow-sm">
+                        <div className="flex items-center gap-2">
+                          <CalendarRange className="h-4 w-4 text-quiet" />
+                          <p className="text-xs font-semibold uppercase tracking-[0.24em] text-quiet">
+                            Agenda
+                          </p>
+                        </div>
+                        <div className="mt-5 space-y-4">
+                          {[
+                            {
+                              title: "Overdue",
+                              icon: Flame,
+                              tasks: agendaOverdue,
+                            },
+                            {
+                              title: "Due today",
+                              icon: Clock3,
+                              tasks: agendaToday,
+                            },
+                            {
+                              title: "Upcoming",
+                              icon: CalendarRange,
+                              tasks: agendaUpcoming,
+                            },
+                          ].map((bucket) => (
+                            <div
+                              key={bucket.title}
+                              className="rounded-2xl border border-[color:var(--border)] bg-[color:var(--surface-muted)] p-4"
+                            >
+                              <div className="flex items-center gap-2">
+                                <bucket.icon className="h-4 w-4 text-quiet" />
+                                <p className="text-sm font-semibold text-strong">
+                                  {bucket.title}
+                                </p>
+                              </div>
+                              <div className="mt-3 space-y-2">
+                                {bucket.tasks.length > 0 ? (
+                                  bucket.tasks.map((task) => (
+                                    <Link
+                                      key={task.id}
+                                      href={{
+                                        pathname: `/boards/${task.board_id}`,
+                                        query: { taskId: task.id },
+                                      }}
+                                      className="block rounded-xl border border-[color:var(--border)] bg-[color:var(--surface)] px-3 py-2 text-sm transition hover:border-[color:var(--accent-soft)]"
+                                    >
+                                      <p className="font-medium text-strong">
+                                        {task.title}
+                                      </p>
+                                      <p className="mt-1 text-xs text-muted">
+                                        {getWorkflowStageLabel(
+                                          getTaskWorkflowStageKey(task),
+                                        )}{" "}
+                                        · {dueLabel(task.due_at)}
+                                      </p>
+                                    </Link>
+                                  ))
+                                ) : (
+                                  <p className="text-sm text-muted">
+                                    Nothing queued here.
+                                  </p>
+                                )}
+                              </div>
+                            </div>
+                          ))}
+                        </div>
+                      </div>
+
+                      <div className="rounded-3xl border border-[color:var(--border)] bg-[color:var(--surface)] p-6 shadow-sm">
+                        <div className="flex items-center justify-between gap-3">
+                          <div className="flex items-center gap-2">
+                            <NotebookText className="h-4 w-4 text-quiet" />
+                            <p className="text-xs font-semibold uppercase tracking-[0.24em] text-quiet">
+                              Decisions and context
+                            </p>
+                          </div>
+                          <Button
+                            variant="ghost"
+                            size="sm"
+                            onClick={() => {
+                              setIsChatOpen(false);
+                              setChatError(null);
+                              setNoteSendError(null);
+                              setIsNotesOpen(true);
+                            }}
+                          >
+                            Open notes
+                          </Button>
+                        </div>
+                        <div className="mt-5 space-y-3">
+                          {memoryPreview.length > 0 ? (
+                            memoryPreview.map((item) => (
+                              <div
+                                key={item.id}
+                                className="rounded-2xl border border-[color:var(--border)] bg-[color:var(--surface-muted)] p-4"
+                              >
+                                <div className="flex items-start justify-between gap-3">
+                                  <p className="text-xs uppercase tracking-[0.2em] text-quiet">
+                                    {item.source ?? "Memory"}
+                                  </p>
+                                  <span className="text-xs text-muted">
+                                    {formatTimestamp(item.created_at)}
+                                  </span>
+                                </div>
+                                <div className="mt-2 text-sm text-strong">
+                                  <Markdown content={item.content} variant="basic" />
+                                </div>
+                              </div>
+                            ))
+                          ) : (
+                            <div className="rounded-2xl border border-dashed border-[color:var(--border)] bg-[color:var(--surface-muted)] p-5 text-sm text-muted">
+                              No shared notes yet. Add a durable note to capture
+                              decisions, context, or rollout rules.
+                            </div>
+                          )}
+                        </div>
+                      </div>
+
+                      <div className="rounded-3xl border border-[color:var(--border)] bg-[color:var(--surface)] p-6 shadow-sm">
+                        <div className="flex items-center gap-2">
+                          <AlertTriangle className="h-4 w-4 text-quiet" />
+                          <p className="text-xs font-semibold uppercase tracking-[0.24em] text-quiet">
+                            Attention center
+                          </p>
+                        </div>
+                        <div className="mt-4 rounded-2xl border border-[color:var(--border)] bg-[color:var(--surface-muted)] p-4">
+                          <div className="flex items-center justify-between gap-3">
+                            <div>
+                              <p className="text-sm font-semibold text-strong">
+                                Pending approvals
+                              </p>
+                              <p className="mt-1 text-sm text-muted">
+                                {cockpitSummary.pendingApprovalsCount > 0
+                                  ? `${cockpitSummary.pendingApprovalsCount} decisions are waiting for review.`
+                                  : "No approvals are waiting right now."}
+                              </p>
+                            </div>
+                            <Link
+                              href="/approvals"
+                              className={buttonVariants({ size: "sm", variant: "outline" })}
+                            >
+                              Review
+                            </Link>
+                          </div>
+                        </div>
+                        <div className="mt-4 space-y-3">
+                          {blockedCallouts.length > 0 ? (
+                            blockedCallouts.map((task) => (
+                              <Link
+                                key={task.id}
+                                href={{
+                                  pathname: `/boards/${task.board_id}`,
+                                  query: { taskId: task.id },
+                                }}
+                                className="block rounded-2xl border border-amber-200 bg-amber-50/80 p-4 text-sm text-amber-950 transition hover:border-amber-300"
+                              >
+                                <p className="font-semibold">{task.title}</p>
+                                <p className="mt-1 text-xs text-amber-900/80">
+                                  {getWorkflowStageLabel(
+                                    getTaskWorkflowStageKey(task),
+                                  )}{" "}
+                                  · blocked by {(task.blocked_by_task_ids ?? []).length}
+                                  {task.due_at ? ` · ${dueLabel(task.due_at)}` : ""}
+                                </p>
+                              </Link>
+                            ))
+                          ) : (
+                            <div className="rounded-2xl border border-dashed border-[color:var(--border)] bg-[color:var(--surface-muted)] p-5 text-sm text-muted">
+                              No blocked callouts at the moment.
+                            </div>
+                          )}
+                        </div>
+                      </div>
+                    </div>
+                  </section>
                 </div>
               )}
             </div>
           </div>
         </main>
       </SignedIn>
+      <Dialog
+        open={isEpicDialogOpen}
+        onOpenChange={(nextOpen) => {
+          setIsEpicDialogOpen(nextOpen);
+          if (!nextOpen) {
+            resetEpicForm();
+          }
+        }}
+      >
+        <DialogContent aria-label="Create epic">
+          <DialogHeader>
+            <DialogTitle>New Epic</DialogTitle>
+            <DialogDescription>
+              Add a top-level initiative to the backlog. Lead can decompose it
+              into implementation, review, and security work from there.
+            </DialogDescription>
+          </DialogHeader>
+          <div className="space-y-4">
+            <div className="space-y-2">
+              <label className="text-sm font-medium text-strong">Title</label>
+              <Input
+                value={epicTitle}
+                onChange={(event) => setEpicTitle(event.target.value)}
+                placeholder="e.g. Ship customer-ready billing portal"
+                disabled={!canWriteGroup || isEpicCreating}
+              />
+            </div>
+            <div className="space-y-2">
+              <label className="text-sm font-medium text-strong">
+                Brief
+              </label>
+              <Textarea
+                value={epicDescription}
+                onChange={(event) => setEpicDescription(event.target.value)}
+                placeholder="Short operator brief for Lead intake"
+                className="min-h-[120px]"
+                disabled={!canWriteGroup || isEpicCreating}
+              />
+            </div>
+            <div className="grid gap-4 md:grid-cols-2">
+              <div className="space-y-2">
+                <label className="text-sm font-medium text-strong">
+                  Priority
+                </label>
+                <Select
+                  value={epicPriority}
+                  onValueChange={setEpicPriority}
+                  disabled={!canWriteGroup || isEpicCreating}
+                >
+                  <SelectTrigger>
+                    <SelectValue placeholder="Select priority" />
+                  </SelectTrigger>
+                  <SelectContent>
+                    {EPIC_PRIORITIES.map((item) => (
+                      <SelectItem key={item.value} value={item.value}>
+                        {item.label}
+                      </SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+              </div>
+              <div className="space-y-2">
+                <label className="text-sm font-medium text-strong">
+                  Due date
+                </label>
+                <Input
+                  type="date"
+                  value={epicDueDate}
+                  onChange={(event) => setEpicDueDate(event.target.value)}
+                  disabled={!canWriteGroup || isEpicCreating}
+                />
+              </div>
+            </div>
+            <div className="rounded-2xl border border-[color:var(--border)] bg-[color:var(--surface-muted)] p-4 text-xs text-muted">
+              New epics land in{" "}
+              <span className="font-semibold text-strong">
+                {workflowBacklogBoard
+                  ? getWorkflowStageDefinition("backlog").label
+                  : "Backlog"}
+              </span>{" "}
+              and stay top-level until Lead creates child tasks.
+            </div>
+            {epicCreateError ? (
+              <div className="rounded-lg border border-rose-200 bg-rose-50 p-3 text-xs text-rose-700">
+                {epicCreateError}
+              </div>
+            ) : null}
+          </div>
+          <DialogFooter>
+            <Button
+              variant="outline"
+              onClick={() => setIsEpicDialogOpen(false)}
+              disabled={isEpicCreating}
+            >
+              Cancel
+            </Button>
+            <Button
+              onClick={handleCreateEpic}
+              disabled={!canWriteGroup || isEpicCreating || !workflowBacklogBoard?.board.id}
+            >
+              {isEpicCreating ? "Creating…" : "Create Epic"}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
       {isChatOpen || isNotesOpen ? (
         <div
           className="fixed inset-0 z-40 bg-slate-900/20"

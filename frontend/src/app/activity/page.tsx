@@ -42,6 +42,7 @@ import {
   resolveMemberDisplayName,
 } from "@/lib/display-name";
 import { apiDatetimeToMs, parseApiDatetime } from "@/lib/datetime";
+import { isSystemActivityEvent } from "@/lib/operator-signal-filters";
 import { cn } from "@/lib/utils";
 import { usePageActive } from "@/hooks/usePageActive";
 
@@ -425,6 +426,7 @@ export default function ActivityPage() {
   const [feedError, setFeedError] = useState<string | null>(null);
   const [feedItems, setFeedItems] = useState<FeedItem[]>([]);
   const [boards, setBoards] = useState<BoardRead[]>([]);
+  const [showSystemActivity, setShowSystemActivity] = useState(false);
 
   const feedItemsRef = useRef<FeedItem[]>([]);
   const seenIdsRef = useRef<Set<string>>(new Set());
@@ -1442,12 +1444,21 @@ export default function ActivityPage() {
   ]);
 
   const orderedFeed = useMemo(() => {
-    return [...feedItems].sort((a, b) => {
+    const visibleFeed = showSystemActivity
+      ? feedItems
+      : feedItems.filter(
+          (item) =>
+            !isSystemActivityEvent({
+              event_type: item.event_type,
+              message: item.message,
+            }),
+        );
+    return [...visibleFeed].sort((a, b) => {
       const aTime = apiDatetimeToMs(a.created_at) ?? 0;
       const bTime = apiDatetimeToMs(b.created_at) ?? 0;
       return bTime - aTime;
     });
-  }, [feedItems]);
+  }, [feedItems, showSystemActivity]);
 
   const selectedFeedItemId = useMemo(() => {
     if (!selectedEventId) return null;
@@ -1522,7 +1533,23 @@ export default function ActivityPage() {
                         across all boards.
                       </p>
                     </div>
+                    <label className="flex items-center gap-2 rounded-full border border-[color:var(--border)] bg-[color:var(--surface)] px-3 py-2 text-sm text-muted shadow-sm">
+                      <input
+                        type="checkbox"
+                        className="h-4 w-4 accent-[color:var(--accent)]"
+                        checked={showSystemActivity}
+                        onChange={(event) =>
+                          setShowSystemActivity(event.target.checked)
+                        }
+                      />
+                      Show system
+                    </label>
                   </div>
+                  <p className="mt-3 text-xs text-slate-500">
+                    {showSystemActivity
+                      ? "System wake and heartbeat noise is included."
+                      : "System wake and heartbeat noise is hidden by default."}
+                  </p>
                 </div>
               </div>
 

@@ -49,10 +49,13 @@ from app.services.activity_log import record_activity
 from app.services.openclaw.constants import (
     _TOOLS_KV_RE,
     DEFAULT_HEARTBEAT_CONFIG,
-    OFFLINE_AFTER,
 )
 from app.services.openclaw.db_agent_state import (
     mint_agent_token,
+)
+from app.services.openclaw.presence_policy import (
+    heartbeat_is_standby,
+    heartbeat_offline_after,
 )
 from app.services.openclaw.db_service import OpenClawDBService
 from app.services.openclaw.gateway_resolver import (
@@ -78,6 +81,7 @@ from app.services.openclaw.provisioning import (
     OpenClawGatewayControlPlane,
     OpenClawGatewayProvisioner,
 )
+from app.services.openclaw.runtime_control import GatewayRuntimeControlService
 from app.services.openclaw.shared import GatewayAgentIdentity
 from app.services.organizations import (
     OrganizationContext,
@@ -123,6 +127,10 @@ class LeadAgentOptions:
 
     agent_name: str | None = None
     identity_profile: dict[str, str] | None = None
+    model_profile: str | None = None
+    model_primary: str | None = None
+    model_fallback_policy: str = "profile"
+    model_fallbacks: list[str] | None = None
     action: str = "provision"
 
 
@@ -150,6 +158,25 @@ class OpenClawProvisioningService(OpenClawDBService):
     @staticmethod
     def lead_agent_name(_: Board) -> str:
         return "Lead Agent"
+
+    @staticmethod
+    def _merged_lead_identity_profile(
+        identity_profile: dict[str, str] | None,
+    ) -> dict[str, Any]:
+        merged_identity_profile: dict[str, Any] = {
+            "role": "Board Lead",
+            "communication_style": "direct, concise, practical",
+            "emoji": ":gear:",
+        }
+        if identity_profile:
+            merged_identity_profile.update(
+                {
+                    key: value.strip()
+                    for key, value in identity_profile.items()
+                    if value.strip()
+                },
+            )
+        return merged_identity_profile
 
     async def ensure_board_lead_agent(
         self,
@@ -187,19 +214,9 @@ class OpenClawProvisioningService(OpenClawDBService):
                 await self.session.refresh(existing)
             return existing, False
 
-        merged_identity_profile: dict[str, Any] = {
-            "role": "Board Lead",
-            "communication_style": "direct, concise, practical",
-            "emoji": ":gear:",
-        }
-        if config_options.identity_profile:
-            merged_identity_profile.update(
-                {
-                    key: value.strip()
-                    for key, value in config_options.identity_profile.items()
-                    if value.strip()
-                },
-            )
+        merged_identity_profile = self._merged_lead_identity_profile(
+            config_options.identity_profile,
+        )
 
         agent = Agent(
             name=config_options.agent_name or self.lead_agent_name(board),
@@ -208,6 +225,10 @@ class OpenClawProvisioningService(OpenClawDBService):
             is_board_lead=True,
             heartbeat_config=DEFAULT_HEARTBEAT_CONFIG.copy(),
             identity_profile=merged_identity_profile,
+            model_profile=config_options.model_profile,
+            model_primary=config_options.model_primary,
+            model_fallback_policy=config_options.model_fallback_policy,
+            model_fallbacks=config_options.model_fallbacks,
             openclaw_session_id=self.lead_session_key(board),
         )
         raw_token = mint_agent_token(agent)
@@ -231,6 +252,82 @@ class OpenClawProvisioningService(OpenClawDBService):
             raise_gateway_errors=True,
         )
         return agent, True
+
+    async def ensure_board_lead_defaults(
+        self,
+        *,
+        request: LeadAgentRequest,
+    ) -> Agent:
+        """Ensure a board lead exists and normalize it to the admin defaults."""
+        agent, created = await self.ensure_board_lead_agent(request=request)
+
+        desired_name = request.options.agent_name or self.lead_agent_name(request.board)
+        desired_identity_profile = self._merged_lead_identity_profile(
+            request.options.identity_profile,
+        )
+        desired_session_key = self.lead_session_key(request.board)
+        desired_model_profile = request.options.model_profile
+        desired_model_primary = request.options.model_primary
+        desired_model_fallback_policy = request.options.model_fallback_policy
+        desired_model_fallbacks = request.options.model_fallbacks
+
+        changed = False
+        if agent.name != desired_name:
+            agent.name = desired_name
+            changed = True
+        if agent.board_id != request.board.id:
+            agent.board_id = request.board.id
+            changed = True
+        if agent.gateway_id != request.gateway.id:
+            agent.gateway_id = request.gateway.id
+            changed = True
+        if not agent.is_board_lead:
+            agent.is_board_lead = True
+            changed = True
+        if agent.openclaw_session_id != desired_session_key:
+            agent.openclaw_session_id = desired_session_key
+            changed = True
+        if agent.identity_profile != desired_identity_profile:
+            agent.identity_profile = desired_identity_profile
+            changed = True
+        if agent.model_profile != desired_model_profile:
+            agent.model_profile = desired_model_profile
+            changed = True
+        if agent.model_primary != desired_model_primary:
+            agent.model_primary = desired_model_primary
+            changed = True
+        if agent.model_fallback_policy != desired_model_fallback_policy:
+            agent.model_fallback_policy = desired_model_fallback_policy
+            changed = True
+        if agent.model_fallbacks != desired_model_fallbacks:
+            agent.model_fallbacks = desired_model_fallbacks
+            changed = True
+
+        if not changed:
+            return agent
+
+        agent.updated_at = utcnow()
+        self.session.add(agent)
+        await self.session.commit()
+        await self.session.refresh(agent)
+
+        if created:
+            return agent
+
+        return await AgentLifecycleOrchestrator(self.session).run_lifecycle(
+            gateway=request.gateway,
+            agent_id=agent.id,
+            board=request.board,
+            user=request.user,
+            action="update",
+            force_bootstrap=False,
+            reset_session=False,
+            wake=True,
+            deliver_wakeup=True,
+            wakeup_verb=None,
+            clear_confirm_token=False,
+            raise_gateway_errors=True,
+        )
 
     async def sync_gateway_templates(
         self,
@@ -840,13 +937,16 @@ class AgentLifecycleService(OpenClawDBService):
 
     @staticmethod
     def is_gateway_main(agent: Agent) -> bool:
-        return agent.board_id is None
+        return agent.board_id is None and agent.purpose != "product-planner"
 
     @classmethod
     def to_agent_read(cls, agent: Agent) -> AgentRead:
         model = AgentRead.model_validate(agent, from_attributes=True)
         return model.model_copy(
-            update={"is_gateway_main": cls.is_gateway_main(agent)},
+            update={
+                "is_gateway_main": cls.is_gateway_main(agent),
+                "status_reason": cls.status_reason(agent),
+            },
         )
 
     @staticmethod
@@ -869,11 +969,49 @@ class AgentLifecycleService(OpenClawDBService):
         now = utcnow()
         if agent.status in {"deleting", "updating"}:
             return agent
+        heartbeat = agent.heartbeat_config or {}
+        if heartbeat_is_standby(heartbeat):
+            agent.status = "standby"
+            return agent
         if agent.last_seen_at is None:
             agent.status = "provisioning"
-        elif now - agent.last_seen_at > OFFLINE_AFTER:
+            return agent
+        offline_after = heartbeat_offline_after(heartbeat)
+        if offline_after is not None and now - agent.last_seen_at > offline_after:
             agent.status = "offline"
+        else:
+            agent.status = "online"
         return agent
+
+    @staticmethod
+    def status_reason(agent: Agent) -> str | None:
+        heartbeat = agent.heartbeat_config or {}
+        if agent.status == "provisioning":
+            return "Standby by default. The agent will check in after relevant work wakes it."
+        if agent.status == "standby":
+            return "Standby by default; the agent is healthy and will wake only for real work."
+        if agent.status == "offline":
+            offline_after = heartbeat_offline_after(heartbeat)
+            if offline_after is None:
+                return "Expected heartbeat has not been received within the timeout window."
+            minutes = max(int(offline_after.total_seconds() // 60), 1)
+            return (
+                "Missed the expected active heartbeat window "
+                f"({minutes}m timeout including grace)."
+            )
+        if agent.status == "online":
+            every = str(heartbeat.get("every") or "").strip().lower()
+            if every:
+                return (
+                    "Auto-wake is active; recent heartbeat received "
+                    f"while work is in progress ({every} cadence)."
+                )
+            return "Recent heartbeat received."
+        if agent.status == "updating":
+            return "Lifecycle update is in progress."
+        if agent.status == "deleting":
+            return "Lifecycle deletion is in progress."
+        return None
 
     @classmethod
     def serialize_agent(cls, agent: Agent) -> dict[str, object]:
@@ -1451,6 +1589,7 @@ class AgentLifecycleService(OpenClawDBService):
         *,
         board_id: UUID | None,
         gateway_id: UUID | None,
+        include_hidden: bool,
         ctx: OrganizationContext,
     ) -> LimitOffsetPage[AgentRead]:
         board_ids = await list_accessible_board_ids(self.session, member=ctx.member, write=False)
@@ -1490,6 +1629,8 @@ class AgentLifecycleService(OpenClawDBService):
                     (col(Agent.gateway_id) == gateway_id) & (col(Agent.board_id).is_(None)),
                 ),
             )
+        if not include_hidden:
+            statement = statement.where(col(Agent.hidden).is_(False))
         statement = statement.order_by(col(Agent.created_at).desc())
 
         def _transform(items: Sequence[Any]) -> Sequence[Any]:
@@ -1563,6 +1704,11 @@ class AgentLifecycleService(OpenClawDBService):
         gateway, _client_config = await self.require_gateway(board)
         data = payload.model_dump()
         data["gateway_id"] = gateway.id
+        candidate_agent = Agent.model_validate(data)
+        await GatewayRuntimeControlService(self.session).assert_model_policies_supported(
+            gateway=gateway,
+            agents=[candidate_agent],
+        )
         requested_name = (data.get("name") or "").strip()
         await self.ensure_unique_agent_name(
             board=board,
@@ -1577,6 +1723,11 @@ class AgentLifecycleService(OpenClawDBService):
             auth_token=raw_token,
             user=actor.user if actor.actor_type == "user" else None,
             force_bootstrap=False,
+        )
+        await GatewayRuntimeControlService(self.session).sync_model_policies(
+            gateway=gateway,
+            agents=[agent],
+            auth=None,
         )
         self.logger.info("agent.create.success agent_id=%s board_id=%s", agent.id, board.id)
         return self.to_agent_read(self.with_computed_status(agent))
@@ -1630,6 +1781,10 @@ class AgentLifecycleService(OpenClawDBService):
             main_gateway=main_gateway,
             gateway_for_main=gateway_for_main,
         )
+        await GatewayRuntimeControlService(self.session).assert_model_policies_supported(
+            gateway=target.gateway,
+            agents=[agent],
+        )
         raw_token = self.mark_agent_update_pending(agent)
         self.session.add(agent)
         await self.session.commit()
@@ -1643,6 +1798,11 @@ class AgentLifecycleService(OpenClawDBService):
         await self.provision_updated_agent(
             agent=agent,
             request=provision_request,
+        )
+        await GatewayRuntimeControlService(self.session).sync_model_policies(
+            gateway=target.gateway,
+            agents=[agent],
+            auth=None,
         )
         self.logger.info("agent.update.success agent_id=%s", agent.id)
         return self.to_agent_read(self.with_computed_status(agent))

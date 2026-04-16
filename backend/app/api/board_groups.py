@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import re
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING
 from uuid import UUID, uuid4
 
 from fastapi import APIRouter, Depends, HTTPException, status
@@ -20,6 +20,7 @@ from app.models.board_group_memory import BoardGroupMemory
 from app.models.board_groups import BoardGroup
 from app.models.boards import Board
 from app.models.gateways import Gateway
+from app.models.products import Product
 from app.schemas.board_group_heartbeat import (
     BoardGroupHeartbeatApply,
     BoardGroupHeartbeatApplyResult,
@@ -29,7 +30,7 @@ from app.schemas.common import OkResponse
 from app.schemas.pagination import DefaultLimitOffsetPage
 from app.schemas.view_models import BoardGroupSnapshot
 from app.services.board_group_snapshot import build_group_snapshot
-from app.services.openclaw.constants import DEFAULT_HEARTBEAT_CONFIG
+from app.services.openclaw.presence_policy import merge_heartbeat_config
 from app.services.openclaw.gateway_rpc import OpenClawGatewayError
 from app.services.openclaw.provisioning import OpenClawGatewayProvisioner
 from app.services.organizations import (
@@ -125,6 +126,14 @@ async def create_board_group(
     if not (data.get("slug") or "").strip():
         data["slug"] = _slugify(data.get("name") or "")
     data["organization_id"] = ctx.organization.id
+    product_id = data.get("product_id")
+    if product_id is not None:
+        product = await Product.objects.by_id(product_id).first(session)
+        if product is None or product.organization_id != ctx.organization.id:
+            raise HTTPException(
+                status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
+                detail="product_id is invalid",
+            )
     return await crud.create(session, BoardGroup, **data)
 
 
@@ -161,18 +170,19 @@ async def get_board_group_snapshot(
     )
     if per_board_task_limit < 0:
         raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_CONTENT)
+    allowed_board_ids: set[UUID] | None = None
+    if not member_all_boards_read(ctx.member):
+        allowed_board_ids = set(
+            await list_accessible_board_ids(session, member=ctx.member, write=False),
+        )
     snapshot = await build_group_snapshot(
         session,
         group=group,
         exclude_board_id=None,
+        allowed_board_ids=allowed_board_ids,
         include_done=include_done,
         per_board_task_limit=per_board_task_limit,
     )
-    if not member_all_boards_read(ctx.member) and snapshot.boards:
-        allowed_ids = set(
-            await list_accessible_board_ids(session, member=ctx.member, write=False),
-        )
-        snapshot.boards = [item for item in snapshot.boards if item.board.id in allowed_ids]
     return snapshot
 
 
@@ -230,13 +240,14 @@ def _update_agent_heartbeat(
     agent: Agent,
     payload: BoardGroupHeartbeatApply,
 ) -> None:
-    raw = agent.heartbeat_config
-    heartbeat: dict[str, Any] = DEFAULT_HEARTBEAT_CONFIG.copy()
-    if isinstance(raw, dict):
-        heartbeat.update(raw)
-    heartbeat["every"] = payload.every
-    heartbeat["target"] = DEFAULT_HEARTBEAT_CONFIG.get("target", "last")
-    agent.heartbeat_config = heartbeat
+    raw = agent.heartbeat_config if isinstance(agent.heartbeat_config, dict) else None
+    active_every = payload.every if payload.every.strip().lower() not in {"0", "0m", "0s", "0h", "0d"} else None
+    agent.heartbeat_config = merge_heartbeat_config(
+        raw,
+        every=payload.every,
+        active_every=active_every,
+        auto_wake=True,
+    )
     agent.updated_at = utcnow()
 
 
@@ -340,6 +351,13 @@ async def update_board_group(
         member=ctx.member,
         write=True,
     )
+    if "product_id" in payload.model_fields_set and payload.product_id is not None:
+        product = await Product.objects.by_id(payload.product_id).first(session)
+        if product is None or product.organization_id != ctx.organization.id:
+            raise HTTPException(
+                status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
+                detail="product_id is invalid",
+            )
     updates = payload.model_dump(exclude_unset=True)
     if "slug" in updates and updates["slug"] is not None and not updates["slug"].strip():
         updates["slug"] = _slugify(updates.get("name") or group.name)

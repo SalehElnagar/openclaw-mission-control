@@ -3,7 +3,7 @@
 // NOTE: We intentionally keep this file very small and dependency-free.
 // It provides CI/secretless-build safe fallbacks for Clerk hooks/components.
 
-import type { ReactNode, ComponentProps } from "react";
+import { useContext, type ReactNode, type ComponentProps } from "react";
 
 import {
   ClerkProvider,
@@ -17,8 +17,13 @@ import {
 
 import { isLikelyValidClerkPublishableKey } from "@/auth/clerkKey";
 import { getLocalAuthToken, isLocalAuthMode } from "@/auth/localAuth";
+import { AuthRuntimeContext } from "@/components/providers/AuthProvider";
 
-function hasLocalAuthToken(): boolean {
+function useLocalAuthState(): boolean {
+  const runtime = useContext(AuthRuntimeContext);
+  if (runtime.localMode) {
+    return runtime.isAuthenticated;
+  }
   return Boolean(getLocalAuthToken());
 }
 
@@ -32,16 +37,18 @@ export function isClerkEnabled(): boolean {
 }
 
 export function SignedIn(props: { children: ReactNode }) {
+  const hasToken = useLocalAuthState();
   if (isLocalAuthMode()) {
-    return hasLocalAuthToken() ? <>{props.children}</> : null;
+    return hasToken ? <>{props.children}</> : null;
   }
   if (!isClerkEnabled()) return null;
   return <ClerkSignedIn>{props.children}</ClerkSignedIn>;
 }
 
 export function SignedOut(props: { children: ReactNode }) {
+  const hasToken = useLocalAuthState();
   if (isLocalAuthMode()) {
-    return hasLocalAuthToken() ? null : <>{props.children}</>;
+    return hasToken ? null : <>{props.children}</>;
   }
   if (!isClerkEnabled()) return <>{props.children}</>;
   return <ClerkSignedOut>{props.children}</ClerkSignedOut>;
@@ -61,10 +68,11 @@ export function SignOutButton(
 }
 
 export function useUser() {
+  const hasToken = useLocalAuthState();
   if (isLocalAuthMode()) {
     return {
       isLoaded: true,
-      isSignedIn: hasLocalAuthToken(),
+      isSignedIn: hasToken,
       user: null,
     } as const;
   }
@@ -75,11 +83,12 @@ export function useUser() {
 }
 
 export function useAuth() {
+  const hasToken = useLocalAuthState();
   if (isLocalAuthMode()) {
     const token = getLocalAuthToken();
     return {
       isLoaded: true,
-      isSignedIn: Boolean(token),
+      isSignedIn: hasToken,
       userId: token ? "local-user" : null,
       sessionId: token ? "local-session" : null,
       getToken: async () => token,

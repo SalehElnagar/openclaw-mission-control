@@ -138,6 +138,37 @@ export default function AgentDetailPage() {
 
   const isDeleting = deleteMutation.isPending;
   const agentStatus = agent?.status ?? "unknown";
+  const modelPolicy = useMemo(() => {
+    const profile = agent?.identity_profile;
+    const record =
+      profile && typeof profile === "object"
+        ? (profile as Record<string, unknown>)
+        : null;
+    if (!agent) {
+      return {
+        modelProfile: "—",
+        primaryModel: "—",
+        fallbackModels: "—",
+        fallbackPolicy: "—",
+        maxTokensPerRun: "—",
+      };
+    }
+    const fallbackList = Array.isArray(agent.model_fallbacks)
+      ? agent.model_fallbacks
+          .filter((value): value is string => typeof value === "string")
+          .join(", ")
+      : "";
+    return {
+      modelProfile: agent.model_profile ?? "—",
+      primaryModel: agent.model_primary ?? "—",
+      fallbackModels: fallbackList || "—",
+      fallbackPolicy: agent.model_fallback_policy ?? "—",
+      maxTokensPerRun:
+        typeof record?.max_tokens_per_run === "number"
+          ? record.max_tokens_per_run.toLocaleString("en-US")
+          : "—",
+    };
+  }, [agent]);
 
   const handleDelete = () => {
     if (!agentId || !isSignedIn) return;
@@ -226,6 +257,11 @@ export default function AgentDetailPage() {
                         <p className="mt-1 text-lg font-semibold text-strong">
                           {agent.name}
                         </p>
+                        {agent.status_reason ? (
+                          <p className="mt-1 text-sm text-muted">
+                            {agent.status_reason}
+                          </p>
+                        ) : null}
                       </div>
                       <StatusPill status={agentStatus} />
                     </div>
@@ -314,6 +350,54 @@ export default function AgentDetailPage() {
                       <div className="flex items-center justify-between">
                         <span>Status</span>
                         <span className="text-strong">{agentStatus}</span>
+                      </div>
+                      {agent.status_reason ? (
+                        <div className="flex items-start justify-between gap-4">
+                          <span>Status reason</span>
+                          <span className="max-w-[18rem] text-right text-strong">
+                            {agent.status_reason}
+                          </span>
+                        </div>
+                      ) : null}
+                    </div>
+                  </div>
+
+                  <div className="rounded-2xl border border-[color:var(--border)] bg-[color:var(--surface)] p-5">
+                    <p className="text-xs font-semibold uppercase tracking-[0.2em] text-quiet">
+                      Model policy
+                    </p>
+                    <div className="mt-4 grid gap-3 text-sm text-muted">
+                      <div className="flex items-center justify-between gap-4">
+                        <span>Profile</span>
+                        <span className="font-medium text-strong">
+                          {modelPolicy.modelProfile}
+                        </span>
+                      </div>
+                      <div className="flex items-center justify-between gap-4">
+                        <span>Primary model</span>
+                        <span className="font-medium text-strong">
+                          {modelPolicy.primaryModel}
+                        </span>
+                      </div>
+                      <div className="flex items-center justify-between gap-4">
+                        <span>Fallback policy</span>
+                        <span className="font-medium text-strong">
+                          {modelPolicy.fallbackPolicy}
+                        </span>
+                      </div>
+                      <div className="flex items-center justify-between gap-4">
+                        <span>Max tokens/run</span>
+                        <span className="font-medium text-strong">
+                          {modelPolicy.maxTokensPerRun}
+                        </span>
+                      </div>
+                      <div>
+                        <p className="text-xs uppercase tracking-[0.2em] text-quiet">
+                          Fallback models
+                        </p>
+                        <p className="mt-1 text-sm text-strong">
+                          {modelPolicy.fallbackModels}
+                        </p>
                       </div>
                     </div>
                   </div>

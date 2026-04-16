@@ -10,6 +10,7 @@ import {
   Bot,
   Boxes,
   ChevronDown,
+  FileText,
   LayoutDashboard,
   LogOut,
   Plus,
@@ -17,6 +18,7 @@ import {
   Settings,
   Store,
   Trello,
+  Users,
 } from "lucide-react";
 
 import {
@@ -155,6 +157,9 @@ export function UserMenu({
             [
               { href: "/dashboard", label: "Dashboard", icon: LayoutDashboard },
               { href: "/activity", label: "Activity", icon: Activity },
+              { href: "/products", label: "Products", icon: Bot },
+              { href: "/docs", label: "Docs", icon: FileText },
+              { href: "/team", label: "Team", icon: Users },
               { href: "/agents", label: "Agents", icon: Bot },
               { href: "/gateways", label: "Gateways", icon: Server },
               {

@@ -28,6 +28,7 @@ class TaskBase(SQLModel):
     status: TaskStatus = "inbox"
     priority: str = "medium"
     due_at: datetime | None = None
+    parent_task_id: UUID | None = None
     assigned_agent_id: UUID | None = None
     depends_on_task_ids: list[UUID] = Field(default_factory=list)
     tag_ids: list[UUID] = Field(default_factory=list)
@@ -48,6 +49,7 @@ class TaskUpdate(SQLModel):
     status: TaskStatus | None = None
     priority: str | None = None
     due_at: datetime | None = None
+    parent_task_id: UUID | None = None
     assigned_agent_id: UUID | None = None
     depends_on_task_ids: list[UUID] | None = None
     tag_ids: list[UUID] | None = None
@@ -81,6 +83,7 @@ class TaskRead(TaskBase):
     in_progress_at: datetime | None
     created_at: datetime
     updated_at: datetime
+    child_count: int = 0
     blocked_by_task_ids: list[UUID] = Field(default_factory=list)
     is_blocked: bool = False
     tags: list[TagRef] = Field(default_factory=list)

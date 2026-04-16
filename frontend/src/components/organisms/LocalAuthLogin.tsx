@@ -50,6 +50,11 @@ export function LocalAuthLogin({ onAuthenticated }: LocalAuthLoginProps) {
   const [token, setToken] = useState("");
   const [error, setError] = useState<string | null>(null);
   const [isValidating, setIsValidating] = useState(false);
+  const [sessionExpired] = useState(() => {
+    if (typeof window === "undefined") return false;
+    const params = new URLSearchParams(window.location.search);
+    return params.get("reason") === "session-expired";
+  });
 
   const handleSubmit = async (event: React.FormEvent<HTMLFormElement>) => {
     event.preventDefault();
@@ -106,6 +111,11 @@ export function LocalAuthLogin({ onAuthenticated }: LocalAuthLoginProps) {
         </CardHeader>
         <CardContent className="pt-5">
           <form onSubmit={handleSubmit} className="space-y-4">
+            {sessionExpired ? (
+              <p className="rounded-lg border border-amber-300/60 bg-amber-50 px-3 py-2 text-sm text-amber-800">
+                Your saved local token is no longer valid for this backend. Paste the current token to continue.
+              </p>
+            ) : null}
             <div className="space-y-2">
               <label
                 htmlFor="local-auth-token"

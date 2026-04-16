@@ -14,6 +14,7 @@ from sqlmodel.ext.asyncio.session import AsyncSession
 from app.db import crud
 from app.models.task_dependencies import TaskDependency
 from app.models.tasks import Task
+from app.services.task_scope import board_scope_board_ids
 
 DONE_STATUS: Final[str] = "done"
 _RUNTIME_TYPE_REFERENCES = (UUID, AsyncSession, Mapping, Sequence)
@@ -37,13 +38,12 @@ async def dependency_ids_by_task_id(
     board_id: UUID,
     task_ids: Sequence[UUID],
 ) -> dict[UUID, list[UUID]]:
-    """Return dependency ids keyed by task id for tasks on a board."""
+    """Return dependency ids keyed by task id for tasks in the requested set."""
     if not task_ids:
         return {}
     rows = list(
         await session.exec(
             select(col(TaskDependency.task_id), col(TaskDependency.depends_on_task_id))
-            .where(col(TaskDependency.board_id) == board_id)
             .where(col(TaskDependency.task_id).in_(task_ids))
             .order_by(col(TaskDependency.created_at).asc()),
         ),
@@ -61,12 +61,29 @@ async def dependency_status_by_id(
     dependency_ids: Sequence[UUID],
 ) -> dict[UUID, str]:
     """Return dependency status values keyed by dependency task id."""
+    scope_board_ids = await board_scope_board_ids(session, board_id=board_id)
+    return await dependency_status_by_id_for_boards(
+        session,
+        board_ids=scope_board_ids,
+        dependency_ids=dependency_ids,
+    )
+
+
+async def dependency_status_by_id_for_boards(
+    session: AsyncSession,
+    *,
+    board_ids: Sequence[UUID],
+    dependency_ids: Sequence[UUID],
+) -> dict[UUID, str]:
+    """Return dependency status values keyed by dependency task id for a board scope."""
     if not dependency_ids:
+        return {}
+    if not board_ids:
         return {}
     rows = list(
         await session.exec(
             select(col(Task.id), col(Task.status))
-            .where(col(Task.board_id) == board_id)
+            .where(col(Task.board_id).in_(board_ids))
             .where(col(Task.id).in_(dependency_ids)),
         ),
     )
@@ -146,11 +163,13 @@ async def validate_dependency_update(
     if not normalized:
         return []
 
+    scope_board_ids = await board_scope_board_ids(session, board_id=board_id)
+
     # Ensure all dependency tasks exist on this board.
     existing_ids = set(
         await session.exec(
             select(col(Task.id))
-            .where(col(Task.board_id) == board_id)
+            .where(col(Task.board_id).in_(scope_board_ids))
             .where(col(Task.id).in_(normalized)),
         ),
     )
@@ -159,7 +178,7 @@ async def validate_dependency_update(
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
             detail={
-                "message": "One or more dependency tasks were not found on this board.",
+                "message": "One or more dependency tasks were not found in this board scope.",
                 "missing_task_ids": [str(value) for value in missing],
             },
         )
@@ -168,7 +187,7 @@ async def validate_dependency_update(
     # validation catches indirect cycles created through existing edges.
     task_ids = list(
         await session.exec(
-            select(col(Task.id)).where(col(Task.board_id) == board_id),
+            select(col(Task.id)).where(col(Task.board_id).in_(scope_board_ids)),
         ),
     )
     rows = list(
@@ -176,7 +195,7 @@ async def validate_dependency_update(
             select(
                 col(TaskDependency.task_id),
                 col(TaskDependency.depends_on_task_id),
-            ).where(col(TaskDependency.board_id) == board_id),
+            ).where(col(TaskDependency.board_id).in_(scope_board_ids)),
         ),
     )
     edges: dict[UUID, set[UUID]] = defaultdict(set)
@@ -232,9 +251,10 @@ async def dependent_task_ids(
     dependency_task_id: UUID,
 ) -> list[UUID]:
     """Return task ids that depend on the provided dependency task id."""
+    scope_board_ids = await board_scope_board_ids(session, board_id=board_id)
     rows = await session.exec(
         select(col(TaskDependency.task_id))
-        .where(col(TaskDependency.board_id) == board_id)
+        .where(col(TaskDependency.board_id).in_(scope_board_ids))
         .where(col(TaskDependency.depends_on_task_id) == dependency_task_id),
     )
     return list(rows)

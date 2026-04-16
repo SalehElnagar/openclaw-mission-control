@@ -30,6 +30,7 @@ from app.schemas.pagination import DefaultLimitOffsetPage
 from app.services.mentions import extract_mentions, matches_agent_mention
 from app.services.openclaw.gateway_dispatch import GatewayDispatchService
 from app.services.openclaw.gateway_rpc import GatewayConfig as GatewayClientConfig
+from app.services.openclaw.presence_policy import reconcile_scope_presence
 
 if TYPE_CHECKING:
     from collections.abc import AsyncIterator
@@ -303,4 +304,11 @@ async def create_board_memory(
             memory=memory,
             actor=actor,
         )
+        command = memory.content.strip().lower()
+        if command in {"/pause", "/resume"}:
+            try:
+                await reconcile_scope_presence(session, board_id=board.id)
+            except Exception:
+                # Best effort: the chat command itself already reached the runtime.
+                pass
     return memory

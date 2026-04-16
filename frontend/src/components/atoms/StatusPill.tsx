@@ -13,6 +13,7 @@ const STATUS_STYLES: Record<
   online: "success",
   busy: "warning",
   provisioning: "warning",
+  standby: "accent",
   offline: "outline",
   deleting: "danger",
   updating: "accent",

@@ -4,15 +4,18 @@
  * Mission Control API
  * OpenAPI spec version: 0.1.0
  */
+import type { GatewayModelProfiles } from "./gatewayModelProfiles";
 
 /**
  * Payload for partial gateway updates.
  */
 export interface GatewayUpdate {
+  name?: string | null;
+  url?: string | null;
+  token?: string | null;
+  workspace_root?: string | null;
   allow_insecure_tls?: boolean | null;
   disable_device_pairing?: boolean | null;
-  name?: string | null;
-  token?: string | null;
-  url?: string | null;
-  workspace_root?: string | null;
+  default_model_profile?: "general" | "coder" | "budget" | null;
+  model_profiles?: GatewayModelProfiles | null;
 }

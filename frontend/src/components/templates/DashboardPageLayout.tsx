@@ -5,6 +5,7 @@ import { SignedIn, SignedOut } from "@/auth/clerk";
 import { AdminOnlyNotice } from "@/components/auth/AdminOnlyNotice";
 import { SignedOutPanel } from "@/components/auth/SignedOutPanel";
 import { DashboardSidebar } from "@/components/organisms/DashboardSidebar";
+import { Breadcrumbs } from "@/components/ui/breadcrumbs";
 import { cn } from "@/lib/utils";
 
 import { DashboardShell } from "./DashboardShell";
@@ -66,24 +67,25 @@ export function DashboardPageLayout({
         <DashboardSidebar />
         <main
           ref={mainRef}
-          className={cn("flex-1 overflow-y-auto bg-slate-50", mainClassName)}
+          className={cn("flex-1 overflow-y-auto bg-app", mainClassName)}
         >
           <div
             className={cn(
-              "border-b border-slate-200 bg-white",
+              "border-b border-[color:var(--border)] bg-[color:var(--surface)]",
               stickyHeader && "sticky top-0 z-30",
               headerClassName,
             )}
           >
             <div className="px-4 py-4 md:px-8 md:py-6">
+              <Breadcrumbs />
               {headerActions ? (
                 <div className="flex flex-wrap items-center justify-between gap-4">
                   <div>
-                    <h1 className="font-heading text-2xl font-semibold tracking-tight text-slate-900">
+                    <h1 className="font-heading text-2xl font-semibold tracking-tight text-strong">
                       {title}
                     </h1>
                     {description ? (
-                      <p className="mt-1 text-sm text-slate-500">
+                      <p className="mt-1 text-sm text-muted">
                         {description}
                       </p>
                     ) : null}
@@ -92,11 +94,11 @@ export function DashboardPageLayout({
                 </div>
               ) : (
                 <div>
-                  <h1 className="font-heading text-2xl font-semibold tracking-tight text-slate-900">
+                  <h1 className="font-heading text-2xl font-semibold tracking-tight text-strong">
                     {title}
                   </h1>
                   {description ? (
-                    <p className="mt-1 text-sm text-slate-500">{description}</p>
+                    <p className="mt-1 text-sm text-muted">{description}</p>
                   ) : null}
                 </div>
               )}

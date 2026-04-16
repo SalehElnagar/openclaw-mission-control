@@ -12,11 +12,15 @@ from app.models.board_webhook_payloads import BoardWebhookPayload
 from app.models.board_webhooks import BoardWebhook
 from app.models.boards import Board
 from app.models.gateways import Gateway
+from app.models.gateway_usage_samples import GatewayUsageSample
 from app.models.organization_board_access import OrganizationBoardAccess
 from app.models.organization_invite_board_access import OrganizationInviteBoardAccess
 from app.models.organization_invites import OrganizationInvite
 from app.models.organization_members import OrganizationMember
 from app.models.organizations import Organization
+from app.models.product_messages import ProductMessage
+from app.models.product_plans import ProductPlan
+from app.models.products import Product
 from app.models.skills import GatewayInstalledSkill, MarketplaceSkill, SkillPack
 from app.models.tag_assignments import TagAssignment
 from app.models.tags import Tag
@@ -43,10 +47,14 @@ __all__ = [
     "BoardGroup",
     "Board",
     "Gateway",
+    "GatewayUsageSample",
     "GatewayInstalledSkill",
     "MarketplaceSkill",
     "SkillPack",
     "Organization",
+    "Product",
+    "ProductMessage",
+    "ProductPlan",
     "BoardTaskCustomField",
     "TaskCustomFieldDefinition",
     "TaskCustomFieldValue",

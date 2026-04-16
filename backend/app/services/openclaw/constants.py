@@ -12,12 +12,12 @@ _GATEWAY_AGENT_PREFIX = f"agent:{_GATEWAY_OPENCLAW_AGENT_PREFIX}"
 _GATEWAY_AGENT_SUFFIX = ":main"
 
 DEFAULT_HEARTBEAT_CONFIG: dict[str, Any] = {
-    "every": "10m",
-    "target": "last",
+    "every": "0m",
+    "target": "none",
     "includeReasoning": False,
 }
 
-OFFLINE_AFTER = timedelta(minutes=10)
+HEARTBEAT_STALE_GRACE = timedelta(minutes=5)
 # Provisioning convergence policy:
 # - require first heartbeat/check-in within 30s of wake
 # - allow up to 3 wake attempts before giving up

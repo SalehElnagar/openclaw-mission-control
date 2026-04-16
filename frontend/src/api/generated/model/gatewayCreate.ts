@@ -4,15 +4,19 @@
  * Mission Control API
  * OpenAPI spec version: 0.1.0
  */
+import type { GatewayCreateDefaultModelProfile } from "./gatewayCreateDefaultModelProfile";
+import type { GatewayModelProfiles } from "./gatewayModelProfiles";
 
 /**
  * Payload for creating a gateway configuration.
  */
 export interface GatewayCreate {
-  allow_insecure_tls?: boolean;
-  disable_device_pairing?: boolean;
   name: string;
-  token?: string | null;
   url: string;
   workspace_root: string;
+  allow_insecure_tls?: boolean;
+  disable_device_pairing?: boolean;
+  default_model_profile?: GatewayCreateDefaultModelProfile;
+  model_profiles?: GatewayModelProfiles;
+  token?: string | null;
 }

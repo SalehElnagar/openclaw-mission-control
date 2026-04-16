@@ -22,8 +22,11 @@ class Agent(QueryModel, table=True):
 
     id: UUID = Field(default_factory=uuid4, primary_key=True)
     board_id: UUID | None = Field(default=None, foreign_key="boards.id", index=True)
+    product_id: UUID | None = Field(default=None, foreign_key="products.id", index=True)
     gateway_id: UUID = Field(foreign_key="gateways.id", index=True)
     name: str = Field(index=True)
+    purpose: str = Field(default="execution", index=True)
+    hidden: bool = Field(default=False, index=True)
     status: str = Field(default="provisioning", index=True)
     openclaw_session_id: str | None = Field(default=None, index=True)
     agent_token_hash: str | None = Field(default=None, index=True)
@@ -35,6 +38,10 @@ class Agent(QueryModel, table=True):
         default=None,
         sa_column=Column(JSON),
     )
+    model_profile: str | None = Field(default=None, index=True)
+    model_primary: str | None = Field(default=None, index=True)
+    model_fallback_policy: str = Field(default="profile", index=True)
+    model_fallbacks: list[str] | None = Field(default=None, sa_column=Column(JSON))
     identity_template: str | None = Field(default=None, sa_column=Column(Text))
     soul_template: str | None = Field(default=None, sa_column=Column(Text))
     provision_requested_at: datetime | None = Field(default=None)
@@ -48,6 +55,7 @@ class Agent(QueryModel, table=True):
     last_wake_sent_at: datetime | None = Field(default=None)
     checkin_deadline_at: datetime | None = Field(default=None)
     last_provision_error: str | None = Field(default=None, sa_column=Column(Text))
+    last_runtime_sync_at: datetime | None = Field(default=None)
     is_board_lead: bool = Field(default=False, index=True)
     created_at: datetime = Field(default_factory=utcnow)
     updated_at: datetime = Field(default_factory=utcnow)

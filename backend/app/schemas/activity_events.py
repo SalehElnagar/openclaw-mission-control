@@ -19,6 +19,14 @@ class ActivityEventRead(SQLModel):
     agent_id: UUID | None
     task_id: UUID | None
     board_id: UUID | None = None
+    actor_type: str | None = None
+    actor_user_id: UUID | None = None
+    actor_label: str | None = None
+    entity_type: str | None = None
+    entity_id: str | None = None
+    previous_values: dict[str, object] | None = None
+    new_values: dict[str, object] | None = None
+    details: dict[str, object] | None = None
     route_name: str | None = None
     route_params: dict[str, str] | None = None
     created_at: datetime

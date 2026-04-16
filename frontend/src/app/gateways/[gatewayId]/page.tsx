@@ -6,7 +6,7 @@ import { useMemo, useState } from "react";
 import { useParams, useRouter } from "next/navigation";
 
 import { useAuth } from "@/auth/clerk";
-import { useQueryClient } from "@tanstack/react-query";
+import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { AgentsTable } from "@/components/agents/AgentsTable";
 import { DashboardPageLayout } from "@/components/templates/DashboardPageLayout";
 import { Button } from "@/components/ui/button";
@@ -22,6 +22,7 @@ import {
   type getGatewayApiV1GatewaysGatewayIdGetResponse,
   useGatewaysStatusApiV1GatewaysStatusGet,
   useGetGatewayApiV1GatewaysGatewayIdGet,
+  useSyncGatewayTemplatesApiV1GatewaysGatewayIdTemplatesSyncPost,
 } from "@/api/generated/gateways/gateways";
 import {
   type listAgentsApiV1AgentsGetResponse,
@@ -30,6 +31,14 @@ import {
   useListAgentsApiV1AgentsGet,
 } from "@/api/generated/agents/agents";
 import { type AgentRead } from "@/api/generated/model";
+import {
+  aggregateUsage,
+  getGatewayRuntime,
+  type GatewayRuntimeCatalogEntry,
+  listGatewayAudit,
+  pullGatewayTelemetry,
+  reconcileGatewayRuntime,
+} from "@/api/runtime-control";
 import { formatTimestamp } from "@/lib/formatters";
 import { createOptimisticListDeleteMutation } from "@/lib/list-delete";
 import { useOrganizationMembership } from "@/lib/use-organization-membership";
@@ -39,6 +48,35 @@ const maskToken = (value?: string | null) => {
   if (value.length <= 8) return "••••";
   return `••••${value.slice(-4)}`;
 };
+
+const formatUsd = (value: number): string =>
+  new Intl.NumberFormat("en-US", {
+    style: "currency",
+    currency: "USD",
+    minimumFractionDigits: 2,
+    maximumFractionDigits: 4,
+  }).format(value);
+
+const modelSelectionLabel = (
+  value?: { primary_model?: string | null; fallback_models?: string[] } | null,
+) => {
+  if (!value || !value.primary_model) return "Not configured";
+  const fallbackCount = value.fallback_models?.length ?? 0;
+  return fallbackCount > 0
+    ? `${value.primary_model} (+${fallbackCount} fallback)`
+    : value.primary_model;
+};
+
+const catalogEntryProviderLabel = (entry: GatewayRuntimeCatalogEntry): string =>
+  entry.provider_label || entry.provider;
+
+const catalogEntryStatusLabel = (entry: GatewayRuntimeCatalogEntry): string =>
+  entry.selectable !== false ? "Verified live" : "Configured only";
+
+const catalogEntryStatusClassName = (entry: GatewayRuntimeCatalogEntry): string =>
+  entry.selectable !== false
+    ? "border-emerald-500/30 bg-emerald-500/10 text-emerald-300"
+    : "border-amber-500/30 bg-amber-500/10 text-amber-300";
 
 export default function GatewayDetailPage() {
   const router = useRouter();
@@ -129,6 +167,93 @@ export default function GatewayDetailPage() {
       refetchInterval: 15_000,
     },
   });
+  const [controlMessage, setControlMessage] = useState<string | null>(null);
+  const runtimeQuery = useQuery({
+    queryKey: ["gateway-runtime", gatewayId],
+    enabled: Boolean(isSignedIn && isAdmin && gatewayId),
+    refetchInterval: 30_000,
+    queryFn: () => getGatewayRuntime(gatewayId ?? ""),
+  });
+  const usageQuery = useQuery({
+    queryKey: ["gateway-usage", gatewayId],
+    enabled: Boolean(isSignedIn && isAdmin && gatewayId),
+    refetchInterval: 45_000,
+    queryFn: () => aggregateUsage({ gateway_id: gatewayId }),
+  });
+  const auditQuery = useQuery({
+    queryKey: ["gateway-audit", gatewayId],
+    enabled: Boolean(isSignedIn && isAdmin && gatewayId),
+    refetchInterval: 45_000,
+    queryFn: () => listGatewayAudit(gatewayId ?? "", { limit: 6 }),
+  });
+  const syncTemplatesMutation =
+    useSyncGatewayTemplatesApiV1GatewaysGatewayIdTemplatesSyncPost<ApiError>(
+      {
+        mutation: {
+          onSuccess: (result) => {
+            if (result.status !== 200) return;
+            setControlMessage(
+              `Synced templates: ${result.data.agents_updated} updated, ${result.data.agents_skipped} skipped.`,
+            );
+            queryClient.invalidateQueries({
+              queryKey: ["/api/v1/agents"],
+            });
+            queryClient.invalidateQueries({
+              queryKey: ["gateway-runtime", gatewayId],
+            });
+            queryClient.invalidateQueries({
+              queryKey: ["gateway-audit", gatewayId],
+            });
+          },
+        },
+      },
+      queryClient,
+    );
+  const reconcileMutation = useMutation({
+    mutationFn: () =>
+      reconcileGatewayRuntime(gatewayId ?? "", {
+        repair_stuck_agents: true,
+        sync_models: true,
+        wake_agents: true,
+      }),
+    onSuccess: (result) => {
+      if (result.status !== 200) return;
+      const repaired = result.data.repaired_agents.length;
+      setControlMessage(
+        `Runtime reconciled. ${repaired} repaired, generation ${result.data.sync_generation}.`,
+      );
+      queryClient.invalidateQueries({
+        queryKey: ["gateway-runtime", gatewayId],
+      });
+      queryClient.invalidateQueries({
+        queryKey: ["gateway-audit", gatewayId],
+      });
+      queryClient.invalidateQueries({
+        queryKey: ["/api/v1/gateways/status"],
+      });
+      queryClient.invalidateQueries({
+        queryKey: ["/api/v1/agents"],
+      });
+    },
+  });
+  const pullTelemetryMutation = useMutation({
+    mutationFn: () => pullGatewayTelemetry(gatewayId ?? ""),
+    onSuccess: (result) => {
+      if (result.status !== 200) return;
+      setControlMessage(
+        `Telemetry pulled. ${result.data.ingested_samples} sample(s) ingested.`,
+      );
+      queryClient.invalidateQueries({
+        queryKey: ["gateway-usage", gatewayId],
+      });
+      queryClient.invalidateQueries({
+        queryKey: ["gateway-runtime", gatewayId],
+      });
+      queryClient.invalidateQueries({
+        queryKey: ["gateway-audit", gatewayId],
+      });
+    },
+  });
 
   const agents = useMemo(
     () =>
@@ -147,11 +272,28 @@ export default function GatewayDetailPage() {
 
   const status =
     statusQuery.data?.status === 200 ? statusQuery.data.data : null;
+  const runtime =
+    runtimeQuery.data?.status === 200 ? runtimeQuery.data.data : null;
+  const usage = usageQuery.data?.status === 200 ? usageQuery.data.data : null;
+  const auditRecords =
+    auditQuery.data?.status === 200 ? (auditQuery.data.data.items ?? []) : [];
   const isConnected = status?.connected ?? false;
 
   const title = useMemo(
     () => (gateway?.name ? gateway.name : "Gateway"),
     [gateway?.name],
+  );
+  const runtimeCatalog = useMemo(
+    () => (runtime?.catalog ?? []).filter((entry) => (entry.kind ?? "model") === "model"),
+    [runtime?.catalog],
+  );
+  const liveCatalogEntries = useMemo(
+    () => runtimeCatalog.filter((entry) => entry.selectable !== false),
+    [runtimeCatalog],
+  );
+  const configuredOnlyCatalogEntries = useMemo(
+    () => runtimeCatalog.filter((entry) => entry.selectable === false),
+    [runtimeCatalog],
   );
   const handleDelete = () => {
     if (!deleteTarget) return;
@@ -185,26 +327,26 @@ export default function GatewayDetailPage() {
         adminOnlyMessage="Only organization owners and admins can access gateways."
       >
         {gatewayQuery.isLoading ? (
-          <div className="rounded-xl border border-slate-200 bg-white p-6 text-sm text-slate-500 shadow-sm">
+          <div className="rounded-xl border border-[color:var(--border)] bg-[color:var(--surface)] p-6 text-sm text-muted shadow-sm">
             Loading gateway…
           </div>
         ) : gatewayQuery.error ? (
-          <div className="rounded-xl border border-rose-200 bg-rose-50 p-6 text-sm text-rose-700">
+          <div className="rounded-xl border border-[color:var(--danger)]/40 bg-[color:var(--danger)]/10 p-6 text-sm text-[color:var(--danger)]">
             {gatewayQuery.error.message}
           </div>
         ) : gateway ? (
           <div className="space-y-6">
-            <div className="grid gap-6 lg:grid-cols-2">
-              <div className="rounded-xl border border-slate-200 bg-white p-6 shadow-sm">
+            <div className="grid gap-6 xl:grid-cols-3">
+              <div className="rounded-xl border border-[color:var(--border)] bg-[color:var(--surface)] p-6 shadow-sm">
                 <div className="flex items-center justify-between">
-                  <p className="text-xs font-semibold uppercase tracking-wide text-slate-500">
+                  <p className="text-xs font-semibold uppercase tracking-wide text-muted">
                     Connection
                   </p>
-                  <div className="flex items-center gap-2 text-xs text-slate-500">
+                  <div className="flex items-center gap-2 text-xs text-muted">
                     <span
                       className={`h-2 w-2 rounded-full ${
                         statusQuery.isLoading
-                          ? "bg-slate-300"
+                          ? "bg-[color:var(--text-quiet)]"
                           : isConnected
                             ? "bg-emerald-500"
                             : "bg-rose-500"
@@ -219,78 +361,377 @@ export default function GatewayDetailPage() {
                     </span>
                   </div>
                 </div>
-                <div className="mt-4 space-y-3 text-sm text-slate-700">
+                <div className="mt-4 space-y-3 text-sm text-muted">
                   <div>
-                    <p className="text-xs uppercase text-slate-400">
+                    <p className="text-xs uppercase text-quiet">
                       Gateway URL
                     </p>
-                    <p className="mt-1 text-sm font-medium text-slate-900">
+                    <p className="mt-1 text-sm font-medium text-strong">
                       {gateway.url}
                     </p>
                   </div>
                   <div>
-                    <p className="text-xs uppercase text-slate-400">Token</p>
-                    <p className="mt-1 text-sm font-medium text-slate-900">
+                    <p className="text-xs uppercase text-quiet">Token</p>
+                    <p className="mt-1 text-sm font-medium text-strong">
                       {maskToken(gateway.token)}
                     </p>
                   </div>
                   <div>
-                    <p className="text-xs uppercase text-slate-400">
+                    <p className="text-xs uppercase text-quiet">
                       Device pairing
                     </p>
-                    <p className="mt-1 text-sm font-medium text-slate-900">
+                    <p className="mt-1 text-sm font-medium text-strong">
                       {gateway.disable_device_pairing ? "Disabled" : "Required"}
+                    </p>
+                  </div>
+                  <div>
+                    <p className="text-xs uppercase text-quiet">
+                      Workspace root
+                    </p>
+                    <p className="mt-1 text-sm font-medium text-strong">
+                      {gateway.workspace_root}
                     </p>
                   </div>
                 </div>
               </div>
 
-              <div className="rounded-xl border border-slate-200 bg-white p-6 shadow-sm">
-                <p className="text-xs font-semibold uppercase tracking-wide text-slate-500">
-                  Runtime
-                </p>
-                <div className="mt-4 space-y-3 text-sm text-slate-700">
+              <div className="rounded-xl border border-[color:var(--border)] bg-[color:var(--surface)] p-6 shadow-sm">
+                <div className="flex items-center justify-between">
+                  <p className="text-xs font-semibold uppercase tracking-wide text-muted">
+                    Gateway control
+                  </p>
+                  {runtimeQuery.isFetching ? (
+                    <span className="text-xs text-muted">Syncing…</span>
+                  ) : null}
+                </div>
+                <div className="mt-4 space-y-3 text-sm text-muted">
                   <div>
-                    <p className="text-xs uppercase text-slate-400">
-                      Workspace root
+                    <p className="text-xs uppercase text-quiet">
+                      Runtime generation
                     </p>
-                    <p className="mt-1 text-sm font-medium text-slate-900">
-                      {gateway.workspace_root}
+                    <p className="mt-1 text-sm font-medium text-strong">
+                      {runtime?.runtime_sync_generation ?? "—"}
                     </p>
                   </div>
-                  <div className="grid gap-3 sm:grid-cols-2">
-                    <div>
-                      <p className="text-xs uppercase text-slate-400">
-                        Created
-                      </p>
-                      <p className="mt-1 text-sm font-medium text-slate-900">
-                        {formatTimestamp(gateway.created_at)}
-                      </p>
-                    </div>
-                    <div>
-                      <p className="text-xs uppercase text-slate-400">
-                        Updated
-                      </p>
-                      <p className="mt-1 text-sm font-medium text-slate-900">
-                        {formatTimestamp(gateway.updated_at)}
-                      </p>
+                  <div>
+                    <p className="text-xs uppercase text-quiet">
+                      Last runtime sync
+                    </p>
+                    <p className="mt-1 text-sm font-medium text-strong">
+                      {formatTimestamp(runtime?.last_runtime_sync_at ?? null)}
+                    </p>
+                  </div>
+                  <div className="flex flex-wrap gap-2 pt-1">
+                    <Button
+                      variant="outline"
+                      size="sm"
+                      onClick={() => reconcileMutation.mutate()}
+                      disabled={reconcileMutation.isPending}
+                    >
+                      {reconcileMutation.isPending
+                        ? "Reconciling…"
+                        : "Reconcile runtime"}
+                    </Button>
+                    <Button
+                      variant="outline"
+                      size="sm"
+                      onClick={() =>
+                        syncTemplatesMutation.mutate({
+                          gatewayId: gateway.id,
+                          params: {
+                            include_main: true,
+                            reset_sessions: false,
+                            rotate_tokens: false,
+                            overwrite: false,
+                          },
+                        })
+                      }
+                      disabled={syncTemplatesMutation.isPending}
+                    >
+                      {syncTemplatesMutation.isPending
+                        ? "Syncing…"
+                        : "Sync templates"}
+                    </Button>
+                    <Button
+                      variant="outline"
+                      size="sm"
+                      onClick={() => pullTelemetryMutation.mutate()}
+                      disabled={pullTelemetryMutation.isPending}
+                    >
+                      {pullTelemetryMutation.isPending
+                        ? "Pulling…"
+                        : "Pull telemetry"}
+                    </Button>
+                  </div>
+                  {controlMessage ? (
+                    <p className="rounded-md border border-[color:var(--border)] bg-[color:var(--surface-muted)] px-3 py-2 text-xs text-muted">
+                      {controlMessage}
+                    </p>
+                  ) : null}
+                  {runtime?.last_runtime_sync_error ? (
+                    <p className="rounded-md border border-[color:var(--danger)]/40 bg-[color:var(--danger)]/10 px-3 py-2 text-xs text-[color:var(--danger)]">
+                      {runtime.last_runtime_sync_error}
+                    </p>
+                  ) : null}
+                </div>
+              </div>
+
+              <div className="rounded-xl border border-[color:var(--border)] bg-[color:var(--surface)] p-6 shadow-sm">
+                <div className="flex items-center justify-between">
+                  <p className="text-xs font-semibold uppercase tracking-wide text-muted">
+                    Token & cost analytics
+                  </p>
+                  {usageQuery.isFetching ? (
+                    <span className="text-xs text-muted">Refreshing…</span>
+                  ) : null}
+                </div>
+                <div className="mt-4 grid gap-3 text-sm">
+                  <div className="rounded-lg border border-[color:var(--border)] bg-[color:var(--surface-muted)] p-3">
+                    <p className="text-xs uppercase text-quiet">Total cost</p>
+                    <p className="mt-1 text-base font-semibold text-strong">
+                      {formatUsd(usage?.total_cost_usd ?? 0)}
+                    </p>
+                  </div>
+                  <div className="rounded-lg border border-[color:var(--border)] bg-[color:var(--surface-muted)] p-3">
+                    <p className="text-xs uppercase text-quiet">Total tokens</p>
+                    <p className="mt-1 text-base font-semibold text-strong">
+                      {(usage?.total_tokens ?? 0).toLocaleString("en-US")}
+                    </p>
+                    <p className="mt-1 text-xs text-muted">
+                      Prompt {(usage?.total_prompt_tokens ?? 0).toLocaleString("en-US")} ·
+                      Completion{" "}
+                      {(usage?.total_completion_tokens ?? 0).toLocaleString("en-US")}
+                    </p>
+                  </div>
+                  <div>
+                    <p className="text-xs uppercase text-quiet">Top model usage</p>
+                    <div className="mt-2 space-y-1.5">
+                      {Object.entries(usage?.models ?? {})
+                        .sort(([, left], [, right]) => right - left)
+                        .slice(0, 3)
+                        .map(([model, cost]) => (
+                          <div
+                            key={model}
+                            className="flex items-center justify-between rounded-md border border-[color:var(--border)] bg-[color:var(--surface-muted)] px-2.5 py-1.5 text-xs"
+                          >
+                            <span className="truncate text-muted">{model}</span>
+                            <span className="font-semibold text-strong">
+                              {formatUsd(cost)}
+                            </span>
+                          </div>
+                        ))}
+                      {Object.keys(usage?.models ?? {}).length === 0 ? (
+                        <p className="text-xs text-muted">
+                          No telemetry samples yet. Use pull telemetry to ingest.
+                        </p>
+                      ) : null}
                     </div>
                   </div>
                 </div>
               </div>
             </div>
 
-            <div className="rounded-xl border border-slate-200 bg-white p-6 shadow-sm">
+            <div className="grid gap-6 xl:grid-cols-2">
+              <div className="rounded-xl border border-[color:var(--border)] bg-[color:var(--surface)] p-6 shadow-sm">
+                <p className="text-xs font-semibold uppercase tracking-wide text-muted">
+                  Model profiles
+                </p>
+                <p className="mt-1 text-xs text-muted">
+                  Default profile:{" "}
+                  <span className="font-semibold text-strong">
+                    {runtime?.default_model_profile ?? "general"}
+                  </span>
+                </p>
+                <p className="mt-1 text-xs text-muted">
+                  Effective default model:{" "}
+                  <span className="font-semibold text-strong">
+                    {runtime?.default_model_ref ?? "Not resolved"}
+                  </span>
+                </p>
+                <div className="mt-4 grid gap-2">
+                  {(["general", "coder", "budget"] as const).map((profile) => (
+                    <div
+                      key={profile}
+                      className="rounded-lg border border-[color:var(--border)] bg-[color:var(--surface-muted)] px-3 py-2"
+                    >
+                      <p className="text-xs uppercase tracking-wide text-quiet">
+                        {profile}
+                      </p>
+                      <p className="mt-1 text-sm font-medium text-strong">
+                        {modelSelectionLabel(runtime?.model_profiles?.[profile])}
+                      </p>
+                    </div>
+                  ))}
+                </div>
+                <p className="mt-3 text-xs text-muted">
+                  Verified runtime models:{" "}
+                  <span className="font-semibold text-strong">
+                    {runtime?.available_models.length ?? 0}
+                  </span>
+                </p>
+              </div>
+
+              <div className="rounded-xl border border-[color:var(--border)] bg-[color:var(--surface)] p-6 shadow-sm">
+                <div className="flex items-start justify-between gap-4">
+                  <div>
+                    <p className="text-xs font-semibold uppercase tracking-wide text-muted">
+                      Runtime catalog
+                    </p>
+                    <p className="mt-1 text-xs text-muted">
+                      Mission Control separates live runtime models from configured placeholders.
+                    </p>
+                  </div>
+                  <span className="text-xs text-muted">
+                    {runtimeCatalog.length} total
+                  </span>
+                </div>
+                <div className="mt-4 grid gap-4 md:grid-cols-2">
+                  <div className="rounded-lg border border-[color:var(--border)] bg-[color:var(--surface-muted)] p-4">
+                    <div className="flex items-center justify-between gap-3">
+                      <p className="text-xs font-semibold uppercase tracking-wide text-muted">
+                        Verified and selectable
+                      </p>
+                      <span className="rounded-full border border-emerald-500/30 bg-emerald-500/10 px-2 py-0.5 text-[11px] font-semibold text-emerald-300">
+                        {liveCatalogEntries.length}
+                      </span>
+                    </div>
+                    <div className="mt-3 space-y-2">
+                      {liveCatalogEntries.length === 0 ? (
+                        <p className="rounded-md border border-[color:var(--border)] bg-[color:var(--surface)] px-3 py-2 text-xs text-muted">
+                          No runtime-verified models are available yet.
+                        </p>
+                      ) : (
+                        liveCatalogEntries.map((entry) => (
+                          <div
+                            key={entry.ref}
+                            className="rounded-md border border-[color:var(--border)] bg-[color:var(--surface)] px-3 py-2"
+                          >
+                            <div className="flex items-start justify-between gap-3">
+                              <div className="min-w-0">
+                                <p className="text-sm font-medium text-strong">
+                                  {entry.label}
+                                </p>
+                                <p className="mt-1 text-xs text-muted">
+                                  {catalogEntryProviderLabel(entry)}
+                                </p>
+                              </div>
+                              <div className="flex shrink-0 flex-wrap items-center justify-end gap-1.5">
+                                {entry.is_default ? (
+                                  <span className="rounded-full border border-[color:var(--accent-soft)] bg-[color:var(--accent-soft)]/30 px-2 py-0.5 text-[11px] font-semibold text-[color:var(--accent)]">
+                                    Default
+                                  </span>
+                                ) : null}
+                                <span
+                                  className={`rounded-full border px-2 py-0.5 text-[11px] font-semibold ${catalogEntryStatusClassName(entry)}`}
+                                >
+                                  {catalogEntryStatusLabel(entry)}
+                                </span>
+                              </div>
+                            </div>
+                            <p className="mt-2 truncate font-mono text-[11px] text-quiet">
+                              {entry.ref}
+                            </p>
+                          </div>
+                        ))
+                      )}
+                    </div>
+                  </div>
+
+                  <div className="rounded-lg border border-[color:var(--border)] bg-[color:var(--surface-muted)] p-4">
+                    <div className="flex items-center justify-between gap-3">
+                      <p className="text-xs font-semibold uppercase tracking-wide text-muted">
+                        Configured for later
+                      </p>
+                      <span className="rounded-full border border-amber-500/30 bg-amber-500/10 px-2 py-0.5 text-[11px] font-semibold text-amber-300">
+                        {configuredOnlyCatalogEntries.length}
+                      </span>
+                    </div>
+                    <div className="mt-3 space-y-2">
+                      {configuredOnlyCatalogEntries.length === 0 ? (
+                        <p className="rounded-md border border-[color:var(--border)] bg-[color:var(--surface)] px-3 py-2 text-xs text-muted">
+                          No configured-only placeholders right now.
+                        </p>
+                      ) : (
+                        configuredOnlyCatalogEntries.map((entry) => (
+                          <div
+                            key={entry.ref}
+                            className="rounded-md border border-[color:var(--border)] bg-[color:var(--surface)] px-3 py-2"
+                          >
+                            <div className="flex items-start justify-between gap-3">
+                              <div className="min-w-0">
+                                <p className="text-sm font-medium text-strong">
+                                  {entry.label}
+                                </p>
+                                <p className="mt-1 text-xs text-muted">
+                                  {catalogEntryProviderLabel(entry)}
+                                </p>
+                              </div>
+                              <span
+                                className={`shrink-0 rounded-full border px-2 py-0.5 text-[11px] font-semibold ${catalogEntryStatusClassName(entry)}`}
+                              >
+                                {catalogEntryStatusLabel(entry)}
+                              </span>
+                            </div>
+                            <p className="mt-2 truncate font-mono text-[11px] text-quiet">
+                              {entry.ref}
+                            </p>
+                            <p className="mt-2 text-xs text-muted">
+                              Provider details or runtime validation are still missing, so this
+                              entry stays hidden from agent model selection.
+                            </p>
+                          </div>
+                        ))
+                      )}
+                    </div>
+                  </div>
+                </div>
+              </div>
+            </div>
+
+            <div className="rounded-xl border border-[color:var(--border)] bg-[color:var(--surface)] p-6 shadow-sm">
               <div className="flex items-center justify-between">
-                <p className="text-xs font-semibold uppercase tracking-wide text-slate-500">
+                <p className="text-xs font-semibold uppercase tracking-wide text-muted">
+                  Runtime audit
+                </p>
+                <span className="text-xs text-muted">
+                  {auditQuery.isLoading ? "Loading…" : `${auditRecords.length} events`}
+                </span>
+              </div>
+              <div className="mt-3 space-y-2">
+                {auditRecords.length === 0 ? (
+                  <p className="rounded-md border border-[color:var(--border)] bg-[color:var(--surface-muted)] px-3 py-2 text-xs text-muted">
+                    No runtime audit entries yet.
+                  </p>
+                ) : (
+                  auditRecords.map((record) => (
+                    <div
+                      key={record.id}
+                      className="rounded-md border border-[color:var(--border)] bg-[color:var(--surface-muted)] px-3 py-2"
+                    >
+                      <p className="text-xs font-semibold uppercase tracking-wide text-quiet">
+                        {record.event_type}
+                      </p>
+                      <p className="mt-1 text-sm text-strong">
+                        {record.message ?? "No message provided"}
+                      </p>
+                      <p className="mt-1 text-xs text-muted">
+                        {formatTimestamp(record.created_at)}
+                      </p>
+                    </div>
+                  ))
+                )}
+              </div>
+            </div>
+
+            <div className="rounded-xl border border-[color:var(--border)] bg-[color:var(--surface)] p-6 shadow-sm">
+              <div className="flex items-center justify-between">
+                <p className="text-xs font-semibold uppercase tracking-wide text-muted">
                   Agents
                 </p>
                 {agentsQuery.isLoading ? (
-                  <span className="text-xs text-slate-500">Loading…</span>
+                  <span className="text-xs text-muted">Loading…</span>
                 ) : (
-                  <span className="text-xs text-slate-500">
-                    {agents.length} total
-                  </span>
+                  <span className="text-xs text-muted">{agents.length} total</span>
                 )}
               </div>
               <div className="mt-4">

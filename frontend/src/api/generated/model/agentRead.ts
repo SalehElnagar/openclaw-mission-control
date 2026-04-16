@@ -6,6 +6,7 @@
  */
 import type { AgentReadHeartbeatConfig } from "./agentReadHeartbeatConfig";
 import type { AgentReadIdentityProfile } from "./agentReadIdentityProfile";
+import type { AgentReadModelFallbackPolicy } from "./agentReadModelFallbackPolicy";
 
 /**
  * Public agent representation returned by the API.
@@ -13,35 +14,47 @@ import type { AgentReadIdentityProfile } from "./agentReadIdentityProfile";
 export interface AgentRead {
   /** Board id that scopes this agent. Omit only when policy allows global agents. */
   board_id?: string | null;
-  /** Creation timestamp. */
-  created_at: string;
-  /** Gateway UUID that manages this agent. */
-  gateway_id: string;
-  /** Runtime heartbeat behavior overrides for this agent. */
-  heartbeat_config?: AgentReadHeartbeatConfig;
-  /** Agent UUID. */
-  id: string;
-  /** Optional profile hints used by routing and policy checks. */
-  identity_profile?: AgentReadIdentityProfile;
-  /** Template that helps define initial intent and behavior. */
-  identity_template?: string | null;
-  /** Whether this agent is the board lead. */
-  is_board_lead?: boolean;
-  /** Whether this agent is the primary gateway agent. */
-  is_gateway_main?: boolean;
-  /** Last heartbeat timestamp. */
-  last_seen_at?: string | null;
   /**
    * Human-readable agent display name.
    * @minLength 1
    */
   name: string;
-  /** Optional openclaw session token. */
-  openclaw_session_id?: string | null;
-  /** Template representing deeper agent instructions. */
-  soul_template?: string | null;
   /** Current lifecycle state used by coordinator logic. */
   status?: string;
+  /** Runtime heartbeat behavior overrides for this agent. */
+  heartbeat_config?: AgentReadHeartbeatConfig;
+  /** Optional profile hints used by routing and policy checks. */
+  identity_profile?: AgentReadIdentityProfile;
+  /** Optional named gateway model profile. */
+  model_profile?: string | null;
+  /** Optional explicit primary model override. */
+  model_primary?: string | null;
+  /** How explicit fallback models interact with the selected profile. */
+  model_fallback_policy?: AgentReadModelFallbackPolicy;
+  /** Optional ordered fallback model list. */
+  model_fallbacks?: string[] | null;
+  /** Template that helps define initial intent and behavior. */
+  identity_template?: string | null;
+  /** Template representing deeper agent instructions. */
+  soul_template?: string | null;
+  /** Agent UUID. */
+  id: string;
+  /** Gateway UUID that manages this agent. */
+  gateway_id: string;
+  /** Whether this agent is the board lead. */
+  is_board_lead?: boolean;
+  /** Whether this agent is the primary gateway agent. */
+  is_gateway_main?: boolean;
+  /** Optional openclaw session token. */
+  openclaw_session_id?: string | null;
+  /** Last heartbeat timestamp. */
+  last_seen_at?: string | null;
+  /** Last time Mission Control synced runtime policy to the gateway. */
+  last_runtime_sync_at?: string | null;
+  /** Human-readable explanation for the computed status. */
+  status_reason?: string | null;
+  /** Creation timestamp. */
+  created_at: string;
   /** Last update timestamp. */
   updated_at: string;
 }

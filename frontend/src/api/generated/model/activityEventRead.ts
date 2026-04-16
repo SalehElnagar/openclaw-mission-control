@@ -4,19 +4,30 @@
  * Mission Control API
  * OpenAPI spec version: 0.1.0
  */
+import type { ActivityEventReadDetails } from "./activityEventReadDetails";
+import type { ActivityEventReadNewValues } from "./activityEventReadNewValues";
+import type { ActivityEventReadPreviousValues } from "./activityEventReadPreviousValues";
 import type { ActivityEventReadRouteParams } from "./activityEventReadRouteParams";
 
 /**
  * Serialized activity event payload returned by activity endpoints.
  */
 export interface ActivityEventRead {
-  agent_id: string | null;
-  board_id?: string | null;
-  created_at: string;
-  event_type: string;
   id: string;
+  event_type: string;
   message: string | null;
+  agent_id: string | null;
+  task_id: string | null;
+  board_id?: string | null;
+  actor_type?: string | null;
+  actor_user_id?: string | null;
+  actor_label?: string | null;
+  entity_type?: string | null;
+  entity_id?: string | null;
+  previous_values?: ActivityEventReadPreviousValues;
+  new_values?: ActivityEventReadNewValues;
+  details?: ActivityEventReadDetails;
   route_name?: string | null;
   route_params?: ActivityEventReadRouteParams;
-  task_id: string | null;
+  created_at: string;
 }

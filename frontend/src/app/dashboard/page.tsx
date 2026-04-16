@@ -2,9 +2,9 @@
 
 export const dynamic = "force-dynamic";
 
-import { type KeyboardEvent, type MouseEvent, useMemo } from "react";
+import { type KeyboardEvent, type MouseEvent, useMemo, useState } from "react";
 import Link from "next/link";
-import { useRouter } from "next/navigation";
+import { useRouter, useSearchParams } from "next/navigation";
 import { useQuery } from "@tanstack/react-query";
 
 import { SignedIn, SignedOut, useAuth } from "@/auth/clerk";
@@ -12,16 +12,20 @@ import {
   Activity,
   ArrowUpRight,
   Bot,
+  FileText,
   Info,
   LayoutGrid,
   Shield,
   Timer,
+  Users,
 } from "lucide-react";
 
 import { DashboardSidebar } from "@/components/organisms/DashboardSidebar";
+import { ThroughputChart, WipChart } from "@/components/organisms/DashboardCharts";
 import { DashboardShell } from "@/components/templates/DashboardShell";
 import { Markdown } from "@/components/atoms/Markdown";
 import { SignedOutPanel } from "@/components/auth/SignedOutPanel";
+import { Button } from "@/components/ui/button";
 import { ApiError } from "@/api/mutator";
 import {
   type dashboardMetricsApiV1MetricsDashboardGetResponse,
@@ -43,12 +47,17 @@ import {
   type listActivityApiV1ActivityGetResponse,
   useListActivityApiV1ActivityGet,
 } from "@/api/generated/activity/activity";
-import type { ActivityEventRead } from "@/api/generated/model";
+import type {
+  ActivityEventRead,
+  DashboardMetricsApiV1MetricsDashboardGetRangeKey,
+} from "@/api/generated/model";
 import {
   formatRelativeTimestamp,
   formatTimestamp,
   parseTimestamp,
 } from "@/lib/formatters";
+import { isSystemActivityEvent, isSystemSession } from "@/lib/operator-signal-filters";
+import { cn } from "@/lib/utils";
 
 type SessionSummary = {
   key: string;
@@ -84,8 +93,24 @@ type GatewaySnapshot = GatewayTarget & {
 
 const DASH = "—";
 const DASHBOARD_RANGE = "7d";
-const DASHBOARD_RANGE_DAYS = 7;
-const DASHBOARD_RANGE_LABEL = "7 days";
+const DASHBOARD_RANGE_OPTIONS: Array<{
+  key: DashboardMetricsApiV1MetricsDashboardGetRangeKey;
+  label: string;
+  shortLabel: string;
+  days: number;
+}> = [
+  { key: "24h", label: "Last 24 hours", shortLabel: "24h", days: 1 },
+  { key: "3d", label: "Last 3 days", shortLabel: "3d", days: 3 },
+  { key: "7d", label: "Last 7 days", shortLabel: "7d", days: 7 },
+  { key: "14d", label: "Last 14 days", shortLabel: "14d", days: 14 },
+  { key: "1m", label: "Last 30 days", shortLabel: "1m", days: 30 },
+  { key: "3m", label: "Last 90 days", shortLabel: "3m", days: 90 },
+  { key: "6m", label: "Last 180 days", shortLabel: "6m", days: 180 },
+  { key: "1y", label: "Last 12 months", shortLabel: "1y", days: 365 },
+];
+const DASHBOARD_RANGE_LOOKUP = new Map(
+  DASHBOARD_RANGE_OPTIONS.map((option) => [option.key, option]),
+);
 
 const numberFormatter = new Intl.NumberFormat("en-US");
 const SESSION_ID_KEYS = ["key", "id", "session_key", "sessionKey", "sessionId"];
@@ -371,24 +396,24 @@ function TopMetricCard({
 }) {
   const iconTone =
     accent === "blue"
-      ? "bg-blue-50 text-blue-600"
+      ? "bg-blue-500/10 text-blue-600 dark:text-blue-400"
       : accent === "green"
-        ? "bg-emerald-50 text-emerald-600"
+        ? "bg-emerald-500/10 text-emerald-600 dark:text-emerald-400"
         : accent === "violet"
-          ? "bg-violet-50 text-violet-600"
-          : "bg-green-50 text-green-600";
+          ? "bg-violet-500/10 text-violet-600 dark:text-violet-400"
+          : "bg-green-500/10 text-green-600 dark:text-green-400";
 
   return (
-    <section className="rounded-xl border border-slate-200 bg-white p-4 md:p-6 shadow-sm transition hover:-translate-y-0.5 hover:shadow-md">
+    <section className="rounded-xl border border-[color:var(--border)] bg-[color:var(--surface)] p-4 md:p-6 shadow-sm transition hover:-translate-y-0.5 hover:shadow-md">
       <div className="flex items-start justify-between gap-3">
         <div>
           <div className="flex items-center gap-1.5">
-            <p className="text-xs font-semibold uppercase tracking-wider text-slate-500">
+            <p className="text-xs font-semibold uppercase tracking-wider text-muted">
               {title}
             </p>
             {infoText ? (
               <span
-                className="inline-flex text-slate-400"
+                className="inline-flex text-quiet"
                 title={infoText}
                 aria-label={infoText}
               >
@@ -397,9 +422,9 @@ function TopMetricCard({
             ) : null}
           </div>
           <div className="mt-2 flex items-end gap-2">
-            <p className="font-heading text-4xl font-bold text-slate-900">{value}</p>
+            <p className="font-heading text-4xl font-bold text-strong">{value}</p>
             {secondary ? (
-              <p className="pb-1 text-xs text-slate-500">{secondary}</p>
+              <p className="pb-1 text-xs text-muted">{secondary}</p>
             ) : null}
           </div>
         </div>
@@ -423,13 +448,13 @@ function InfoBlock({
   rows: SummaryRow[];
 }) {
   return (
-    <section className="rounded-xl border border-slate-200 bg-white p-4 md:p-6 shadow-sm">
+    <section className="rounded-xl border border-[color:var(--border)] bg-[color:var(--surface)] p-4 md:p-6 shadow-sm">
       <div className="mb-4 flex items-center justify-between gap-3">
         <div className="flex items-center gap-1.5">
-          <h3 className="text-lg font-semibold text-slate-900">{title}</h3>
+          <h3 className="text-lg font-semibold text-strong">{title}</h3>
           {infoText ? (
             <span
-              className="inline-flex text-slate-400"
+              className="inline-flex text-quiet"
               title={infoText}
               aria-label={infoText}
             >
@@ -441,29 +466,29 @@ function InfoBlock({
           <span
             className={`inline-flex items-center rounded-full px-2 py-0.5 text-[11px] font-medium ${
               badge.tone === "online"
-                ? "bg-emerald-100 text-emerald-700"
+                ? "bg-emerald-500/10 text-emerald-700 dark:text-emerald-400"
                 : badge.tone === "offline"
-                  ? "bg-rose-100 text-rose-700"
-                  : "bg-slate-200 text-slate-700"
+                  ? "bg-rose-500/10 text-rose-700 dark:text-rose-400"
+                  : "bg-[color:var(--surface-muted)] text-muted"
             }`}
           >
             {badge.text}
           </span>
         ) : null}
       </div>
-      <div className="divide-y divide-slate-100 rounded-lg border border-slate-200 bg-white">
+      <div className="divide-y divide-[color:var(--border)] rounded-lg border border-[color:var(--border)] bg-[color:var(--surface)]">
         {rows.map((row) => (
           <div key={`${row.label}-${row.value}`} className="flex items-start justify-between gap-3 px-3 py-2">
-            <span className="min-w-0 text-sm text-slate-500">{row.label}</span>
+            <span className="min-w-0 text-sm text-muted">{row.label}</span>
             <span
               className={`max-w-[65%] break-words text-right text-sm font-medium leading-5 ${
                 row.tone === "success"
-                  ? "text-emerald-700"
+                  ? "text-emerald-700 dark:text-emerald-400"
                   : row.tone === "warning"
-                    ? "text-amber-700"
+                    ? "text-amber-700 dark:text-amber-400"
                     : row.tone === "danger"
-                      ? "text-rose-700"
-                      : "text-slate-800"
+                      ? "text-rose-700 dark:text-rose-400"
+                      : "text-strong"
               }`}
             >
               {row.value}
@@ -477,7 +502,23 @@ function InfoBlock({
 
 export default function DashboardPage() {
   const router = useRouter();
+  const searchParams = useSearchParams();
   const { isSignedIn } = useAuth();
+  const [showSystemSignals, setShowSystemSignals] = useState(false);
+  const selectedRangeKey = useMemo<DashboardMetricsApiV1MetricsDashboardGetRangeKey>(() => {
+    const requested = searchParams.get("range") as
+      | DashboardMetricsApiV1MetricsDashboardGetRangeKey
+      | null;
+    if (requested && DASHBOARD_RANGE_LOOKUP.has(requested)) {
+      return requested;
+    }
+    return DASHBOARD_RANGE;
+  }, [searchParams]);
+  const selectedRange =
+    DASHBOARD_RANGE_LOOKUP.get(selectedRangeKey) ??
+    DASHBOARD_RANGE_LOOKUP.get(DASHBOARD_RANGE)!;
+  const dashboardRangeDays = selectedRange.days;
+  const dashboardRangeLabel = selectedRange.label;
 
   const boardsQuery = useListBoardsApiV1BoardsGet<listBoardsApiV1BoardsGetResponse, ApiError>(
     { limit: 200 },
@@ -506,7 +547,7 @@ export default function DashboardPage() {
     ApiError
   >(
     {
-      range_key: DASHBOARD_RANGE,
+      range_key: selectedRangeKey,
     },
     {
       query: {
@@ -639,13 +680,15 @@ export default function DashboardPage() {
       gatewaySnapshots.flatMap((snapshot) => {
         if (snapshot.requestError) return [];
         const sourceLabel = snapshot.gatewayUrl || snapshot.boardName;
-        return toSessionSummaries(snapshot.sessions, snapshot.mainSession).map((session) => ({
-          ...session,
-          key: `${snapshot.gatewayId}:${session.key}`,
-          subtitle: `${sourceLabel} · ${session.subtitle}`,
-        }));
+        return toSessionSummaries(snapshot.sessions, snapshot.mainSession)
+          .map((session) => ({
+            ...session,
+            key: `${snapshot.gatewayId}:${session.key}`,
+            subtitle: `${sourceLabel} · ${session.subtitle}`,
+          }))
+          .filter((session) => showSystemSignals || !isSystemSession(session));
       }),
-    [gatewaySnapshots],
+    [gatewaySnapshots, showSystemSignals],
   );
 
   const activityEvents = useMemo(
@@ -666,7 +709,13 @@ export default function DashboardPage() {
     [activityEvents],
   );
 
-  const recentLogs = orderedActivityEvents.slice(0, 8);
+  const recentLogs = useMemo(
+    () =>
+      orderedActivityEvents
+        .filter((event) => showSystemSignals || !isSystemActivityEvent(event))
+        .slice(0, 8),
+    [orderedActivityEvents, showSystemSignals],
+  );
 
   const latestThroughputPoint =
     metrics?.throughput.primary.points?.[metrics.throughput.primary.points.length - 1] ?? null;
@@ -708,7 +757,9 @@ export default function DashboardPage() {
     (sum, snapshot) => sum + Math.max(0, snapshot.sessionsCount),
     0,
   );
-  const activeSessions = Math.max(countedSessions, sessionSummaries.length);
+  const activeSessions = showSystemSignals
+    ? Math.max(countedSessions, sessionSummaries.length)
+    : sessionSummaries.length;
 
   const gatewayStatusLabel = !hasConfiguredGateways
     ? "Not configured"
@@ -768,7 +819,7 @@ export default function DashboardPage() {
       label: "Completed tasks",
       value: formatCount(throughputTotal),
     },
-    { label: "Average throughput", value: formatPerDay(throughputTotal, DASHBOARD_RANGE_DAYS) },
+    { label: "Average throughput", value: formatPerDay(throughputTotal, dashboardRangeDays) },
     {
       label: "Error rate",
       value: formatPercent(errorRateMetric),
@@ -777,7 +828,7 @@ export default function DashboardPage() {
     {
       label: "Completion consistency",
       value: `${formatCount(completionDaysCount)} active days`,
-      tone: completionDaysCount >= Math.ceil(DASHBOARD_RANGE_DAYS * 0.75) ? "success" : "default",
+      tone: completionDaysCount >= Math.ceil(dashboardRangeDays * 0.75) ? "success" : "default",
     },
     {
       label: "Review backlog ratio",
@@ -900,10 +951,10 @@ export default function DashboardPage() {
       </SignedOut>
       <SignedIn>
         <DashboardSidebar />
-        <main className="flex-1 overflow-y-auto bg-slate-50">
+        <main className="flex-1 overflow-y-auto bg-app">
           <div className="p-4 md:p-8">
             {metricsQuery.error ? (
-              <div className="mb-4 rounded-lg border border-rose-300 bg-rose-50 p-3 text-sm text-rose-700">
+              <div className="mb-4 rounded-lg border border-rose-500/30 bg-rose-500/10 p-3 text-sm text-rose-700 dark:text-rose-400">
                 Load failed: {metricsQuery.error.message}
               </div>
             ) : null}
@@ -932,13 +983,106 @@ export default function DashboardPage() {
               />
               <TopMetricCard
                 title="Completion Speed"
-                value={formatPerDay(throughputTotal, DASHBOARD_RANGE_DAYS)}
+                value={formatPerDay(throughputTotal, dashboardRangeDays)}
                 secondary={`${formatCount(throughputTotal)} completed`}
-                infoText={`Based on ${DASHBOARD_RANGE_LABEL}`}
+                infoText={`Based on ${dashboardRangeLabel}`}
                 icon={<Timer className="h-4 w-4" />}
                 accent="emerald"
               />
             </div>
+
+            <section className="mt-4 rounded-xl border border-[color:var(--border)] bg-[color:var(--surface)] p-4 shadow-sm">
+              <div className="flex flex-col gap-3 lg:flex-row lg:items-center lg:justify-between">
+                <div>
+                  <p className="text-xs font-semibold uppercase tracking-[0.24em] text-quiet">
+                    Mission hub
+                  </p>
+                  <h2 className="mt-1 text-lg font-semibold text-strong">
+                    Jump into planning, docs, team, and execution
+                  </h2>
+                  <p className="mt-1 text-sm text-muted">
+                    A single control-center row inspired by the product-hub workflow.
+                  </p>
+                </div>
+              </div>
+              <div className="mt-4 grid gap-3 md:grid-cols-2 xl:grid-cols-4">
+                {[
+                  {
+                    href: "/products",
+                    title: "Products",
+                    description: "Start or refine a product workspace and planner thread.",
+                    icon: <Bot className="h-4 w-4 text-cyan-200" />,
+                  },
+                  {
+                    href: "/docs",
+                    title: "Docs",
+                    description: "Review product briefs, plans, and execution-ready artifacts.",
+                    icon: <FileText className="h-4 w-4 text-cyan-200" />,
+                  },
+                  {
+                    href: "/team",
+                    title: "Team",
+                    description: "See your active agents, model assignments, and status reasons.",
+                    icon: <Users className="h-4 w-4 text-cyan-200" />,
+                  },
+                  {
+                    href: "/boards",
+                    title: "Execution boards",
+                    description: "Move from planning into the main operator board and delivery flow.",
+                    icon: <LayoutGrid className="h-4 w-4 text-cyan-200" />,
+                  },
+                ].map((item) => (
+                  <Link
+                    key={item.href}
+                    href={item.href}
+                    className="rounded-2xl border border-[color:var(--border)] bg-[color:var(--surface-muted)] p-4 transition hover:border-cyan-500/30 hover:bg-[color:var(--surface)]"
+                  >
+                    <div className="flex items-center gap-2 text-sm font-semibold text-strong">
+                      {item.icon}
+                      {item.title}
+                    </div>
+                    <p className="mt-3 text-sm leading-6 text-muted">{item.description}</p>
+                  </Link>
+                ))}
+              </div>
+            </section>
+
+            <section className="mt-4 rounded-xl border border-[color:var(--border)] bg-[color:var(--surface)] p-4 shadow-sm">
+              <div className="flex flex-col gap-3 lg:flex-row lg:items-center lg:justify-between">
+                <div>
+                  <p className="text-xs font-semibold uppercase tracking-[0.24em] text-quiet">
+                    Insight window
+                  </p>
+                  <h2 className="mt-1 text-lg font-semibold text-strong">
+                    {dashboardRangeLabel}
+                  </h2>
+                  <p className="mt-1 text-sm text-muted">
+                    Recalculate KPIs, charts, and backlog pressure for a specific period.
+                  </p>
+                </div>
+                <div className="flex flex-wrap gap-2">
+                  {DASHBOARD_RANGE_OPTIONS.map((option) => {
+                    const active = option.key === selectedRangeKey;
+                    return (
+                      <Button
+                        key={option.key}
+                        type="button"
+                        variant={active ? "primary" : "outline"}
+                        size="sm"
+                        className={cn("min-w-14", active && "shadow-sm")}
+                        onClick={() => {
+                          const params = new URLSearchParams(searchParams.toString());
+                          params.set("range", option.key);
+                          router.replace(`/dashboard?${params.toString()}`);
+                        }}
+                      >
+                        {option.shortLabel}
+                      </Button>
+                    );
+                  })}
+                </div>
+              </div>
+            </section>
 
             <div className="mt-4 grid grid-cols-1 gap-4 xl:grid-cols-3">
               <InfoBlock
@@ -947,7 +1091,7 @@ export default function DashboardPage() {
               />
               <InfoBlock
                 title="Throughput"
-                infoText={`All throughput values are calculated for ${DASHBOARD_RANGE_LABEL}`}
+                infoText={`All throughput values are calculated for ${dashboardRangeLabel}`}
                 rows={throughputRows}
               />
               <InfoBlock
@@ -960,12 +1104,29 @@ export default function DashboardPage() {
               />
             </div>
 
-            <section className="mt-4 rounded-xl border border-slate-200 bg-white p-4 md:p-6 shadow-sm">
+            {/* Charts row */}
+            {metrics ? (
+              <div className="mt-4 grid grid-cols-1 gap-4 xl:grid-cols-2">
+                <section className="rounded-xl border border-[color:var(--border)] bg-[color:var(--surface)] p-4 md:p-6 shadow-sm">
+                  <h3 className="mb-3 text-lg font-semibold text-strong">Throughput</h3>
+                  <ThroughputChart
+                    primary={metrics.throughput.primary.points}
+                    comparison={metrics.throughput.comparison.points}
+                  />
+                </section>
+                <section className="rounded-xl border border-[color:var(--border)] bg-[color:var(--surface)] p-4 md:p-6 shadow-sm">
+                  <h3 className="mb-3 text-lg font-semibold text-strong">Work in Progress</h3>
+                  <WipChart points={metrics.wip.primary.points} />
+                </section>
+              </div>
+            ) : null}
+
+            <section className="mt-4 rounded-xl border border-[color:var(--border)] bg-[color:var(--surface)] p-4 md:p-6 shadow-sm">
               <div className="mb-3 flex items-center justify-between gap-3">
-                <h3 className="text-lg font-semibold text-slate-900">Pending Approvals</h3>
+                <h3 className="text-lg font-semibold text-strong">Pending Approvals</h3>
                 <Link
                   href="/approvals"
-                  className="inline-flex items-center gap-1 text-xs text-slate-500 transition hover:text-slate-700"
+                  className="inline-flex items-center gap-1 text-xs text-muted transition hover:text-strong"
                 >
                   Open global approvals
                   <ArrowUpRight className="h-3.5 w-3.5" />
@@ -973,69 +1134,89 @@ export default function DashboardPage() {
               </div>
 
               {!metrics && metricsQuery.isLoading ? (
-                <div className="rounded-lg border border-slate-200 bg-slate-50 p-3 text-sm text-slate-500">
+                <div className="rounded-lg border border-[color:var(--border)] bg-[color:var(--surface-muted)] p-3 text-sm text-muted">
                   Loading pending approvals...
                 </div>
               ) : !metrics && metricsQuery.error ? (
-                <div className="rounded-lg border border-amber-300 bg-amber-50 p-3 text-sm text-amber-800">
+                <div className="rounded-lg border border-amber-500/30 bg-amber-500/10 p-3 text-sm text-amber-700 dark:text-amber-400">
                   Pending approvals are temporarily unavailable.
                 </div>
               ) : hasPendingApprovals ? (
                 <div className="space-y-2">
-                  <div className="divide-y divide-slate-100 rounded-lg border border-slate-200 bg-white">
+                  <div className="divide-y divide-[color:var(--border)] rounded-lg border border-[color:var(--border)] bg-[color:var(--surface)]">
                     {pendingApprovalItems.map((item) => (
                       <Link
                         key={item.approval_id}
                         href={`/boards/${item.board_id}/approvals`}
-                        className="flex items-center justify-between gap-3 px-3 py-2 transition hover:bg-slate-50"
+                        className="flex items-center justify-between gap-3 px-3 py-2 transition hover:bg-[color:var(--surface-muted)]"
                       >
-                        <span className="min-w-0 text-sm text-slate-700">
-                          <span className="block truncate font-medium text-slate-800">
+                        <span className="min-w-0 text-sm text-strong">
+                          <span className="block truncate font-medium text-strong">
                             {item.task_title || "Pending approval"}
                           </span>
-                          <span className="block truncate text-xs text-slate-500">
+                          <span className="block truncate text-xs text-muted">
                             {item.board_name} · {item.confidence}% score
                           </span>
                         </span>
-                        <span className="shrink-0 text-xs text-slate-500">
+                        <span className="shrink-0 text-xs text-muted">
                           {formatRelativeTimestamp(item.created_at)}
                         </span>
                       </Link>
                     ))}
                   </div>
                   {pendingApprovalsTotal > pendingApprovalItems.length ? (
-                    <p className="text-xs text-slate-500">
+                    <p className="text-xs text-muted">
                       Showing latest {formatCount(pendingApprovalItems.length)} of{" "}
                       {formatCount(pendingApprovalsTotal)} pending approvals.
                     </p>
                   ) : null}
                 </div>
               ) : (
-                <div className="rounded-lg border border-emerald-200 bg-emerald-50 p-3 text-sm text-emerald-700">
+                <div className="rounded-lg border border-emerald-500/30 bg-emerald-500/10 p-3 text-sm text-emerald-700 dark:text-emerald-400">
                   No pending approvals across your boards.
                 </div>
               )}
             </section>
 
             <div className="mt-4 grid grid-cols-1 gap-4 md:grid-cols-2">
-              <section className="min-w-0 overflow-hidden rounded-xl border border-slate-200 bg-white p-4 md:p-6 shadow-sm">
+              <section className="min-w-0 overflow-hidden rounded-xl border border-[color:var(--border)] bg-[color:var(--surface)] p-4 md:p-6 shadow-sm">
                 <div className="mb-3 flex items-center justify-between gap-3">
-                  <h3 className="text-lg font-semibold text-slate-900">Sessions</h3>
-                  <span className="text-xs text-slate-500">{formatCount(activeSessions)}</span>
+                  <div>
+                    <h3 className="text-lg font-semibold text-strong">Sessions</h3>
+                    <p className="text-xs text-muted">
+                      {showSystemSignals
+                        ? "Showing runtime and system sessions."
+                        : "System heartbeat sessions are hidden by default."}
+                    </p>
+                  </div>
+                  <div className="flex items-center gap-3">
+                    <label className="inline-flex items-center gap-2 text-xs text-muted">
+                      <input
+                        type="checkbox"
+                        className="h-4 w-4 rounded border-[color:var(--border)]"
+                        checked={showSystemSignals}
+                        onChange={(event) =>
+                          setShowSystemSignals(event.target.checked)
+                        }
+                      />
+                      Show system
+                    </label>
+                    <span className="text-xs text-muted">{formatCount(activeSessions)}</span>
+                  </div>
                 </div>
                 <div className="max-h-[310px] space-y-2 overflow-x-hidden overflow-y-auto pr-1">
                   {!hasConfiguredGateways ? (
-                    <div className="rounded-lg border border-slate-200 bg-slate-50 p-3 text-sm text-slate-500">
+                    <div className="rounded-lg border border-[color:var(--border)] bg-[color:var(--surface-muted)] p-3 text-sm text-muted">
                       No gateways are configured for any board yet.
                     </div>
                   ) : gatewayStatusesQuery.isLoading ? (
-                    <div className="rounded-lg border border-slate-200 bg-slate-50 p-3 text-sm text-slate-500">
+                    <div className="rounded-lg border border-[color:var(--border)] bg-[color:var(--surface-muted)] p-3 text-sm text-muted">
                       Loading sessions...
                     </div>
                   ) : sessionSummaries.length > 0 ? (
                     <>
                       {gatewayUnavailableCount > 0 ? (
-                        <div className="rounded-lg border border-amber-300 bg-amber-50 p-3 text-sm text-amber-800">
+                        <div className="rounded-lg border border-amber-500/30 bg-amber-500/10 p-3 text-sm text-amber-700 dark:text-amber-400">
                           {formatCount(gatewayUnavailableCount)} gateway
                           {gatewayUnavailableCount === 1 ? "" : "s"} unavailable; showing sessions
                           from reachable gateways.
@@ -1044,25 +1225,25 @@ export default function DashboardPage() {
                       {sessionSummaries.map((session) => (
                         <div
                           key={session.key}
-                          className="overflow-hidden rounded-lg border border-slate-200 bg-white px-3 py-2"
+                          className="overflow-hidden rounded-lg border border-[color:var(--border)] bg-[color:var(--surface)] px-3 py-2"
                         >
                           <div className="flex items-center justify-between gap-3">
                             <div className="min-w-0 flex-1">
-                              <p className="truncate text-sm font-medium text-slate-900">
+                              <p className="truncate text-sm font-medium text-strong">
                                 <span
                                   className={`mr-2 inline-block h-2 w-2 rounded-full ${
-                                    session.isMain ? "bg-emerald-500" : "bg-slate-400"
+                                    session.isMain ? "bg-emerald-500" : "bg-[color:var(--quiet)]"
                                   }`}
                                 />
                                 {session.title}
                               </p>
-                              <p className="mt-0.5 truncate text-xs text-slate-500">{session.subtitle}</p>
+                              <p className="mt-0.5 truncate text-xs text-muted">{session.subtitle}</p>
                             </div>
                             <div className="min-w-0 max-w-[45%] text-right">
-                              <p className="truncate text-xs font-medium text-slate-700">
+                              <p className="truncate text-xs font-medium text-strong">
                                 {session.usage === DASH ? "Usage unavailable" : session.usage}
                               </p>
-                              <p className="text-[11px] text-slate-500">
+                              <p className="text-[11px] text-muted">
                                 {session.lastSeenAt
                                   ? formatRelativeTimestamp(session.lastSeenAt)
                                   : "Activity unavailable"}
@@ -1073,23 +1254,30 @@ export default function DashboardPage() {
                       ))}
                     </>
                   ) : gatewayUnavailableCount === gatewayTargets.length ? (
-                    <div className="rounded-lg border border-rose-300 bg-rose-50 p-3 text-sm text-rose-700">
+                    <div className="rounded-lg border border-rose-500/30 bg-rose-500/10 p-3 text-sm text-rose-700 dark:text-rose-400">
                       Session data is unavailable for all configured gateways.
                     </div>
                   ) : (
-                    <div className="rounded-lg border border-slate-200 bg-slate-50 p-3 text-sm text-slate-500">
+                    <div className="rounded-lg border border-[color:var(--border)] bg-[color:var(--surface-muted)] p-3 text-sm text-muted">
                       No active sessions detected.
                     </div>
                   )}
                 </div>
               </section>
 
-              <section className="min-w-0 overflow-hidden rounded-xl border border-slate-200 bg-white p-4 md:p-6 shadow-sm">
+              <section className="min-w-0 overflow-hidden rounded-xl border border-[color:var(--border)] bg-[color:var(--surface)] p-4 md:p-6 shadow-sm">
                 <div className="mb-3 flex items-center justify-between gap-3">
-                  <h3 className="text-lg font-semibold text-slate-900">Recent Activity</h3>
+                  <div>
+                    <h3 className="text-lg font-semibold text-strong">Recent Activity</h3>
+                    <p className="text-xs text-muted">
+                      {showSystemSignals
+                        ? "Showing workflow and system activity."
+                        : "System wake/heartbeat noise is hidden by default."}
+                    </p>
+                  </div>
                   <Link
                     href={activityFeedHref}
-                    className="inline-flex items-center gap-1 text-xs text-slate-500 transition hover:text-slate-700"
+                    className="inline-flex items-center gap-1 text-xs text-muted transition hover:text-strong"
                   >
                     Open feed
                     <ArrowUpRight className="h-3.5 w-3.5" />
@@ -1111,21 +1299,21 @@ export default function DashboardPage() {
                           onKeyDown={(interactionEvent) =>
                             handleLogRowKeyDown(interactionEvent, eventHref)
                           }
-                          className="cursor-pointer overflow-hidden rounded-lg border border-slate-200 bg-white px-3 py-2 transition hover:border-slate-300 focus-visible:border-slate-400 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-slate-300"
+                          className="cursor-pointer overflow-hidden rounded-lg border border-[color:var(--border)] bg-[color:var(--surface)] px-3 py-2 transition hover:border-[color:var(--accent)] focus-visible:border-[color:var(--accent)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[color:var(--accent)]/30"
                         >
                           <div className="flex items-start justify-between gap-3">
                             <div className="min-w-0 flex-1 overflow-hidden">
-                              <div className="break-words text-sm font-medium text-slate-900 [&_ol]:mb-0 [&_p]:mb-0 [&_pre]:my-1 [&_pre]:max-w-full [&_pre]:overflow-x-auto [&_ul]:mb-0">
+                              <div className="break-words text-sm font-medium text-strong [&_ol]:mb-0 [&_p]:mb-0 [&_pre]:my-1 [&_pre]:max-w-full [&_pre]:overflow-x-auto [&_ul]:mb-0">
                                 <Markdown
                                   content={event.message?.trim() || event.event_type}
                                   variant="comment"
                                 />
                               </div>
-                              <p className="mt-0.5 text-xs uppercase tracking-wider text-slate-500">
+                              <p className="mt-0.5 text-xs uppercase tracking-wider text-muted">
                                 {event.event_type}
                               </p>
                             </div>
-                            <div className="shrink-0 text-right text-[11px] text-slate-500">
+                            <div className="shrink-0 text-right text-[11px] text-muted">
                               <p>{formatRelativeTimestamp(event.created_at)}</p>
                               <p>{formatTimestamp(event.created_at)}</p>
                             </div>
@@ -1134,10 +1322,10 @@ export default function DashboardPage() {
                       );
                     })
                   ) : (
-                    <div className="flex h-[240px] flex-col items-center justify-center rounded-lg border border-slate-200 bg-white text-sm text-slate-500">
-                      <Shield className="mb-2 h-5 w-5 text-slate-400" />
+                    <div className="flex h-[240px] flex-col items-center justify-center rounded-lg border border-[color:var(--border)] bg-[color:var(--surface)] text-sm text-muted">
+                      <Shield className="mb-2 h-5 w-5 text-quiet" />
                       No activity yet
-                      <p className="mt-1 text-xs text-slate-500">Activity appears here when events are emitted.</p>
+                      <p className="mt-1 text-xs text-muted">Activity appears here when events are emitted.</p>
                     </div>
                   )}
                 </div>

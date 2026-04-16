@@ -1,4 +1,8 @@
-import { getLocalAuthToken, isLocalAuthMode } from "@/auth/localAuth";
+import {
+  clearLocalAuthToken,
+  getLocalAuthToken,
+  isLocalAuthMode,
+} from "@/auth/localAuth";
 import { getApiBaseUrl } from "@/lib/api-base";
 
 type ClerkSession = {
@@ -20,6 +24,21 @@ export class ApiError<TData = unknown> extends Error {
     this.data = data;
   }
 }
+
+const handleLocalAuthFailure = (status: number) => {
+  if (!isLocalAuthMode()) return;
+  if (typeof window === "undefined") return;
+  if (status !== 401 && status !== 403) return;
+
+  clearLocalAuthToken();
+  const nextPath = `${window.location.pathname}${window.location.search}`;
+  const signInUrl = new URL("/sign-in", window.location.origin);
+  signInUrl.searchParams.set("reason", "session-expired");
+  if (nextPath && nextPath !== "/sign-in") {
+    signInUrl.searchParams.set("next", nextPath);
+  }
+  window.location.replace(signInUrl.toString());
+};
 
 const resolveClerkToken = async (): Promise<string | null> => {
   if (typeof window === "undefined") {
@@ -66,6 +85,8 @@ export const customFetch = async <T>(
   });
 
   if (!response.ok) {
+    handleLocalAuthFailure(response.status);
+
     const contentType = response.headers.get("content-type") ?? "";
     let errorData: unknown = null;
     const isJson =

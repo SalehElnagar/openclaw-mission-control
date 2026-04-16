@@ -33,6 +33,7 @@ router = APIRouter(prefix="/agents", tags=["agents"])
 BOARD_ID_QUERY = Query(default=None)
 GATEWAY_ID_QUERY = Query(default=None)
 SINCE_QUERY = Query(default=None)
+INCLUDE_HIDDEN_QUERY = Query(default=False)
 SESSION_DEP = Depends(get_session)
 ORG_ADMIN_DEP = Depends(require_org_admin)
 ACTOR_DEP = Depends(require_user_or_agent)
@@ -62,6 +63,7 @@ AGENT_UPDATE_PARAMS_DEP = Depends(_agent_update_params)
 async def list_agents(
     board_id: UUID | None = BOARD_ID_QUERY,
     gateway_id: UUID | None = GATEWAY_ID_QUERY,
+    include_hidden: bool = INCLUDE_HIDDEN_QUERY,
     session: AsyncSession = SESSION_DEP,
     ctx: OrganizationContext = ORG_ADMIN_DEP,
 ) -> LimitOffsetPage[AgentRead]:
@@ -70,6 +72,7 @@ async def list_agents(
     return await service.list_agents(
         board_id=board_id,
         gateway_id=gateway_id,
+        include_hidden=include_hidden,
         ctx=ctx,
     )
 
