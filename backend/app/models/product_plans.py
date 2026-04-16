@@ -42,7 +42,9 @@ class ProductPlan(QueryModel, table=True):
     proposed_services: list[dict[str, object]] | None = Field(default=None, sa_column=Column(JSON))
     initial_epics: list[dict[str, object]] | None = Field(default=None, sa_column=Column(JSON))
     role_assignments: dict[str, object] | None = Field(default=None, sa_column=Column(JSON))
-    model_recommendations: list[dict[str, object]] | None = Field(default=None, sa_column=Column(JSON))
+    model_recommendations: list[dict[str, object]] | None = Field(
+        default=None, sa_column=Column(JSON)
+    )
     estimated_daily_budget_usd: float | None = None
     estimated_total_budget_usd: float | None = None
     budget_posture: str | None = None

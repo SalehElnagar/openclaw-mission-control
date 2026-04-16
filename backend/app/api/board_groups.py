@@ -241,7 +241,11 @@ def _update_agent_heartbeat(
     payload: BoardGroupHeartbeatApply,
 ) -> None:
     raw = agent.heartbeat_config if isinstance(agent.heartbeat_config, dict) else None
-    active_every = payload.every if payload.every.strip().lower() not in {"0", "0m", "0s", "0h", "0d"} else None
+    active_every = (
+        payload.every
+        if payload.every.strip().lower() not in {"0", "0m", "0s", "0h", "0d"}
+        else None
+    )
     agent.heartbeat_config = merge_heartbeat_config(
         raw,
         every=payload.every,

@@ -264,10 +264,7 @@ async def _recent_activity(
             .limit(limit),
         ),
     )
-    return [
-        ActivityEventRead.model_validate(item, from_attributes=True)
-        for item in rows
-    ]
+    return [ActivityEventRead.model_validate(item, from_attributes=True) for item in rows]
 
 
 def _memory_priority(tags: list[str] | None) -> tuple[int, int]:
@@ -305,10 +302,7 @@ async def _memory_preview(
         rows,
         key=lambda item: (_memory_priority(item.tags), -item.created_at.timestamp()),
     )[:limit]
-    return [
-        BoardGroupMemoryRead.model_validate(item, from_attributes=True)
-        for item in prioritized
-    ]
+    return [BoardGroupMemoryRead.model_validate(item, from_attributes=True) for item in prioritized]
 
 
 def _agenda_bucket(

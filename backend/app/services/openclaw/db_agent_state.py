@@ -44,7 +44,9 @@ def mark_provision_requested(
 def mark_provision_complete(
     agent: Agent,
     *,
-    status: Literal["online", "standby", "offline", "provisioning", "updating", "deleting"] = "online",
+    status: Literal[
+        "online", "standby", "offline", "provisioning", "updating", "deleting"
+    ] = "online",
     clear_confirm_token: bool = False,
 ) -> None:
     """Clear provisioning fields after a successful gateway lifecycle run."""

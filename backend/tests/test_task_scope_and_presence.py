@@ -859,7 +859,9 @@ async def test_scope_mentions_resolve_same_group_agents() -> None:
                 title="Security validation",
                 assigned_agent_id=security.id,
             )
-            session.add_all([org, gateway, group, requirements, security_board, lead, security, task])
+            session.add_all(
+                [org, gateway, group, requirements, security_board, lead, security, task]
+            )
             await session.commit()
 
             targets, mentions = await tasks_api_module._comment_targets(
@@ -934,7 +936,9 @@ async def test_lead_review_comment_targets_last_worker() -> None:
                 status="review",
                 assigned_agent_id=lead.id,
             )
-            session.add_all([org, gateway, group, requirements, implementation, lead, builder, task])
+            session.add_all(
+                [org, gateway, group, requirements, implementation, lead, builder, task]
+            )
             await session.commit()
 
             session.add(

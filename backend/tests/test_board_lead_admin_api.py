@@ -83,7 +83,9 @@ async def test_ensure_board_lead_is_idempotent_and_normalizes_defaults(
                 url="ws://127.0.0.1:18789",
                 workspace_root="/tmp/openclaw-workspaces",
                 default_model_profile="general",
-                model_profiles={"general": {"primary_model": "openai/gpt-5.4", "fallback_models": []}},
+                model_profiles={
+                    "general": {"primary_model": "openai/gpt-5.4", "fallback_models": []}
+                },
             )
             board = Board(
                 id=uuid4(),
@@ -178,7 +180,9 @@ async def test_ensure_board_lead_is_idempotent_and_normalizes_defaults(
         async with session_maker() as verify_session:
             leads = (
                 await verify_session.exec(
-                    select(Agent).where(Agent.board_id == board.id).where(Agent.is_board_lead.is_(True))
+                    select(Agent)
+                    .where(Agent.board_id == board.id)
+                    .where(Agent.is_board_lead.is_(True))
                 )
             ).all()
 

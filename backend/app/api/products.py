@@ -328,7 +328,4 @@ async def list_product_services(
         .order_by(col(BoardGroup.updated_at).desc(), col(BoardGroup.created_at).desc())
     )
     groups = list(await session.exec(statement))
-    return [
-        BoardGroupRead.model_validate(group.model_dump())
-        for group in groups
-    ]
+    return [BoardGroupRead.model_validate(group.model_dump()) for group in groups]

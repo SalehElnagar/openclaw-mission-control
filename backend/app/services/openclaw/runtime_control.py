@@ -29,6 +29,7 @@ from app.services.openclaw.db_service import OpenClawDBService
 from app.services.openclaw.gateway_rpc import GatewayConfig as GatewayClientConfig
 from app.services.openclaw.gateway_rpc import OpenClawGatewayError, openclaw_call
 from app.services.openclaw.internal.agent_key import agent_key as runtime_agent_id
+from app.services.openclaw.internal.retry import GatewayBackoff
 from app.services.openclaw.lifecycle_orchestrator import AgentLifecycleOrchestrator
 from app.services.openclaw.provisioning import OpenClawGatewayControlPlane
 from app.services.openclaw.shared import GatewayAgentIdentity
@@ -233,6 +234,26 @@ def _available_model_refs(payload: object) -> list[str]:
     return refs
 
 
+def _is_transient_runtime_patch_error(exc: OpenClawGatewayError) -> bool:
+    message = str(exc).lower()
+    if not message:
+        return False
+    return any(
+        marker in message
+        for marker in (
+            "did not receive a valid http response",
+            "connection refused",
+            "connection reset",
+            "connection closed",
+            "received 1012",
+            "service restart",
+            "temporar",
+            "timeout",
+            "timed out",
+        )
+    )
+
+
 def _config_declared_model_refs(config_data: dict[str, Any]) -> list[str]:
     refs: set[str] = set()
     models_section = config_data.get("models")
@@ -258,11 +279,7 @@ def _config_declared_model_refs(config_data: dict[str, Any]) -> list[str]:
             refs |= _model_refs_from_payload(defaults.get("model"))
             catalog = defaults.get("models")
             if isinstance(catalog, dict):
-                refs.update(
-                    key.strip()
-                    for key in catalog
-                    if isinstance(key, str) and key.strip()
-                )
+                refs.update(key.strip() for key in catalog if isinstance(key, str) and key.strip())
         for item in agents_section.get("list") or []:
             if not isinstance(item, dict):
                 continue
@@ -442,11 +459,7 @@ class GatewayRuntimeControlService(OpenClawDBService):
         )
 
     async def available_models(self, gateway: Gateway) -> list[str]:
-        return [
-            entry.ref
-            for entry in await self.runtime_catalog(gateway)
-            if entry.selectable
-        ]
+        return [entry.ref for entry in await self.runtime_catalog(gateway) if entry.selectable]
 
     async def _load_gateway_config(self, gateway: Gateway) -> tuple[str | None, dict[str, Any]]:
         payload = await openclaw_call("config.get", config=_gateway_client_config(gateway))
@@ -456,6 +469,21 @@ class GatewayRuntimeControlService(OpenClawDBService):
         if not isinstance(config_data, dict):
             raise OpenClawGatewayError("config.get returned invalid config")
         return payload.get("hash"), config_data
+
+    async def _load_gateway_config_with_retry(
+        self,
+        gateway: Gateway,
+        *,
+        context: str,
+    ) -> tuple[str | None, dict[str, Any]]:
+        backoff = GatewayBackoff(
+            timeout_s=45.0,
+            base_delay_s=0.5,
+            max_delay_s=5.0,
+            jitter=0.15,
+            timeout_context=context,
+        )
+        return await backoff.run(lambda: self._load_gateway_config(gateway))
 
     async def assert_model_policies_supported(
         self,
@@ -607,7 +635,10 @@ class GatewayRuntimeControlService(OpenClawDBService):
             if agents is not None
             else list(await Agent.objects.filter_by(gateway_id=gateway.id).all(self.session))
         )
-        _, config_data = await self._load_gateway_config(gateway)
+        _, config_data = await self._load_gateway_config_with_retry(
+            gateway,
+            context="gateway runtime sync bootstrap",
+        )
         agents_section = config_data.get("agents")
         if not isinstance(agents_section, dict):
             agents_section = {}
@@ -686,11 +717,57 @@ class GatewayRuntimeControlService(OpenClawDBService):
         if desired_default_payload is not None:
             patch["agents"]["defaults"]["model"] = desired_default_payload
 
-        base_hash, _ = await self._load_gateway_config(gateway)
+        base_hash, _ = await self._load_gateway_config_with_retry(
+            gateway,
+            context="gateway runtime sync base hash",
+        )
         params: dict[str, Any] = {"raw": json.dumps(patch)}
         if base_hash:
             params["baseHash"] = base_hash
-        await openclaw_call("config.patch", params, config=_gateway_client_config(gateway))
+        try:
+            await openclaw_call("config.patch", params, config=_gateway_client_config(gateway))
+        except OpenClawGatewayError as exc:
+            if not _is_transient_runtime_patch_error(exc):
+                raise
+            recovered_hash, recovered_config = await self._load_gateway_config_with_retry(
+                gateway,
+                context="gateway runtime sync recovery",
+            )
+            recovered_agents = recovered_config.get("agents")
+            recovered_defaults = (
+                recovered_agents.get("defaults") if isinstance(recovered_agents, dict) else {}
+            )
+            recovered_list = (
+                recovered_agents.get("list") if isinstance(recovered_agents, dict) else []
+            )
+            if (
+                recovered_list == updated_list
+                and isinstance(recovered_defaults, dict)
+                and recovered_defaults.get("models") == catalog
+                and (
+                    desired_default_payload is None
+                    or recovered_defaults.get("model") == desired_default_payload
+                )
+            ):
+                base_hash = recovered_hash
+            else:
+                retry_params: dict[str, Any] = {"raw": json.dumps(patch)}
+                if recovered_hash:
+                    retry_params["baseHash"] = recovered_hash
+                backoff = GatewayBackoff(
+                    timeout_s=45.0,
+                    base_delay_s=0.5,
+                    max_delay_s=5.0,
+                    jitter=0.15,
+                    timeout_context="gateway runtime sync patch retry",
+                )
+                await backoff.run(
+                    lambda: openclaw_call(
+                        "config.patch",
+                        retry_params,
+                        config=_gateway_client_config(gateway),
+                    )
+                )
 
         now = utcnow()
         gateway.runtime_sync_generation += 1

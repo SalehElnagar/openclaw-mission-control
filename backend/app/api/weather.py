@@ -95,7 +95,9 @@ async def _fetch_live_weather(client: httpx.AsyncClient) -> WeatherSourceRespons
         updated_at=updated_at,
         location=TORONTO_NAME,
         temperature_c=float(temperature),
-        windspeed_kph=(float(current["windspeed_10m"]) if current.get("windspeed_10m") is not None else None),
+        windspeed_kph=(
+            float(current["windspeed_10m"]) if current.get("windspeed_10m") is not None else None
+        ),
         weather_code=int(code) if code is not None else None,
         description=_WEATHER_CODE_LABELS.get(int(code)) if code is not None else None,
     )
@@ -127,7 +129,9 @@ def _cached_weather(now: float) -> WeatherSourceResponse | None:
 @router.get("/toronto", response_model=WeatherEnvelope, responses={502: {"model": WeatherError}})
 async def get_toronto_weather(
     _auth: object = AUTH_DEP,
-    use_fallback: bool = Query(default=False, description="Return the documented fallback without calling upstream."),
+    use_fallback: bool = Query(
+        default=False, description="Return the documented fallback without calling upstream."
+    ),
 ) -> WeatherEnvelope:
     """Return current weather conditions for Toronto."""
     now = datetime.now(timezone.utc).timestamp()

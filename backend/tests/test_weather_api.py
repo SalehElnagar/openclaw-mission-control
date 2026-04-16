@@ -51,7 +51,9 @@ async def test_toronto_weather_requires_auth(monkeypatch: pytest.MonkeyPatch) ->
     session_maker = async_sessionmaker(engine, class_=AsyncSession, expire_on_commit=False)
     app = _build_app(session_maker)
     try:
-        async with AsyncClient(transport=ASGITransport(app=app), base_url="http://testserver") as client:
+        async with AsyncClient(
+            transport=ASGITransport(app=app), base_url="http://testserver"
+        ) as client:
             response = await client.get("/api/v1/weather/toronto")
         assert response.status_code == 401
     finally:
@@ -119,7 +121,9 @@ async def test_toronto_weather_live_success(monkeypatch: pytest.MonkeyPatch) -> 
 
 
 @pytest.mark.asyncio
-async def test_toronto_weather_fallback_on_upstream_failure(monkeypatch: pytest.MonkeyPatch) -> None:
+async def test_toronto_weather_fallback_on_upstream_failure(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     monkeypatch.setattr(weather_module, "_weather_cache", None)
     unique_suffix = uuid4().hex
     monkeypatch.setattr(settings, "auth_mode", AuthMode.LOCAL)

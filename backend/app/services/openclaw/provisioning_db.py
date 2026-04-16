@@ -170,11 +170,7 @@ class OpenClawProvisioningService(OpenClawDBService):
         }
         if identity_profile:
             merged_identity_profile.update(
-                {
-                    key: value.strip()
-                    for key, value in identity_profile.items()
-                    if value.strip()
-                },
+                {key: value.strip() for key, value in identity_profile.items() if value.strip()},
             )
         return merged_identity_profile
 

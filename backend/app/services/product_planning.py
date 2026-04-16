@@ -485,10 +485,12 @@ class ProductPlanningService:
         gateway = await self.resolve_gateway(product=product)
         runtime_models, model_costs = await self._runtime_models_for_product(product=product)
         planner_agent = await self._ensure_planner_agent(product=product, gateway=gateway)
-        effective_mode, effective_model_override, override_applied = self._resolve_planner_preferences(
-            product=product,
-            planner_mode_override=planner_mode_override,
-            planner_model_override=planner_model_override,
+        effective_mode, effective_model_override, override_applied = (
+            self._resolve_planner_preferences(
+                product=product,
+                planner_mode_override=planner_mode_override,
+                planner_model_override=planner_model_override,
+            )
         )
         planner_model_ref, planner_reason = self._choose_planner_runtime(
             product=product,
@@ -624,10 +626,16 @@ class ProductPlanningService:
             "planner_agent_id": planner_agent.id,
             "planner_session_key": planner_session_key,
             "planner_model_ref": planner_model_ref,
-            "planner_status": existing.planner_status if existing and existing.planner_status else "awaiting-input",
-            "planner_status_reason": existing.planner_status_reason
-            if existing and existing.planner_status_reason
-            else "Planner reply is available, but the structured plan needs another sync pass.",
+            "planner_status": (
+                existing.planner_status
+                if existing and existing.planner_status
+                else "awaiting-input"
+            ),
+            "planner_status_reason": (
+                existing.planner_status_reason
+                if existing and existing.planner_status_reason
+                else "Planner reply is available, but the structured plan needs another sync pass."
+            ),
             "planner_last_escalation_reason": planner_reason,
             "plan_sync_status": "stale",
             "plan_sync_error": error,
@@ -753,21 +761,33 @@ class ProductPlanningService:
             "workflow",
             "marketplace",
         )
-        if any(marker in lowered for marker in security_markers) and PLANNER_SECURITY_MODEL in runtime_models:
-            return PLANNER_SECURITY_MODEL, "Escalated to security planner because the intake is security or compliance heavy."
         if (
-            PLANNER_ESCALATION_MODEL in runtime_models
-            and (
-                len(content) > 900
-                or sum(marker in lowered for marker in complexity_markers) >= 3
-                or "architecture" in lowered
-            )
+            any(marker in lowered for marker in security_markers)
+            and PLANNER_SECURITY_MODEL in runtime_models
         ):
-            return PLANNER_ESCALATION_MODEL, "Escalated to the stronger architecture planner for multi-slice product reasoning."
+            return (
+                PLANNER_SECURITY_MODEL,
+                "Escalated to security planner because the intake is security or compliance heavy.",
+            )
+        if PLANNER_ESCALATION_MODEL in runtime_models and (
+            len(content) > 900
+            or sum(marker in lowered for marker in complexity_markers) >= 3
+            or "architecture" in lowered
+        ):
+            return (
+                PLANNER_ESCALATION_MODEL,
+                "Escalated to the stronger architecture planner for multi-slice product reasoning.",
+            )
         if PLANNER_BASE_MODEL in runtime_models:
-            return PLANNER_BASE_MODEL, "Using the budget-aware planner model for normal intake and clarification."
+            return (
+                PLANNER_BASE_MODEL,
+                "Using the budget-aware planner model for normal intake and clarification.",
+            )
         if runtime_models:
-            return runtime_models[0], "Using the first verified runtime model because the preferred planner model is unavailable."
+            return (
+                runtime_models[0],
+                "Using the first verified runtime model because the preferred planner model is unavailable.",
+            )
         raise HTTPException(
             status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
             detail="No verified runtime models are available for product planning.",
@@ -910,7 +930,9 @@ class ProductPlanningService:
                         model = latest.get("model")
                         provider_text = provider.strip() if isinstance(provider, str) else ""
                         model_text = model.strip() if isinstance(model, str) else ""
-                        active_model_ref = "/".join(part for part in [provider_text, model_text] if part)
+                        active_model_ref = "/".join(
+                            part for part in [provider_text, model_text] if part
+                        )
                         return assistant_text, active_model_ref
             await asyncio.sleep(2)
         msg = "Planner did not finish with a usable assistant reply before the timeout."
@@ -953,7 +975,9 @@ class ProductPlanningService:
             "scope": existing.scope if existing else None,
             "exclusions": existing.exclusions if existing else None,
             "missing_questions": _json_list(existing.missing_questions) if existing else [],
-            "unresolved_question_keys": _json_list(existing.unresolved_question_keys) if existing else [],
+            "unresolved_question_keys": (
+                _json_list(existing.unresolved_question_keys) if existing else []
+            ),
             "proposed_services": _json_list(existing.proposed_services) if existing else [],
             "initial_epics": _json_list(existing.initial_epics) if existing else [],
             "budget_posture": existing.budget_posture if existing else None,
@@ -996,7 +1020,9 @@ class ProductPlanningService:
         budget_policy = product_budget_policy(product)
         transcript = [
             {"role": message.role, "content": message.content}
-            for message in (await self.list_messages(product_id=product.id))[-PLANNER_SYNC_MESSAGE_LIMIT:]
+            for message in (await self.list_messages(product_id=product.id))[
+                -PLANNER_SYNC_MESSAGE_LIMIT:
+            ]
         ]
         current_state = {
             "objective": existing.objective if existing else None,
@@ -1004,7 +1030,9 @@ class ProductPlanningService:
             "scope": existing.scope if existing else None,
             "exclusions": existing.exclusions if existing else None,
             "missing_questions": _json_list(existing.missing_questions) if existing else [],
-            "unresolved_question_keys": _json_list(existing.unresolved_question_keys) if existing else [],
+            "unresolved_question_keys": (
+                _json_list(existing.unresolved_question_keys) if existing else []
+            ),
             "proposed_services": _json_list(existing.proposed_services) if existing else [],
             "initial_epics": _json_list(existing.initial_epics) if existing else [],
             "budget_posture": existing.budget_posture if existing else None,
@@ -1039,7 +1067,12 @@ class ProductPlanningService:
                     "service_slug": "string|null",
                 }
             ],
-            "role_assignments": {"Lead": "string", "Builder": "string", "Reviewer": "string", "Security": "string"},
+            "role_assignments": {
+                "Lead": "string",
+                "Builder": "string",
+                "Reviewer": "string",
+                "Security": "string",
+            },
             "model_recommendations": [
                 {
                     "slice": "intake-orchestration|implementation|review|security-review",
@@ -1085,25 +1118,51 @@ class ProductPlanningService:
     ) -> ProductPlan:
         budget_policy = product_budget_policy(product)
         objective = _strip_markers(
-            str(planner_payload.get("objective") or (existing.objective if existing else "") or product.description or product.name)
+            str(
+                planner_payload.get("objective")
+                or (existing.objective if existing else "")
+                or product.description
+                or product.name
+            )
         )
-        target_audience = _strip_markers(
-            str(planner_payload.get("target_audience") or (existing.target_audience if existing else "") or "")
-        ) or None
-        scope = _strip_markers(
-            str(planner_payload.get("scope") or (existing.scope if existing else "") or "")
-        ) or None
-        exclusions = _strip_markers(
-            str(planner_payload.get("exclusions") or (existing.exclusions if existing else "") or "")
-        ) or None
+        target_audience = (
+            _strip_markers(
+                str(
+                    planner_payload.get("target_audience")
+                    or (existing.target_audience if existing else "")
+                    or ""
+                )
+            )
+            or None
+        )
+        scope = (
+            _strip_markers(
+                str(planner_payload.get("scope") or (existing.scope if existing else "") or "")
+            )
+            or None
+        )
+        exclusions = (
+            _strip_markers(
+                str(
+                    planner_payload.get("exclusions")
+                    or (existing.exclusions if existing else "")
+                    or ""
+                )
+            )
+            or None
+        )
 
-        missing_questions, unresolved_keys = _normalize_missing_question_entries(planner_payload.get("missing_questions"))
+        missing_questions, unresolved_keys = _normalize_missing_question_entries(
+            planner_payload.get("missing_questions")
+        )
         if not missing_questions:
             if not target_audience:
                 missing_questions.append("Who is the primary user or buyer for this product?")
                 unresolved_keys.append("target_audience")
             if not scope:
-                missing_questions.append("What is the smallest useful v1 outcome Mission Control should deliver first?")
+                missing_questions.append(
+                    "What is the smallest useful v1 outcome Mission Control should deliver first?"
+                )
                 unresolved_keys.append("scope")
             if not exclusions:
                 missing_questions.append("What is explicitly out of scope for the first release?")
@@ -1127,8 +1186,12 @@ class ProductPlanningService:
             fallback_optimize_for=budget_policy.optimize_for,
             model_costs=model_costs,
         )
-        estimated_daily_budget_usd = _normalize_float(planner_payload.get("estimated_daily_budget_usd"))
-        estimated_total_budget_usd = _normalize_float(planner_payload.get("estimated_total_budget_usd"))
+        estimated_daily_budget_usd = _normalize_float(
+            planner_payload.get("estimated_daily_budget_usd")
+        )
+        estimated_total_budget_usd = _normalize_float(
+            planner_payload.get("estimated_total_budget_usd")
+        )
         if estimated_daily_budget_usd is None or estimated_total_budget_usd is None:
             estimated_daily_budget_usd, estimated_total_budget_usd = self._estimate_budget(
                 service_count=len(proposed_services),
@@ -1139,24 +1202,33 @@ class ProductPlanningService:
 
         budget_posture = str(planner_payload.get("budget_posture") or "").strip() or "within-budget"
         budget_warnings = _normalize_string_list(planner_payload.get("budget_warnings"))
-        if budget_policy.daily_budget_cap_usd is None and budget_policy.total_budget_cap_usd is None:
+        if (
+            budget_policy.daily_budget_cap_usd is None
+            and budget_policy.total_budget_cap_usd is None
+        ):
             budget_posture = "no-budget-cap"
         if (
             budget_policy.daily_budget_cap_usd is not None
             and estimated_daily_budget_usd > budget_policy.daily_budget_cap_usd
-            and "Projected daily burn exceeds the configured daily budget cap." not in budget_warnings
+            and "Projected daily burn exceeds the configured daily budget cap."
+            not in budget_warnings
         ):
             budget_posture = "over-daily-budget"
             budget_warnings.append("Projected daily burn exceeds the configured daily budget cap.")
         if (
             budget_policy.total_budget_cap_usd is not None
             and estimated_total_budget_usd > budget_policy.total_budget_cap_usd
-            and "Projected total spend exceeds the configured initiative budget cap." not in budget_warnings
+            and "Projected total spend exceeds the configured initiative budget cap."
+            not in budget_warnings
         ):
             budget_posture = "over-total-budget"
-            budget_warnings.append("Projected total spend exceeds the configured initiative budget cap.")
+            budget_warnings.append(
+                "Projected total spend exceeds the configured initiative budget cap."
+            )
 
-        ready_for_approval = bool(planner_payload.get("ready_for_approval")) and not missing_questions
+        ready_for_approval = (
+            bool(planner_payload.get("ready_for_approval")) and not missing_questions
+        )
         planner_status = "ready-for-approval" if ready_for_approval else "awaiting-input"
         planner_status_reason = (
             "Draft is complete and waiting for operator approval."
@@ -1289,11 +1361,14 @@ class ProductPlanningService:
                 recommendation = {
                     "slice": str(item.get("slice") or "").strip() or "implementation",
                     "model_ref": model_ref,
-                    "rationale": str(item.get("rationale") or "").strip() or "Recommended by the planner.",
+                    "rationale": str(item.get("rationale") or "").strip()
+                    or "Recommended by the planner.",
                     "estimated_cost_usd": _normalize_float(item.get("estimated_cost_usd")),
                 }
                 try:
-                    recommendations.append(ProductModelRecommendation.model_validate(recommendation))
+                    recommendations.append(
+                        ProductModelRecommendation.model_validate(recommendation)
+                    )
                 except Exception:
                     continue
         fallback = self._model_recommendations(
@@ -1345,7 +1420,9 @@ class ProductPlanningService:
                 pricing = _json_dict(item.get("pricing"))
                 input_cost = pricing.get("input_per_million") or pricing.get("inputPerMillion")
                 output_cost = pricing.get("output_per_million") or pricing.get("outputPerMillion")
-                if not isinstance(input_cost, (int, float)) or not isinstance(output_cost, (int, float)):
+                if not isinstance(input_cost, (int, float)) or not isinstance(
+                    output_cost, (int, float)
+                ):
                     continue
                 costs[f"{provider_id}/{model_id.strip()}"] = (float(input_cost), float(output_cost))
         return costs
@@ -1375,7 +1452,8 @@ class ProductPlanningService:
     ) -> list[ProductModelRecommendation]:
         cheapest_first = sorted(
             runtime_models,
-            key=lambda ref: model_costs.get(ref, (999.0, 999.0))[0] + model_costs.get(ref, (999.0, 999.0))[1],
+            key=lambda ref: model_costs.get(ref, (999.0, 999.0))[0]
+            + model_costs.get(ref, (999.0, 999.0))[1],
         )
         orchestration_choices = [
             "microsoft-foundry/gpt-5.4-mini",
@@ -1455,10 +1533,18 @@ class ProductPlanningService:
                 DEFAULT_BUDGET_TOKEN_ESTIMATES["implementation"],
             )
             input_cost, output_cost = model_costs.get(recommendation.model_ref, (0.0, 0.0))
-            slice_multiplier = effective_epic_count if recommendation.slice == "implementation" else effective_service_count
-            totals += ((input_tokens / 1_000_000) * input_cost + (output_tokens / 1_000_000) * output_cost) * slice_multiplier
+            slice_multiplier = (
+                effective_epic_count
+                if recommendation.slice == "implementation"
+                else effective_service_count
+            )
+            totals += (
+                (input_tokens / 1_000_000) * input_cost + (output_tokens / 1_000_000) * output_cost
+            ) * slice_multiplier
         total_budget = round(totals, 4)
-        daily_budget = round(max(total_budget / max(effective_service_count * 3, 1), total_budget / 5), 4)
+        daily_budget = round(
+            max(total_budget / max(effective_service_count * 3, 1), total_budget / 5), 4
+        )
         return daily_budget, total_budget
 
     def _proposed_services(
@@ -1518,7 +1604,9 @@ class ProductPlanningService:
 
     def _assistant_plan_reply(self, plan: ProductPlan) -> str:
         read = plan_to_read(plan)
-        services = ", ".join(service.name for service in read.proposed_services) or "No services yet"
+        services = (
+            ", ".join(service.name for service in read.proposed_services) or "No services yet"
+        )
         models = "\n".join(
             f"- {item.slice}: `{item.model_ref}` — {item.rationale}"
             for item in read.model_recommendations
@@ -1633,13 +1721,11 @@ class ProductPlanningService:
         created_leads: list[Agent] = []
         requirements_by_service_slug: dict[str, Board] = {}
         for service in service_proposals:
-            existing_group = (
-                await BoardGroup.objects.filter_by(
-                    organization_id=product.organization_id,
-                    product_id=product.id,
-                    slug=f"{product.slug}-{service.slug}",
-                ).first(self.session)
-            )
+            existing_group = await BoardGroup.objects.filter_by(
+                organization_id=product.organization_id,
+                product_id=product.id,
+                slug=f"{product.slug}-{service.slug}",
+            ).first(self.session)
             if existing_group is not None:
                 group = existing_group
             else:
@@ -1680,8 +1766,12 @@ class ProductPlanningService:
                     .first(self.session)
                 )
                 if existing_lead is None:
-                    _gateway, config = await GatewayDispatchService(self.session).require_gateway_config_for_board(board)
-                    lead = await OpenClawProvisioningService(self.session).ensure_board_lead_defaults(
+                    _gateway, config = await GatewayDispatchService(
+                        self.session
+                    ).require_gateway_config_for_board(board)
+                    lead = await OpenClawProvisioningService(
+                        self.session
+                    ).ensure_board_lead_defaults(
                         request=LeadAgentRequest(
                             board=board,
                             gateway=gateway,

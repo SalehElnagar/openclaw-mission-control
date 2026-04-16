@@ -642,16 +642,13 @@ async def _send_agent_task_message(
     )
 
 
-
-
 def _supports_keyword_argument(func: object, keyword: str) -> bool:
     try:
         params = inspect.signature(func).parameters.values()
     except (TypeError, ValueError):
         return False
     return any(
-        param.name == keyword or param.kind is inspect.Parameter.VAR_KEYWORD
-        for param in params
+        param.name == keyword or param.kind is inspect.Parameter.VAR_KEYWORD for param in params
     )
 
 
@@ -664,13 +661,13 @@ async def _send_lead_task_message_compat(
     deliver: bool = False,
 ) -> OpenClawGatewayError | None:
     kwargs = {
-        'dispatch': dispatch,
-        'session_key': session_key,
-        'config': config,
-        'message': message,
+        "dispatch": dispatch,
+        "session_key": session_key,
+        "config": config,
+        "message": message,
     }
-    if _supports_keyword_argument(_send_lead_task_message, 'deliver'):
-        kwargs['deliver'] = deliver
+    if _supports_keyword_argument(_send_lead_task_message, "deliver"):
+        kwargs["deliver"] = deliver
     return await _send_lead_task_message(**kwargs)
 
 
@@ -684,14 +681,14 @@ async def _send_agent_task_message_compat(
     deliver: bool = False,
 ) -> OpenClawGatewayError | None:
     kwargs = {
-        'dispatch': dispatch,
-        'session_key': session_key,
-        'config': config,
-        'agent_name': agent_name,
-        'message': message,
+        "dispatch": dispatch,
+        "session_key": session_key,
+        "config": config,
+        "agent_name": agent_name,
+        "message": message,
     }
-    if _supports_keyword_argument(_send_agent_task_message, 'deliver'):
-        kwargs['deliver'] = deliver
+    if _supports_keyword_argument(_send_agent_task_message, "deliver"):
+        kwargs["deliver"] = deliver
     return await _send_agent_task_message(**kwargs)
 
 
@@ -1526,9 +1523,7 @@ def _task_event_payload(
         exclude={"board_id", "route_name", "route_params"},
         exclude_none=True,
     )
-    activity["agent_id"] = (
-        str(event.agent_id) if event.agent_id is not None else None
-    )
+    activity["agent_id"] = str(event.agent_id) if event.agent_id is not None else None
     payload: dict[str, object] = {
         "type": event.event_type,
         "activity": activity,
@@ -2150,7 +2145,9 @@ async def _notify_task_comment_targets(
         )
 
 
-def _downstream_outcome_state(*, board: Board, task: Task, actor: ActorContext, message: str) -> str | None:
+def _downstream_outcome_state(
+    *, board: Board, task: Task, actor: ActorContext, message: str
+) -> str | None:
     if actor.actor_type != "agent" or actor.agent is None or actor.agent.is_board_lead:
         return None
     if task.assigned_agent_id != actor.agent.id:

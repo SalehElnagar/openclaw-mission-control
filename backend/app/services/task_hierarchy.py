@@ -24,8 +24,9 @@ async def child_counts_by_parent_id(
         return {}
     rows = list(
         await session.exec(
-            select(col(Task.parent_task_id), col(Task.id))
-            .where(col(Task.parent_task_id).in_(parent_ids)),
+            select(col(Task.parent_task_id), col(Task.id)).where(
+                col(Task.parent_task_id).in_(parent_ids)
+            ),
         ),
     )
     counts: dict[UUID, int] = defaultdict(int)
@@ -94,4 +95,3 @@ async def validate_parent_task_update(
         ).first()
 
     return parent_task_id
-

@@ -47,6 +47,7 @@ from app.services.openclaw.gateway_rpc import (
 )
 from app.services.openclaw.internal.agent_key import agent_key as _agent_key
 from app.services.openclaw.internal.agent_key import slugify
+from app.services.openclaw.internal.retry import GatewayBackoff
 from app.services.openclaw.internal.session_keys import (
     board_agent_session_key,
     board_lead_session_key,
@@ -125,6 +126,26 @@ def _is_transient_agent_upsert_error(exc: OpenClawGatewayError) -> bool:
             "timeout",
             "temporarily unavailable",
             "server disconnected",
+        )
+    )
+
+
+def _is_transient_gateway_patch_error(exc: OpenClawGatewayError) -> bool:
+    message = str(exc).lower()
+    if not message:
+        return False
+    return any(
+        marker in message
+        for marker in (
+            "did not receive a valid http response",
+            "connection refused",
+            "connection reset",
+            "connection closed",
+            "received 1012",
+            "service restart",
+            "temporar",
+            "timeout",
+            "timed out",
         )
     )
 
@@ -660,10 +681,7 @@ class OpenClawGatewayControlPlane(GatewayControlPlane):
             except OpenClawGatewayError as exc:
                 should_retry = (
                     agent_just_created
-                    and (
-                        _is_missing_agent_error(exc)
-                        or _is_transient_agent_upsert_error(exc)
-                    )
+                    and (_is_missing_agent_error(exc) or _is_transient_agent_upsert_error(exc))
                     and _attempt < _update_retries - 1
                 )
                 if should_retry:
@@ -695,8 +713,7 @@ class OpenClawGatewayControlPlane(GatewayControlPlane):
                 break
             except OpenClawGatewayError as exc:
                 should_retry = (
-                    _is_transient_agent_upsert_error(exc)
-                    and _attempt < _list_retries - 1
+                    _is_transient_agent_upsert_error(exc) and _attempt < _list_retries - 1
                 )
                 if should_retry:
                     await asyncio.sleep(_list_delay)
@@ -765,7 +782,41 @@ class OpenClawGatewayControlPlane(GatewayControlPlane):
         params = {"raw": json.dumps(patch)}
         if base_hash:
             params["baseHash"] = base_hash
-        await openclaw_call("config.patch", params, config=self._config)
+        try:
+            await openclaw_call("config.patch", params, config=self._config)
+            return
+        except OpenClawGatewayError as exc:
+            if not _is_transient_gateway_patch_error(exc):
+                raise
+
+        recovered_hash, recovered_list, recovered_config_data = (
+            await _wait_for_gateway_config_agent_list(
+                self._config,
+                context="gateway heartbeat patch",
+            )
+        )
+        channels_applied = channels_patch is None or _config_contains_patch(
+            recovered_config_data.get("channels"),
+            channels_patch,
+        )
+        tools_applied = tools_patch is None or _config_contains_patch(
+            recovered_config_data.get("tools"),
+            tools_patch,
+        )
+        if recovered_list == new_list and channels_applied and tools_applied:
+            return
+
+        retry_params = {"raw": json.dumps(patch)}
+        if recovered_hash:
+            retry_params["baseHash"] = recovered_hash
+        backoff = GatewayBackoff(
+            timeout_s=45.0,
+            base_delay_s=0.5,
+            max_delay_s=5.0,
+            jitter=0.15,
+            timeout_context="gateway heartbeat patch retry",
+        )
+        await backoff.run(lambda: openclaw_call("config.patch", retry_params, config=self._config))
 
 
 async def _gateway_config_agent_list(
@@ -787,6 +838,34 @@ async def _gateway_config_agent_list(
         msg = "config agents.list is not a list"
         raise OpenClawGatewayError(msg)
     return cfg.get("hash"), agents_list, data
+
+
+def _config_contains_patch(current: object, patch: object) -> bool:
+    if isinstance(patch, dict):
+        if not isinstance(current, dict):
+            return False
+        for key, value in patch.items():
+            if key not in current:
+                return False
+            if not _config_contains_patch(current[key], value):
+                return False
+        return True
+    return current == patch
+
+
+async def _wait_for_gateway_config_agent_list(
+    config: GatewayClientConfig,
+    *,
+    context: str,
+) -> tuple[str | None, list[object], dict[str, Any]]:
+    backoff = GatewayBackoff(
+        timeout_s=45.0,
+        base_delay_s=0.5,
+        max_delay_s=5.0,
+        jitter=0.15,
+        timeout_context=context,
+    )
+    return await backoff.run(lambda: _gateway_config_agent_list(config))
 
 
 def _heartbeat_entry_map(

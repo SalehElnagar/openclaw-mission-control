@@ -324,7 +324,9 @@ async def test_product_chat_and_approval_seed_services(
                 for item in plan_payload["model_recommendations"]
             )
 
-            approve_response = await client.post(f"/api/v1/products/{product_id}/plan/approve", json={})
+            approve_response = await client.post(
+                f"/api/v1/products/{product_id}/plan/approve", json={}
+            )
             assert approve_response.status_code == 200
             approved_plan = approve_response.json()
             assert approved_plan["status"] == "approved"
@@ -562,7 +564,9 @@ async def test_product_approval_requires_location_anchor() -> None:
             transport=ASGITransport(app=app),
             base_url="http://testserver",
         ) as client:
-            approve_response = await client.post(f"/api/v1/products/{product.id}/plan/approve", json={})
+            approve_response = await client.post(
+                f"/api/v1/products/{product.id}/plan/approve", json={}
+            )
             assert approve_response.status_code == 422
             assert "local working directory" in approve_response.text.lower()
     finally:
@@ -609,7 +613,9 @@ async def test_product_approval_requires_clean_plan_sync() -> None:
             transport=ASGITransport(app=app),
             base_url="http://testserver",
         ) as client:
-            approve_response = await client.post(f"/api/v1/products/{product.id}/plan/approve", json={})
+            approve_response = await client.post(
+                f"/api/v1/products/{product.id}/plan/approve", json={}
+            )
             assert approve_response.status_code == 422
             assert "sync cleanly" in approve_response.text.lower()
     finally:

@@ -190,7 +190,9 @@ async def _sync_gateway_heartbeats(
         if gateway is None or not gateway.url or not gateway.workspace_root:
             continue
         try:
-            await OpenClawGatewayProvisioner().sync_gateway_agent_heartbeats(gateway, gateway_agents)
+            await OpenClawGatewayProvisioner().sync_gateway_agent_heartbeats(
+                gateway, gateway_agents
+            )
         except OpenClawGatewayError as exc:  # pragma: no cover - best effort sync
             logger.warning(
                 "presence_policy.sync_gateway_heartbeats failed gateway_id=%s agent_ids=%s error=%s",

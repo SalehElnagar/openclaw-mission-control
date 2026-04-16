@@ -33,6 +33,8 @@ import {
 } from "@/api/generated/metrics/metrics";
 import {
   gatewaysStatusApiV1GatewaysStatusGet,
+  type listGatewaysApiV1GatewaysGetResponse,
+  useListGatewaysApiV1GatewaysGet,
 } from "@/api/generated/gateways/gateways";
 import type { GatewaysStatusResponse } from "@/api/generated/model/gatewaysStatusResponse";
 import {
@@ -571,6 +573,20 @@ export default function DashboardPage() {
     },
   );
 
+  const gatewaysQuery = useListGatewaysApiV1GatewaysGet<
+    listGatewaysApiV1GatewaysGetResponse,
+    ApiError
+  >(
+    { limit: 200 },
+    {
+      query: {
+        enabled: Boolean(isSignedIn),
+        refetchInterval: 15_000,
+        refetchOnMount: "always",
+      },
+    },
+  );
+
   const boards = useMemo(
     () =>
       boardsQuery.data?.status === 200
@@ -585,6 +601,14 @@ export default function DashboardPage() {
         ? [...(agentsQuery.data.data.items ?? [])].sort((a, b) => a.name.localeCompare(b.name))
         : [],
     [agentsQuery.data],
+  );
+
+  const orgGateways = useMemo(
+    () =>
+      gatewaysQuery.data?.status === 200
+        ? [...(gatewaysQuery.data.data.items ?? [])].sort((a, b) => a.name.localeCompare(b.name))
+        : [],
+    [gatewaysQuery.data],
   );
 
   const metrics = metricsQuery.data?.status === 200 ? metricsQuery.data.data : null;
@@ -607,7 +631,9 @@ export default function DashboardPage() {
     }
     return [...byGateway.values()].sort((a, b) => a.boardName.localeCompare(b.boardName));
   }, [boards]);
-  const hasConfiguredGateways = gatewayTargets.length > 0;
+  const configuredGatewaysCount =
+    gatewayTargets.length > 0 ? gatewayTargets.length : orgGateways.length;
+  const hasConfiguredGateways = configuredGatewaysCount > 0;
 
   const gatewayStatusesQuery = useQuery<GatewaySnapshot[], ApiError>({
     queryKey: [
@@ -763,6 +789,8 @@ export default function DashboardPage() {
 
   const gatewayStatusLabel = !hasConfiguredGateways
     ? "Not configured"
+    : gatewayTargets.length === 0
+      ? "Configured"
     : gatewayStatusesQuery.isLoading
       ? "Checking"
       : gatewayConnectedCount === gatewayTargets.length
@@ -783,7 +811,9 @@ export default function DashboardPage() {
   const gatewayStatusTone: SummaryRow["tone"] =
     gatewayStatusLabel === "All connected"
       ? "success"
-      : gatewayStatusLabel === "Checking" || gatewayStatusLabel === "Not configured"
+      : gatewayStatusLabel === "Checking" ||
+          gatewayStatusLabel === "Not configured" ||
+          gatewayStatusLabel === "Configured"
         ? "default"
         : gatewayStatusLabel === "Partially connected" || gatewayStatusLabel === "Disconnected"
           ? "warning"
@@ -851,7 +881,7 @@ export default function DashboardPage() {
 
   const gatewayRows: SummaryRow[] = [
     { label: "Gateway status", value: gatewayStatusLabel, tone: gatewayStatusTone },
-    { label: "Configured gateways", value: formatCount(gatewayTargets.length) },
+    { label: "Configured gateways", value: formatCount(configuredGatewaysCount) },
     {
       label: "Connected gateways",
       value: formatCount(gatewayConnectedCount),
@@ -1208,6 +1238,12 @@ export default function DashboardPage() {
                   {!hasConfiguredGateways ? (
                     <div className="rounded-lg border border-[color:var(--border)] bg-[color:var(--surface-muted)] p-3 text-sm text-muted">
                       No gateways are configured for any board yet.
+                    </div>
+                  ) : gatewayTargets.length === 0 ? (
+                    <div className="rounded-lg border border-[color:var(--border)] bg-[color:var(--surface-muted)] p-3 text-sm text-muted">
+                      {formatCount(orgGateways.length)} gateway
+                      {orgGateways.length === 1 ? "" : "s"} configured. Attach a gateway to a board
+                      to surface live session activity here.
                     </div>
                   ) : gatewayStatusesQuery.isLoading ? (
                     <div className="rounded-lg border border-[color:var(--border)] bg-[color:var(--surface-muted)] p-3 text-sm text-muted">

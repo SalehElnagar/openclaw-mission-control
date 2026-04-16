@@ -16,7 +16,9 @@ ProductStatus = Literal["draft", "active", "archived"]
 ProductOptimizeFor = Literal["balanced", "cheapest-acceptable", "highest-quality-within-budget"]
 ProductMessageRole = Literal["user", "assistant", "system"]
 ProductPlanStatus = Literal["draft", "approved"]
-ProductPlannerMode = Literal["auto", "fast-thinking", "deep-thinking", "security-planning", "custom"]
+ProductPlannerMode = Literal[
+    "auto", "fast-thinking", "deep-thinking", "security-planning", "custom"
+]
 
 
 class ProductExecutionPolicy(SQLModel):
