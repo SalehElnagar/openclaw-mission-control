@@ -30,8 +30,8 @@ from app.schemas.common import OkResponse
 from app.schemas.pagination import DefaultLimitOffsetPage
 from app.schemas.view_models import BoardGroupSnapshot
 from app.services.board_group_snapshot import build_group_snapshot
-from app.services.openclaw.presence_policy import merge_heartbeat_config
 from app.services.openclaw.gateway_rpc import OpenClawGatewayError
+from app.services.openclaw.presence_policy import merge_heartbeat_config
 from app.services.openclaw.provisioning import OpenClawGatewayProvisioner
 from app.services.organizations import (
     OrganizationContext,

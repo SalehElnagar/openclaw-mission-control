@@ -15,8 +15,8 @@ from app.models.agents import Agent
 from app.models.boards import Board
 from app.models.gateways import Gateway
 from app.schemas.gateway_runtime import (
-    GatewayRuntimeCatalogEntry,
     GatewayModelProfiles,
+    GatewayRuntimeCatalogEntry,
     GatewayRuntimeSummary,
     GatewayRuntimeSyncRequest,
     GatewayRuntimeSyncResponse,

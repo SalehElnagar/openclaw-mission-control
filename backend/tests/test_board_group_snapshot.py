@@ -20,8 +20,8 @@ from app.models.board_groups import BoardGroup
 from app.models.boards import Board
 from app.models.gateways import Gateway
 from app.models.organizations import Organization
-from app.models.tasks import Task
 from app.models.task_dependencies import TaskDependency
+from app.models.tasks import Task
 from app.services import board_group_snapshot as board_group_snapshot_service
 from app.services.board_group_snapshot import build_group_snapshot
 

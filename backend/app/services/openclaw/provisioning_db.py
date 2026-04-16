@@ -53,10 +53,6 @@ from app.services.openclaw.constants import (
 from app.services.openclaw.db_agent_state import (
     mint_agent_token,
 )
-from app.services.openclaw.presence_policy import (
-    heartbeat_is_standby,
-    heartbeat_offline_after,
-)
 from app.services.openclaw.db_service import OpenClawDBService
 from app.services.openclaw.gateway_resolver import (
     gateway_client_config,
@@ -77,6 +73,10 @@ from app.services.openclaw.internal.session_keys import (
 )
 from app.services.openclaw.lifecycle_orchestrator import AgentLifecycleOrchestrator
 from app.services.openclaw.policies import OpenClawAuthorizationPolicy
+from app.services.openclaw.presence_policy import (
+    heartbeat_is_standby,
+    heartbeat_offline_after,
+)
 from app.services.openclaw.provisioning import (
     OpenClawGatewayControlPlane,
     OpenClawGatewayProvisioner,

@@ -10,7 +10,8 @@ from sqlalchemy.ext.asyncio import AsyncEngine, async_sessionmaker, create_async
 from sqlmodel import SQLModel
 from sqlmodel.ext.asyncio.session import AsyncSession
 
-from app.api.gateways import _gateway_audit_payload, router as gateways_router
+from app.api.gateways import _gateway_audit_payload
+from app.api.gateways import router as gateways_router
 from app.core import auth as auth_module
 from app.core.auth_mode import AuthMode
 from app.core.config import settings

@@ -24,8 +24,8 @@ from app.schemas.board_group_memory import BoardGroupMemoryRead
 from app.schemas.board_groups import BoardGroupRead
 from app.schemas.boards import BoardRead
 from app.schemas.view_models import (
-    BoardGroupAgentWorkload,
     BoardGroupAgenda,
+    BoardGroupAgentWorkload,
     BoardGroupBoardSnapshot,
     BoardGroupSnapshot,
     BoardGroupTaskSummary,

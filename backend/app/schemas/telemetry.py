@@ -5,9 +5,8 @@ from __future__ import annotations
 from datetime import datetime
 from uuid import UUID
 
-from sqlmodel import Field, SQLModel
-
 from pydantic import field_validator
+from sqlmodel import Field, SQLModel
 
 from app.schemas.gateway_runtime import _normalize_model_ref
 

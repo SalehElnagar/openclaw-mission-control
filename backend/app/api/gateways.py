@@ -17,13 +17,13 @@ from app.models.activity_events import ActivityEvent
 from app.models.agents import Agent
 from app.models.gateways import Gateway
 from app.models.skills import GatewayInstalledSkill
+from app.schemas.common import OkResponse
 from app.schemas.gateway_runtime import (
     GatewayRuntimeSummary,
     GatewayRuntimeSyncRequest,
     GatewayRuntimeSyncResponse,
     RuntimeAuditRecordRead,
 )
-from app.schemas.common import OkResponse
 from app.schemas.gateways import (
     GatewayCreate,
     GatewayRead,
