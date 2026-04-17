@@ -12,6 +12,7 @@ import type { GatewayReadDefaultModelProfile } from "./gatewayReadDefaultModelPr
  */
 export interface GatewayRead {
   name: string;
+  node_class?: "cloud" | "local";
   url: string;
   workspace_root: string;
   allow_insecure_tls?: boolean;

@@ -286,6 +286,7 @@ async def test_runtime_summary_exposes_profile_default_model(
         organization_id=uuid4(),
         name="gateway",
         url="ws://gateway.example/ws",
+        node_class="local",
         workspace_root="/tmp/workspaces",
         default_model_profile="general",
         model_profiles={
@@ -305,6 +306,7 @@ async def test_runtime_summary_exposes_profile_default_model(
     summary = await service.runtime_summary(gateway=gateway)
 
     assert summary.default_model_ref == "microsoft-foundry/model-router"
+    assert summary.node_class == "local"
 
 
 @pytest.mark.asyncio

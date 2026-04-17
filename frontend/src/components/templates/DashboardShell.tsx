@@ -13,6 +13,7 @@ import {
   useGetMeApiV1UsersMeGet,
 } from "@/api/generated/users/users";
 import { BrandMark } from "@/components/atoms/BrandMark";
+import { NodeScopeSwitcher } from "@/components/organisms/NodeScopeSwitcher";
 import { OrgSwitcher } from "@/components/organisms/OrgSwitcher";
 import { SystemStatusBanner } from "@/components/organisms/SystemStatusBanner";
 import { UserMenu } from "@/components/organisms/UserMenu";
@@ -112,10 +113,15 @@ export function DashboardShell({ children }: { children: ReactNode }) {
             <BrandMark />
           </div>
           <SignedIn>
-            <div className="hidden md:flex flex-1 items-center">
+            <div className="hidden flex-1 items-center gap-3 md:flex">
               <div className="max-w-[220px]">
                 <OrgSwitcher />
               </div>
+              {!isOnboardingPath ? (
+                <div className="max-w-[240px]">
+                  <NodeScopeSwitcher />
+                </div>
+              ) : null}
             </div>
           </SignedIn>
           <SignedIn>
@@ -135,7 +141,6 @@ export function DashboardShell({ children }: { children: ReactNode }) {
 
       <SystemStatusBanner />
 
-      {/* Mobile sidebar overlay */}
       {sidebarOpen ? (
         <div
           className="fixed inset-0 z-40 bg-black/30 md:hidden"

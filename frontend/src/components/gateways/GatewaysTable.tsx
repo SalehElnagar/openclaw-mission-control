@@ -18,6 +18,7 @@ import {
 } from "@/components/tables/DataTable";
 import { dateCell, linkifyCell } from "@/components/tables/cell-formatters";
 import { truncateText as truncate } from "@/lib/formatters";
+import { normalizeNodeClass } from "@/lib/node-scope";
 
 type GatewaysTableProps = {
   gateways: GatewayRead[];
@@ -88,13 +89,22 @@ export function GatewaysTable({
     const baseColumns: ColumnDef<GatewayRead>[] = [
       {
         accessorKey: "name",
-        header: "Gateway",
+        header: "Node",
         cell: ({ row }) =>
           linkifyCell({
             href: `/gateways/${row.original.id}`,
             label: row.original.name,
-            subtitle: truncate(row.original.url, 36),
+            subtitle: `${normalizeNodeClass(row.original.node_class)} · ${truncate(row.original.url, 36)}`,
           }),
+      },
+      {
+        accessorKey: "node_class",
+        header: "Class",
+        cell: ({ row }) => (
+          <span className="text-sm capitalize text-muted">
+            {normalizeNodeClass(row.original.node_class)}
+          </span>
+        ),
       },
       {
         accessorKey: "workspace_root",

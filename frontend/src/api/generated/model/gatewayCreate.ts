@@ -12,6 +12,7 @@ import type { GatewayModelProfiles } from "./gatewayModelProfiles";
  */
 export interface GatewayCreate {
   name: string;
+  node_class?: "cloud" | "local";
   url: string;
   workspace_root: string;
   allow_insecure_tls?: boolean;

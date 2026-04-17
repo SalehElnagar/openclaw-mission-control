@@ -9,6 +9,7 @@ import { useAuth } from "@/auth/clerk";
 import { useQueryClient } from "@tanstack/react-query";
 
 import { GatewaysTable } from "@/components/gateways/GatewaysTable";
+import { useNodeScope } from "@/components/providers/NodeScopeProvider";
 import { DashboardPageLayout } from "@/components/templates/DashboardPageLayout";
 import { buttonVariants } from "@/components/ui/button";
 import { ConfirmActionDialog } from "@/components/ui/confirm-action-dialog";
@@ -30,6 +31,7 @@ const GATEWAY_SORTABLE_COLUMNS = ["name", "workspace_root", "updated_at"];
 export default function GatewaysPage() {
   const { isSignedIn } = useAuth();
   const queryClient = useQueryClient();
+  const { scopedGateways, selectedGatewayId, selectedNodeClass } = useNodeScope();
   const { sorting, onSortingChange } = useUrlSorting({
     allowedColumnIds: GATEWAY_SORTABLE_COLUMNS,
     defaultSorting: [{ id: "name", desc: false }],
@@ -57,6 +59,15 @@ export default function GatewaysPage() {
         ? (gatewaysQuery.data.data.items ?? [])
         : [],
     [gatewaysQuery.data],
+  );
+  const visibleGateways = useMemo(
+    () =>
+      selectedGatewayId || selectedNodeClass
+        ? gateways.filter((gateway) =>
+            scopedGateways.some((candidate) => candidate.id === gateway.id),
+          )
+        : gateways,
+    [gateways, scopedGateways, selectedGatewayId, selectedNodeClass],
   );
 
   const deleteMutation = useDeleteGatewayApiV1GatewaysGatewayIdDelete<
@@ -91,13 +102,13 @@ export default function GatewaysPage() {
     <>
       <DashboardPageLayout
         signedOut={{
-          message: "Sign in to view gateways.",
+          message: "Sign in to view nodes.",
           forceRedirectUrl: "/gateways",
         }}
-        title="Gateways"
-        description="Manage OpenClaw gateway connections used by boards"
+        title="Nodes"
+        description="Manage the cloud and local runtimes Mission Control can target."
         headerActions={
-          isAdmin && gateways.length > 0 ? (
+          isAdmin && visibleGateways.length > 0 ? (
             <Link
               href="/gateways/new"
               className={buttonVariants({
@@ -105,17 +116,17 @@ export default function GatewaysPage() {
                 variant: "primary",
               })}
             >
-              Create gateway
+              Create node
             </Link>
           ) : null
         }
         isAdmin={isAdmin}
-        adminOnlyMessage="Only organization owners and admins can access gateways."
+        adminOnlyMessage="Only organization owners and admins can access nodes."
         stickyHeader
       >
         <div className="overflow-hidden rounded-xl border border-[color:var(--border)] bg-[color:var(--surface)] shadow-sm">
           <GatewaysTable
-            gateways={gateways}
+            gateways={visibleGateways}
             isLoading={gatewaysQuery.isLoading}
             sorting={sorting}
             onSortingChange={onSortingChange}
@@ -123,11 +134,11 @@ export default function GatewaysPage() {
             stickyHeader
             onDelete={setDeleteTarget}
             emptyState={{
-              title: "No gateways yet",
+              title: "No nodes yet",
               description:
-                "Create your first gateway to connect boards and start managing your OpenClaw connections.",
+                "Create your first node to connect boards and start managing your OpenClaw runtimes.",
               actionHref: "/gateways/new",
-              actionLabel: "Create your first gateway",
+              actionLabel: "Create your first node",
             }}
           />
         </div>
@@ -142,11 +153,11 @@ export default function GatewaysPage() {
       <ConfirmActionDialog
         open={Boolean(deleteTarget)}
         onOpenChange={() => setDeleteTarget(null)}
-        title="Delete gateway?"
+        title="Delete node?"
         description={
           <>
-            This removes the gateway connection from Mission Control. Boards
-            using it will need a new gateway assigned.
+            This removes the node connection from Mission Control. Boards
+            using it will need a new node assigned.
           </>
         }
         errorMessage={deleteMutation.error?.message}

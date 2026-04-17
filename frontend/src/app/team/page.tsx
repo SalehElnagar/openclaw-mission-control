@@ -7,6 +7,7 @@ import { useRouter } from "next/navigation";
 import { BadgeCheck, Bot, Shield, Sparkles, Users } from "lucide-react";
 
 import { useAuth } from "@/auth/clerk";
+import { useNodeScope } from "@/components/providers/NodeScopeProvider";
 import { DashboardPageLayout } from "@/components/templates/DashboardPageLayout";
 import { Button } from "@/components/ui/button";
 import { ApiError } from "@/api/mutator";
@@ -18,6 +19,10 @@ import {
   type listBoardsApiV1BoardsGetResponse,
   useListBoardsApiV1BoardsGet,
 } from "@/api/generated/boards/boards";
+import {
+  type listGatewaysApiV1GatewaysGetResponse,
+  useListGatewaysApiV1GatewaysGet,
+} from "@/api/generated/gateways/gateways";
 import { formatRelativeTimestamp, formatTimestamp } from "@/lib/formatters";
 
 const statusTone = (status: string | null | undefined) => {
@@ -31,6 +36,7 @@ const statusTone = (status: string | null | undefined) => {
 export default function TeamPage() {
   const { isSignedIn } = useAuth();
   const router = useRouter();
+  const { scopedGateways, selectedGatewayId, selectedNodeClass } = useNodeScope();
 
   const boardsQuery = useListBoardsApiV1BoardsGet<listBoardsApiV1BoardsGetResponse, ApiError>(
     { limit: 200 },
@@ -44,11 +50,24 @@ export default function TeamPage() {
   );
 
   const agentsQuery = useListAgentsApiV1AgentsGet<listAgentsApiV1AgentsGetResponse, ApiError>(
-    { limit: 200 },
+    { limit: 200, gateway_id: selectedGatewayId ?? undefined },
     {
       query: {
         enabled: Boolean(isSignedIn),
         refetchInterval: 15_000,
+        refetchOnMount: "always",
+      },
+    },
+  );
+  const gatewaysQuery = useListGatewaysApiV1GatewaysGet<
+    listGatewaysApiV1GatewaysGetResponse,
+    ApiError
+  >(
+    { limit: 200 },
+    {
+      query: {
+        enabled: Boolean(isSignedIn),
+        refetchInterval: 30_000,
         refetchOnMount: "always",
       },
     },
@@ -69,15 +88,54 @@ export default function TeamPage() {
         : [],
     [agentsQuery.data],
   );
+  const gateways = useMemo(
+    () =>
+      gatewaysQuery.data?.status === 200
+        ? [...(gatewaysQuery.data.data.items ?? [])].sort((a, b) =>
+            a.name.localeCompare(b.name),
+          )
+        : [],
+    [gatewaysQuery.data],
+  );
+  const scopedGatewayIds = useMemo(
+    () => new Set(scopedGateways.map((gateway) => gateway.id)),
+    [scopedGateways],
+  );
+  const visibleAgents = useMemo(
+    () =>
+      selectedGatewayId || selectedNodeClass
+        ? agents.filter((agent) => scopedGatewayIds.has(agent.gateway_id))
+        : agents,
+    [agents, scopedGatewayIds, selectedGatewayId, selectedNodeClass],
+  );
+  const gatewayNameById = useMemo(
+    () => new Map(gateways.map((gateway) => [gateway.id, gateway.name])),
+    [gateways],
+  );
+  const groupedAgents = useMemo(() => {
+    const groups = new Map<string, typeof visibleAgents>();
+    visibleAgents.forEach((agent) => {
+      const bucket = groups.get(agent.gateway_id) ?? [];
+      bucket.push(agent);
+      groups.set(agent.gateway_id, bucket);
+    });
+    return [...groups.entries()]
+      .map(([gatewayId, nodeAgents]) => ({
+        gatewayId,
+        gatewayName: gatewayNameById.get(gatewayId) ?? "Unknown node",
+        agents: [...nodeAgents].sort((a, b) => a.name.localeCompare(b.name)),
+      }))
+      .sort((a, b) => a.gatewayName.localeCompare(b.gatewayName));
+  }, [gatewayNameById, visibleAgents]);
 
   const stats = useMemo(() => {
     return {
-      total: agents.length,
-      online: agents.filter((agent) => (agent.status ?? "").toLowerCase() === "online").length,
-      standby: agents.filter((agent) => (agent.status ?? "").toLowerCase() === "standby").length,
-      leads: agents.filter((agent) => agent.is_board_lead).length,
+      total: visibleAgents.length,
+      online: visibleAgents.filter((agent) => (agent.status ?? "").toLowerCase() === "online").length,
+      standby: visibleAgents.filter((agent) => (agent.status ?? "").toLowerCase() === "standby").length,
+      leads: visibleAgents.filter((agent) => agent.is_board_lead).length,
     };
-  }, [agents]);
+  }, [visibleAgents]);
 
   return (
     <DashboardPageLayout
@@ -113,7 +171,7 @@ export default function TeamPage() {
           </div>
         </section>
 
-        {!agents.length ? (
+        {!visibleAgents.length ? (
           <section className="rounded-[26px] border border-dashed border-[color:var(--border)] bg-[color:var(--surface)] p-8 text-center shadow-sm">
             <Users className="mx-auto h-10 w-10 text-cyan-200" />
             <h2 className="mt-4 text-2xl font-semibold text-strong">No agents yet</h2>
@@ -125,8 +183,27 @@ export default function TeamPage() {
             </Button>
           </section>
         ) : (
-          <section className="grid gap-5 lg:grid-cols-2 xl:grid-cols-3">
-            {agents.map((agent) => {
+          <div className="space-y-6">
+            {groupedAgents.map((group) => (
+              <section key={group.gatewayId} className="space-y-4">
+                <div className="flex items-center justify-between gap-3">
+                  <div>
+                    <p className="text-xs font-semibold uppercase tracking-[0.18em] text-muted">
+                      Node
+                    </p>
+                    <h2 className="mt-1 text-xl font-semibold text-strong">
+                      {group.gatewayName}
+                    </h2>
+                  </div>
+                  <Button
+                    variant="outline"
+                    onClick={() => router.push(`/gateways/${group.gatewayId}`)}
+                  >
+                    Open node
+                  </Button>
+                </div>
+                <section className="grid gap-5 lg:grid-cols-2 xl:grid-cols-3">
+                  {group.agents.map((agent) => {
               const boardName =
                 agent.board_id ? boardNameById.get(agent.board_id) ?? "Unknown board" : "Global scope";
               const modelLabel = agent.model_primary ?? agent.model_profile ?? "Default policy";
@@ -214,8 +291,11 @@ export default function TeamPage() {
                   </div>
                 </article>
               );
-            })}
-          </section>
+                  })}
+                </section>
+              </section>
+            ))}
+          </div>
         )}
       </div>
     </DashboardPageLayout>

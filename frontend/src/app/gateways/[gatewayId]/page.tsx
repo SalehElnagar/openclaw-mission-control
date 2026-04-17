@@ -280,8 +280,23 @@ export default function GatewayDetailPage() {
   const isConnected = status?.connected ?? false;
 
   const title = useMemo(
-    () => (gateway?.name ? gateway.name : "Gateway"),
+    () => (gateway?.name ? gateway.name : "Node"),
     [gateway?.name],
+  );
+  const roleLabels = useMemo(
+    () =>
+      [...new Set(
+        agents
+          .map((agent) =>
+            typeof agent.identity_profile?.role === "string"
+              ? agent.identity_profile.role
+              : agent.is_gateway_main
+                ? "Gateway Agent"
+                : null,
+          )
+          .filter(Boolean),
+      )] as string[],
+    [agents],
   );
   const runtimeCatalog = useMemo(
     () => (runtime?.catalog ?? []).filter((entry) => (entry.kind ?? "model") === "model"),
@@ -304,31 +319,31 @@ export default function GatewayDetailPage() {
     <>
       <DashboardPageLayout
         signedOut={{
-          message: "Sign in to view a gateway.",
+          message: "Sign in to view a node.",
           forceRedirectUrl: `/gateways/${gatewayId}`,
         }}
         title={title}
-        description="Gateway configuration and connection details."
+        description="Node configuration, model policy, and runtime health."
         headerActions={
           <div className="flex items-center gap-2">
             <Button variant="outline" onClick={() => router.push("/gateways")}>
-              Back to gateways
+              Back to nodes
             </Button>
             {isAdmin && gatewayId ? (
               <Button
                 onClick={() => router.push(`/gateways/${gatewayId}/edit`)}
               >
-                Edit gateway
+                Edit node
               </Button>
             ) : null}
           </div>
         }
         isAdmin={isAdmin}
-        adminOnlyMessage="Only organization owners and admins can access gateways."
+        adminOnlyMessage="Only organization owners and admins can access nodes."
       >
         {gatewayQuery.isLoading ? (
           <div className="rounded-xl border border-[color:var(--border)] bg-[color:var(--surface)] p-6 text-sm text-muted shadow-sm">
-            Loading gateway…
+            Loading node…
           </div>
         ) : gatewayQuery.error ? (
           <div className="rounded-xl border border-[color:var(--danger)]/40 bg-[color:var(--danger)]/10 p-6 text-sm text-[color:var(--danger)]">
@@ -371,6 +386,12 @@ export default function GatewayDetailPage() {
                     </p>
                   </div>
                   <div>
+                    <p className="text-xs uppercase text-quiet">Node class</p>
+                    <p className="mt-1 text-sm font-medium capitalize text-strong">
+                      {gateway.node_class ?? "cloud"}
+                    </p>
+                  </div>
+                  <div>
                     <p className="text-xs uppercase text-quiet">Token</p>
                     <p className="mt-1 text-sm font-medium text-strong">
                       {maskToken(gateway.token)}
@@ -382,6 +403,14 @@ export default function GatewayDetailPage() {
                     </p>
                     <p className="mt-1 text-sm font-medium text-strong">
                       {gateway.disable_device_pairing ? "Disabled" : "Required"}
+                    </p>
+                  </div>
+                  <div>
+                    <p className="text-xs uppercase text-quiet">
+                      TLS policy
+                    </p>
+                    <p className="mt-1 text-sm font-medium text-strong">
+                      {gateway.allow_insecure_tls ? "Allow self-signed certificates" : "Strict certificate validation"}
                     </p>
                   </div>
                   <div>
@@ -398,7 +427,7 @@ export default function GatewayDetailPage() {
               <div className="rounded-xl border border-[color:var(--border)] bg-[color:var(--surface)] p-6 shadow-sm">
                 <div className="flex items-center justify-between">
                   <p className="text-xs font-semibold uppercase tracking-wide text-muted">
-                    Gateway control
+                    Runtime control
                   </p>
                   {runtimeQuery.isFetching ? (
                     <span className="text-xs text-muted">Syncing…</span>
@@ -526,6 +555,49 @@ export default function GatewayDetailPage() {
                         </p>
                       ) : null}
                     </div>
+                  </div>
+                </div>
+              </div>
+
+              <div className="rounded-xl border border-[color:var(--border)] bg-[color:var(--surface)] p-6 shadow-sm">
+                <div className="flex items-center justify-between">
+                  <p className="text-xs font-semibold uppercase tracking-wide text-muted">
+                    Capabilities
+                  </p>
+                  <span className="text-xs text-muted">
+                    {roleLabels.length} role{roleLabels.length === 1 ? "" : "s"} enabled
+                  </span>
+                </div>
+                <div className="mt-4 space-y-4 text-sm text-muted">
+                  <div>
+                    <p className="text-xs uppercase text-quiet">Starter pack roles</p>
+                    <div className="mt-2 flex flex-wrap gap-2">
+                      {roleLabels.length > 0 ? roleLabels.map((role) => (
+                        <span
+                          key={role}
+                          className="rounded-full border border-[color:var(--border)] bg-[color:var(--surface-muted)] px-3 py-1 text-xs font-medium text-strong"
+                        >
+                          {role}
+                        </span>
+                      )) : (
+                        <span className="text-sm text-muted">No node inventory roles provisioned yet.</span>
+                      )}
+                    </div>
+                  </div>
+                  <div>
+                    <p className="text-xs uppercase text-quiet">Supported verified models</p>
+                    <p className="mt-1 text-sm font-medium text-strong">
+                      {runtime?.available_models.length ?? 0}
+                    </p>
+                    <p className="mt-1 text-xs leading-5 text-muted">
+                      Mission Control will only offer models this node exposes in its verified runtime catalog.
+                    </p>
+                  </div>
+                  <div>
+                    <p className="text-xs uppercase text-quiet">Modules</p>
+                    <p className="mt-1 text-sm font-medium text-strong">
+                      Skills and packs are still managed through the Skills views, but they now inherit the active node scope.
+                    </p>
                   </div>
                 </div>
               </div>
@@ -738,9 +810,10 @@ export default function GatewayDetailPage() {
                 <AgentsTable
                   agents={agents}
                   boards={boards}
+                  gateways={gateway ? [gateway] : []}
                   isLoading={agentsQuery.isLoading}
                   onDelete={setDeleteTarget}
-                  emptyMessage="No agents assigned to this gateway."
+                  emptyMessage="No agents assigned to this node."
                 />
               </div>
             </div>

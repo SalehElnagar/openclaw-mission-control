@@ -24,6 +24,7 @@ class Gateway(QueryModel, table=True):
     organization_id: UUID = Field(foreign_key="organizations.id", index=True)
     name: str
     url: str
+    node_class: str = Field(default="cloud", index=True)
     token: str | None = Field(default=None)
     disable_device_pairing: bool = Field(default=False)
     workspace_root: str

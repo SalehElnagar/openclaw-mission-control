@@ -11,7 +11,7 @@ import {
   useReactTable,
 } from "@tanstack/react-table";
 
-import { type AgentRead, type BoardRead } from "@/api/generated/model";
+import { type AgentRead, type BoardRead, type GatewayRead } from "@/api/generated/model";
 import { DataTable } from "@/components/tables/DataTable";
 import {
   dateCell,
@@ -31,6 +31,7 @@ type AgentsTableEmptyState = {
 type AgentsTableProps = {
   agents: AgentRead[];
   boards?: BoardRead[];
+  gateways?: GatewayRead[];
   isLoading?: boolean;
   sorting?: SortingState;
   onSortingChange?: OnChangeFn<SortingState>;
@@ -73,6 +74,7 @@ const agentSubtitle = (agent: AgentRead) =>
 export function AgentsTable({
   agents,
   boards = [],
+  gateways = [],
   isLoading = false,
   sorting,
   onSortingChange,
@@ -107,18 +109,30 @@ export function AgentsTable({
     () => new Map(boards.map((board) => [board.id, board.name])),
     [boards],
   );
+  const gatewayById = useMemo(
+    () => new Map(gateways.map((gateway) => [gateway.id, gateway])),
+    [gateways],
+  );
 
   const columns = useMemo<ColumnDef<AgentRead>[]>(() => {
     const baseColumns: ColumnDef<AgentRead>[] = [
       {
         accessorKey: "name",
         header: "Agent",
-        cell: ({ row }) =>
-          linkifyCell({
+        cell: ({ row }) => {
+          const role =
+            typeof row.original.identity_profile?.role === "string"
+              ? row.original.identity_profile.role
+              : null;
+          const gatewayName = gatewayById.get(row.original.gateway_id)?.name;
+          return linkifyCell({
             href: `/agents/${row.original.id}`,
             label: row.original.name,
-            subtitle: agentSubtitle(row.original),
-          }),
+            subtitle: [role, gatewayName, agentSubtitle(row.original)]
+              .filter(Boolean)
+              .join(" · "),
+          });
+        },
       },
       {
         accessorKey: "status",
@@ -173,6 +187,22 @@ export function AgentsTable({
         },
       },
       {
+        id: "node",
+        header: "Node",
+        cell: ({ row }) => {
+          const gateway = gatewayById.get(row.original.gateway_id);
+          if (!gateway) {
+            return <span className="text-sm text-muted">—</span>;
+          }
+          return linkifyCell({
+            href: `/gateways/${gateway.id}`,
+            label: gateway.name,
+            subtitle: gateway.node_class ?? "cloud",
+            block: false,
+          });
+        },
+      },
+      {
         accessorKey: "last_seen_at",
         header: "Last seen",
         cell: ({ row }) =>
@@ -186,7 +216,7 @@ export function AgentsTable({
     ];
 
     return baseColumns;
-  }, [boardNameById]);
+  }, [boardNameById, gatewayById]);
 
   // eslint-disable-next-line react-hooks/incompatible-library
   const table = useReactTable({

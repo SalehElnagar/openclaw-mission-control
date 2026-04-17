@@ -302,7 +302,7 @@ export function DashboardSidebar() {
                   )}
                 >
                   <Network className="h-4 w-4" />
-                  Gateways
+                  Nodes
                 </Link>
               ) : null}
               {isAdmin ? (

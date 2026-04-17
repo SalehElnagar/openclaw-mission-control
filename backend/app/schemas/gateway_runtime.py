@@ -9,6 +9,8 @@ from uuid import UUID
 from pydantic import field_validator
 from sqlmodel import Field, SQLModel
 
+from app.core.node_class import GatewayNodeClass
+
 RUNTIME_TYPE_REFERENCES = (datetime, UUID)
 PROFILE_NAMES = ("general", "coder", "budget")
 ProfileName = Literal["general", "coder", "budget"]
@@ -97,6 +99,7 @@ class GatewayRuntimeSummary(SQLModel):
     """Gateway runtime state returned by Mission Control."""
 
     gateway_id: UUID
+    node_class: GatewayNodeClass = "cloud"
     runtime_sync_generation: int
     last_runtime_sync_at: datetime | None = None
     last_runtime_sync_error: str | None = None

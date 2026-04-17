@@ -62,6 +62,7 @@ def test_gateway_read_normalizes_null_model_profiles() -> None:
             "organization_id": "00000000-0000-0000-0000-000000000002",
             "name": "gateway",
             "url": "ws://127.0.0.1:18789",
+            "node_class": "cloud",
             "workspace_root": "/tmp/workspaces",
             "allow_insecure_tls": False,
             "disable_device_pairing": False,
@@ -75,12 +76,35 @@ def test_gateway_read_normalizes_null_model_profiles() -> None:
     assert gateway.model_profiles.general is None
     assert gateway.model_profiles.coder is None
     assert gateway.model_profiles.budget is None
+    assert gateway.node_class == "cloud"
+
+
+def test_gateway_read_normalizes_node_class_case() -> None:
+    gateway = GatewayRead.model_validate(
+        {
+            "id": "00000000-0000-0000-0000-000000000001",
+            "organization_id": "00000000-0000-0000-0000-000000000002",
+            "name": "gateway",
+            "url": "ws://127.0.0.1:18789",
+            "node_class": "LOCAL",
+            "workspace_root": "/tmp/workspaces",
+            "allow_insecure_tls": False,
+            "disable_device_pairing": False,
+            "default_model_profile": "general",
+            "model_profiles": None,
+            "created_at": "2026-04-13T00:00:00Z",
+            "updated_at": "2026-04-13T00:00:00Z",
+        },
+    )
+
+    assert gateway.node_class == "local"
 
 
 def test_gateway_update_accepts_runtime_model_profile_patch() -> None:
     payload = GatewayUpdate.model_validate(
         {
             "default_model_profile": "general",
+            "node_class": "local",
             "model_profiles": {
                 "general": {
                     "primary_model": "microsoft-foundry/model-router",
@@ -91,6 +115,7 @@ def test_gateway_update_accepts_runtime_model_profile_patch() -> None:
     )
 
     assert payload.default_model_profile == "general"
+    assert payload.node_class == "local"
     assert payload.model_profiles is not None
     assert payload.model_profiles.general is not None
     assert payload.model_profiles.general.primary_model == "microsoft-foundry/model-router"

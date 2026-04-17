@@ -18,6 +18,7 @@ import {
   type GatewayCheckStatus,
   validateGatewayUrl,
 } from "@/lib/gateway-form";
+import type { NodeClass } from "@/lib/node-scope";
 
 export default function NewGatewayPage() {
   const { isSignedIn } = useAuth();
@@ -26,11 +27,15 @@ export default function NewGatewayPage() {
   const { isAdmin } = useOrganizationMembership(isSignedIn);
 
   const [name, setName] = useState("");
+  const [nodeClass, setNodeClass] = useState<NodeClass>("cloud");
   const [gatewayUrl, setGatewayUrl] = useState("");
   const [gatewayToken, setGatewayToken] = useState("");
   const [disableDevicePairing, setDisableDevicePairing] = useState(false);
   const [workspaceRoot, setWorkspaceRoot] = useState(DEFAULT_WORKSPACE_ROOT);
   const [allowInsecureTls, setAllowInsecureTls] = useState(false);
+  const [defaultModelProfile, setDefaultModelProfile] = useState<
+    "general" | "coder" | "budget"
+  >("general");
 
   const [gatewayUrlError, setGatewayUrlError] = useState<string | null>(null);
   const [gatewayCheckStatus, setGatewayCheckStatus] =
@@ -100,11 +105,13 @@ export default function NewGatewayPage() {
     createMutation.mutate({
       data: {
         name: name.trim(),
+        node_class: nodeClass,
         url: gatewayUrl.trim(),
         token: gatewayToken.trim() || null,
         disable_device_pairing: disableDevicePairing,
         workspace_root: workspaceRoot.trim(),
         allow_insecure_tls: allowInsecureTls,
+        default_model_profile: defaultModelProfile,
       },
     });
   };
@@ -115,18 +122,20 @@ export default function NewGatewayPage() {
         message: "Sign in to create a gateway.",
         forceRedirectUrl: "/gateways/new",
       }}
-      title="Create gateway"
-      description="Configure an OpenClaw gateway for mission control."
+      title="Create node"
+      description="Configure an OpenClaw runtime node for Mission Control."
       isAdmin={isAdmin}
-      adminOnlyMessage="Only organization owners and admins can create gateways."
+      adminOnlyMessage="Only organization owners and admins can create nodes."
     >
       <GatewayForm
         name={name}
+        nodeClass={nodeClass}
         gatewayUrl={gatewayUrl}
         gatewayToken={gatewayToken}
         disableDevicePairing={disableDevicePairing}
         workspaceRoot={workspaceRoot}
         allowInsecureTls={allowInsecureTls}
+        defaultModelProfile={defaultModelProfile}
         gatewayUrlError={gatewayUrlError}
         gatewayCheckStatus={gatewayCheckStatus}
         gatewayCheckMessage={gatewayCheckMessage}
@@ -140,6 +149,7 @@ export default function NewGatewayPage() {
         onSubmit={handleSubmit}
         onCancel={() => router.push("/gateways")}
         onNameChange={setName}
+        onNodeClassChange={setNodeClass}
         onGatewayUrlChange={(next) => {
           setGatewayUrl(next);
           setGatewayUrlError(null);
@@ -162,6 +172,7 @@ export default function NewGatewayPage() {
           setGatewayCheckStatus("idle");
           setGatewayCheckMessage(null);
         }}
+        onDefaultModelProfileChange={setDefaultModelProfile}
       />
     </DashboardPageLayout>
   );

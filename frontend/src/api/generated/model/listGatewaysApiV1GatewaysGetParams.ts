@@ -6,6 +6,7 @@
  */
 
 export type ListGatewaysApiV1GatewaysGetParams = {
+  node_class?: "cloud" | "local" | null;
   /**
    * @minimum 1
    * @maximum 200

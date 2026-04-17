@@ -15,6 +15,7 @@ from sqlmodel.ext.asyncio.session import AsyncSession
 
 from app.api.deps import require_org_member
 from app.core.time import utcnow
+from app.core.node_class import GatewayNodeClass
 from app.db.session import get_session
 from app.models.activity_events import ActivityEvent
 from app.models.agents import Agent
@@ -36,6 +37,7 @@ from app.schemas.metrics import (
     DashboardWipSeriesSet,
 )
 from app.services.organizations import OrganizationContext, list_accessible_board_ids
+from app.services.openclaw.node_class import filter_board_ids_by_gateway_scope
 
 router = APIRouter(prefix="/metrics", tags=["metrics"])
 
@@ -44,6 +46,8 @@ _RUNTIME_TYPE_REFERENCES = (UUID, AsyncSession)
 RANGE_QUERY = Query(default="24h")
 BOARD_ID_QUERY = Query(default=None)
 GROUP_ID_QUERY = Query(default=None)
+GATEWAY_ID_QUERY = Query(default=None)
+NODE_CLASS_QUERY = Query(default=None)
 SESSION_DEP = Depends(get_session)
 ORG_MEMBER_DEP = Depends(require_org_member)
 
@@ -454,6 +458,8 @@ async def _resolve_dashboard_board_ids(
     ctx: OrganizationContext,
     board_id: UUID | None,
     group_id: UUID | None,
+    gateway_id: UUID | None,
+    node_class: GatewayNodeClass | None,
 ) -> list[UUID]:
     board_ids = await list_accessible_board_ids(session, member=ctx.member, write=False)
     if not board_ids:
@@ -462,6 +468,16 @@ async def _resolve_dashboard_board_ids(
 
     if board_id is not None and board_id not in allowed:
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN)
+
+    board_ids = await filter_board_ids_by_gateway_scope(
+        session,
+        board_ids,
+        gateway_id=gateway_id,
+        node_class=node_class,
+    )
+
+    if board_id is not None and board_id not in set(board_ids):
+        return []
 
     if group_id is None:
         return [board_id] if board_id is not None else board_ids
@@ -484,6 +500,8 @@ async def dashboard_metrics(
     range_key: DashboardRangeKey = RANGE_QUERY,
     board_id: UUID | None = BOARD_ID_QUERY,
     group_id: UUID | None = GROUP_ID_QUERY,
+    gateway_id: UUID | None = GATEWAY_ID_QUERY,
+    node_class: GatewayNodeClass | None = NODE_CLASS_QUERY,
     session: AsyncSession = SESSION_DEP,
     ctx: OrganizationContext = ORG_MEMBER_DEP,
 ) -> DashboardMetrics:
@@ -495,6 +513,8 @@ async def dashboard_metrics(
         ctx=ctx,
         board_id=board_id,
         group_id=group_id,
+        gateway_id=gateway_id,
+        node_class=node_class,
     )
 
     throughput_primary = await _query_throughput(session, primary, board_ids)

@@ -457,7 +457,7 @@ async def list_accessible_board_ids(
                 col(Board.organization_id) == member.organization_id,
             ),
         )
-        return list(ids)
+        return list(ids.all())
 
     access_stmt = select(OrganizationBoardAccess.board_id).where(
         col(OrganizationBoardAccess.organization_member_id) == member.id,
@@ -474,7 +474,7 @@ async def list_accessible_board_ids(
             ),
         )
     board_ids = await session.exec(access_stmt)
-    return list(board_ids)
+    return list(board_ids.all())
 
 
 async def apply_member_access_update(

@@ -10,4 +10,6 @@ export type DashboardMetricsApiV1MetricsDashboardGetParams = {
   range_key?: DashboardMetricsApiV1MetricsDashboardGetRangeKey;
   board_id?: string | null;
   group_id?: string | null;
+  gateway_id?: string | null;
+  node_class?: "cloud" | "local" | null;
 };

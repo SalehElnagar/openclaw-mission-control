@@ -21,6 +21,7 @@ import {
 } from "lucide-react";
 
 import { DashboardSidebar } from "@/components/organisms/DashboardSidebar";
+import { useNodeScope } from "@/components/providers/NodeScopeProvider";
 import { ThroughputChart, WipChart } from "@/components/organisms/DashboardCharts";
 import { DashboardShell } from "@/components/templates/DashboardShell";
 import { Markdown } from "@/components/atoms/Markdown";
@@ -506,6 +507,11 @@ export default function DashboardPage() {
   const router = useRouter();
   const searchParams = useSearchParams();
   const { isSignedIn } = useAuth();
+  const {
+    scopedGateways,
+    selectedGatewayId,
+    selectedNodeClass,
+  } = useNodeScope();
   const [showSystemSignals, setShowSystemSignals] = useState(false);
   const selectedRangeKey = useMemo<DashboardMetricsApiV1MetricsDashboardGetRangeKey>(() => {
     const requested = searchParams.get("range") as
@@ -550,6 +556,8 @@ export default function DashboardPage() {
   >(
     {
       range_key: selectedRangeKey,
+      gateway_id: selectedGatewayId ?? undefined,
+      node_class: selectedNodeClass ?? undefined,
     },
     {
       query: {
@@ -563,7 +571,11 @@ export default function DashboardPage() {
   );
 
   const activityQuery = useListActivityApiV1ActivityGet<listActivityApiV1ActivityGetResponse, ApiError>(
-    { limit: 200 },
+    {
+      limit: 200,
+      gateway_id: selectedGatewayId ?? undefined,
+      node_class: selectedNodeClass ?? undefined,
+    },
     {
       query: {
         enabled: Boolean(isSignedIn),
@@ -612,14 +624,32 @@ export default function DashboardPage() {
   );
 
   const metrics = metricsQuery.data?.status === 200 ? metricsQuery.data.data : null;
+  const scopedGatewayIdSet = useMemo(
+    () => new Set(scopedGateways.map((gateway) => gateway.id)),
+    [scopedGateways],
+  );
+  const scopedBoards = useMemo(
+    () =>
+      selectedGatewayId || selectedNodeClass
+        ? boards.filter((board) =>
+            board.gateway_id ? scopedGatewayIdSet.has(board.gateway_id) : false,
+          )
+        : boards,
+    [boards, scopedGatewayIdSet, selectedGatewayId, selectedNodeClass],
+  );
 
   const onlineAgents = useMemo(
-    () => agents.filter((agent) => (agent.status ?? "").toLowerCase() === "online").length,
-    [agents],
+    () =>
+      agents.filter(
+        (agent) =>
+          (!selectedGatewayId && !selectedNodeClass) ||
+          scopedGatewayIdSet.has(agent.gateway_id),
+      ).filter((agent) => (agent.status ?? "").toLowerCase() === "online").length,
+    [agents, scopedGatewayIdSet, selectedGatewayId, selectedNodeClass],
   );
   const gatewayTargets = useMemo<GatewayTarget[]>(() => {
     const byGateway = new Map<string, GatewayTarget>();
-    for (const board of boards) {
+    for (const board of scopedBoards) {
       const gatewayId = board.gateway_id;
       if (!gatewayId) continue;
       if (byGateway.has(gatewayId)) continue;
@@ -630,9 +660,9 @@ export default function DashboardPage() {
       });
     }
     return [...byGateway.values()].sort((a, b) => a.boardName.localeCompare(b.boardName));
-  }, [boards]);
+  }, [scopedBoards]);
   const configuredGatewaysCount =
-    gatewayTargets.length > 0 ? gatewayTargets.length : orgGateways.length;
+    gatewayTargets.length > 0 ? gatewayTargets.length : scopedGateways.length;
   const hasConfiguredGateways = configuredGatewaysCount > 0;
 
   const gatewayStatusesQuery = useQuery<GatewaySnapshot[], ApiError>({
@@ -720,9 +750,13 @@ export default function DashboardPage() {
   const activityEvents = useMemo(
     () =>
       activityQuery.data?.status === 200
-        ? [...(activityQuery.data.data.items ?? [])]
+        ? [...(activityQuery.data.data.items ?? [])].filter((event) =>
+            !selectedGatewayId && !selectedNodeClass
+              ? true
+              : Boolean(event.board_id && scopedBoards.some((board) => board.id === event.board_id))
+          )
         : [],
-    [activityQuery.data],
+    [activityQuery.data, scopedBoards, selectedGatewayId, selectedNodeClass],
   );
 
   const orderedActivityEvents = useMemo(

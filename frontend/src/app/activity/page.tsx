@@ -34,6 +34,7 @@ import { Markdown } from "@/components/atoms/Markdown";
 import { ActivityFeed } from "@/components/activity/ActivityFeed";
 import { SignedOutPanel } from "@/components/auth/SignedOutPanel";
 import { DashboardSidebar } from "@/components/organisms/DashboardSidebar";
+import { useNodeScope } from "@/components/providers/NodeScopeProvider";
 import { DashboardShell } from "@/components/templates/DashboardShell";
 import { createExponentialBackoff } from "@/lib/backoff";
 import {
@@ -390,6 +391,11 @@ export default function ActivityPage() {
   }, []);
 
   const { isSignedIn } = useAuth();
+  const {
+    scopedGateways,
+    selectedGatewayId,
+    selectedNodeClass,
+  } = useNodeScope();
   const searchParams = useSearchParams();
   const isPageActive = usePageActive();
   const selectedEventId = useMemo(() => {
@@ -440,6 +446,22 @@ export default function ActivityPage() {
   }, [feedItems]);
 
   const boardIds = useMemo(() => boards.map((board) => board.id), [boards]);
+  const scopedGatewayIds = useMemo(
+    () => new Set(scopedGateways.map((gateway) => gateway.id)),
+    [scopedGateways],
+  );
+  const scopedBoardIds = useMemo(
+    () =>
+      new Set(
+        (selectedGatewayId || selectedNodeClass
+          ? boards.filter((board) =>
+              board.gateway_id ? scopedGatewayIds.has(board.gateway_id) : false,
+            )
+          : boards
+        ).map((board) => board.id),
+      ),
+    [boards, scopedGatewayIds, selectedGatewayId, selectedNodeClass],
+  );
 
   const pushFeedItem = useCallback((item: FeedItem) => {
     setFeedItems((prev) => {
@@ -885,6 +907,8 @@ export default function ActivityPage() {
           const result = await listActivityApiV1ActivityGet({
             limit: PAGED_LIMIT,
             offset,
+            gateway_id: selectedGatewayId ?? undefined,
+            node_class: selectedNodeClass ?? undefined,
           });
           if (cancelled) return;
           if (result.status !== 200) {
@@ -932,6 +956,8 @@ export default function ActivityPage() {
     mapApprovalEvent,
     mapBoardChat,
     mapTaskActivity,
+    selectedGatewayId,
+    selectedNodeClass,
   ]);
 
   useEffect(() => {
@@ -1453,12 +1479,24 @@ export default function ActivityPage() {
               message: item.message,
             }),
         );
-    return [...visibleFeed].sort((a, b) => {
+    const scopedFeed =
+      selectedGatewayId || selectedNodeClass
+        ? visibleFeed.filter((item) =>
+            item.board_id ? scopedBoardIds.has(item.board_id) : false,
+          )
+        : visibleFeed;
+    return [...scopedFeed].sort((a, b) => {
       const aTime = apiDatetimeToMs(a.created_at) ?? 0;
       const bTime = apiDatetimeToMs(b.created_at) ?? 0;
       return bTime - aTime;
     });
-  }, [feedItems, showSystemActivity]);
+  }, [
+    feedItems,
+    scopedBoardIds,
+    selectedGatewayId,
+    selectedNodeClass,
+    showSystemActivity,
+  ]);
 
   const selectedFeedItemId = useMemo(() => {
     if (!selectedEventId) return null;

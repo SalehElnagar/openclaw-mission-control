@@ -592,6 +592,7 @@ class GatewayRuntimeControlService(OpenClawDBService):
             available_models = []
         return GatewayRuntimeSummary(
             gateway_id=gateway.id,
+            node_class=gateway.node_class,
             runtime_sync_generation=gateway.runtime_sync_generation,
             last_runtime_sync_at=gateway.last_runtime_sync_at,
             last_runtime_sync_error=gateway.last_runtime_sync_error,

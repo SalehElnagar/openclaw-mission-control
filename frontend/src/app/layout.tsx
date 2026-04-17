@@ -10,6 +10,7 @@ import { AuthMode } from "@/auth/mode";
 import { LOCAL_AUTH_PRESENCE_COOKIE } from "@/auth/localAuthShared";
 import { AuthProvider } from "@/components/providers/AuthProvider";
 import { LocalAuthBootstrap } from "@/components/providers/LocalAuthBootstrap";
+import { NodeScopeProvider } from "@/components/providers/NodeScopeProvider";
 import { QueryProvider } from "@/components/providers/QueryProvider";
 import { ThemeProvider } from "@/components/providers/ThemeProvider";
 import { GlobalLoader } from "@/components/ui/global-loader";
@@ -77,10 +78,12 @@ export default async function RootLayout({
           ) : (
             <AuthProvider initialLocalAuthPresence={initialLocalAuthPresence}>
               <QueryProvider>
-                <GlobalLoader />
-                <Toaster />
-                <CommandPalette />
-                {children}
+                <NodeScopeProvider>
+                  <GlobalLoader />
+                  <Toaster />
+                  <CommandPalette />
+                  {children}
+                </NodeScopeProvider>
               </QueryProvider>
             </AuthProvider>
           )}

@@ -6,6 +6,8 @@
  */
 
 export type ListActivityApiV1ActivityGetParams = {
+  gateway_id?: string | null;
+  node_class?: "cloud" | "local" | null;
   /**
    * @minimum 1
    * @maximum 200

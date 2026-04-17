@@ -26,6 +26,7 @@ import {
 import { SignedOutPanel } from "@/components/auth/SignedOutPanel";
 import { Markdown } from "@/components/atoms/Markdown";
 import { DashboardSidebar } from "@/components/organisms/DashboardSidebar";
+import { useNodeScope } from "@/components/providers/NodeScopeProvider";
 import { DashboardShell } from "@/components/templates/DashboardShell";
 import { Button } from "@/components/ui/button";
 import {
@@ -47,6 +48,7 @@ import {
 import { Textarea } from "@/components/ui/textarea";
 import { cn } from "@/lib/utils";
 import { formatTimestamp } from "@/lib/formatters";
+import { scopedGatewayOptions } from "@/lib/node-scope";
 
 const PRODUCT_QUERY_KEY = ["products"] as const;
 const OPTIMIZE_OPTIONS: Array<{ value: ProductOptimizeFor; label: string }> = [
@@ -91,6 +93,7 @@ const statusTone = (status: ProductStatus) => {
 export default function ProductsPage() {
   const { isSignedIn } = useAuth();
   const queryClient = useQueryClient();
+  const { scope } = useNodeScope();
   const [dialogOpen, setDialogOpen] = useState(false);
   const [name, setName] = useState("");
   const [description, setDescription] = useState("");
@@ -120,6 +123,15 @@ export default function ProductsPage() {
     },
   });
   const gateways = gatewaysQuery.data?.status === 200 ? gatewaysQuery.data.data.items ?? [] : [];
+  const visibleGateways = useMemo(
+    () =>
+      scopedGatewayOptions(
+        gateways,
+        scope,
+        defaultGatewayId === "none" ? null : defaultGatewayId,
+      ),
+    [defaultGatewayId, gateways, scope],
+  );
   const runtimeQuery = useQuery({
     queryKey: ["gateway-runtime", defaultGatewayId],
     queryFn: () => getGatewayRuntime(defaultGatewayId),
@@ -365,11 +377,11 @@ export default function ProductsPage() {
                 <label className="text-sm font-medium text-strong">Default gateway</label>
                 <Select value={defaultGatewayId} onValueChange={setDefaultGatewayId}>
                   <SelectTrigger>
-                    <SelectValue placeholder="Choose a gateway" />
+                    <SelectValue placeholder="Choose a node" />
                   </SelectTrigger>
                   <SelectContent>
                     <SelectItem value="none">Choose automatically</SelectItem>
-                    {gateways.map((gateway) => (
+                    {visibleGateways.map((gateway) => (
                       <SelectItem key={gateway.id} value={gateway.id}>
                         {gateway.name}
                       </SelectItem>

@@ -2,7 +2,7 @@
 
 export const dynamic = "force-dynamic";
 
-import { useState } from "react";
+import { useMemo, useState } from "react";
 import { useParams, useRouter } from "next/navigation";
 
 import { useAuth } from "@/auth/clerk";
@@ -13,6 +13,7 @@ import {
   useGetGatewayApiV1GatewaysGatewayIdGet,
   useUpdateGatewayApiV1GatewaysGatewayIdPatch,
 } from "@/api/generated/gateways/gateways";
+import { useQuery } from "@tanstack/react-query";
 import { useOrganizationMembership } from "@/lib/use-organization-membership";
 import type { GatewayUpdate } from "@/api/generated/model";
 import { GatewayForm } from "@/components/gateways/GatewayForm";
@@ -23,6 +24,8 @@ import {
   type GatewayCheckStatus,
   validateGatewayUrl,
 } from "@/lib/gateway-form";
+import { getGatewayRuntime } from "@/api/runtime-control";
+import type { NodeClass } from "@/lib/node-scope";
 
 export default function EditGatewayPage() {
   const { isSignedIn } = useAuth();
@@ -36,6 +39,7 @@ export default function EditGatewayPage() {
   const { isAdmin } = useOrganizationMembership(isSignedIn);
 
   const [name, setName] = useState<string | undefined>(undefined);
+  const [nodeClass, setNodeClass] = useState<NodeClass | undefined>(undefined);
   const [gatewayUrl, setGatewayUrl] = useState<string | undefined>(undefined);
   const [gatewayToken, setGatewayToken] = useState<string | undefined>(
     undefined,
@@ -49,6 +53,12 @@ export default function EditGatewayPage() {
   const [allowInsecureTls, setAllowInsecureTls] = useState<boolean | undefined>(
     undefined,
   );
+  const [defaultModelProfile, setDefaultModelProfile] = useState<
+    "general" | "coder" | "budget" | undefined
+  >(undefined);
+  const [modelProfiles, setModelProfiles] = useState<
+    GatewayUpdate["model_profiles"] | undefined
+  >(undefined);
 
   const [gatewayUrlError, setGatewayUrlError] = useState<string | null>(null);
   const [gatewayCheckStatus, setGatewayCheckStatus] =
@@ -86,6 +96,7 @@ export default function EditGatewayPage() {
   const loadedGateway =
     gatewayQuery.data?.status === 200 ? gatewayQuery.data.data : null;
   const resolvedName = name ?? loadedGateway?.name ?? "";
+  const resolvedNodeClass = nodeClass ?? loadedGateway?.node_class ?? "cloud";
   const resolvedGatewayUrl = gatewayUrl ?? loadedGateway?.url ?? "";
   const resolvedGatewayToken = gatewayToken ?? loadedGateway?.token ?? "";
   const resolvedDisableDevicePairing =
@@ -94,6 +105,29 @@ export default function EditGatewayPage() {
     workspaceRoot ?? loadedGateway?.workspace_root ?? DEFAULT_WORKSPACE_ROOT;
   const resolvedAllowInsecureTls =
     allowInsecureTls ?? loadedGateway?.allow_insecure_tls ?? false;
+  const resolvedDefaultModelProfile =
+    defaultModelProfile ?? loadedGateway?.default_model_profile ?? "general";
+  const resolvedModelProfiles =
+    modelProfiles ?? loadedGateway?.model_profiles ?? {};
+
+  const runtimeQuery = useQuery({
+    queryKey: ["gateway-runtime", gatewayId],
+    queryFn: () => getGatewayRuntime(gatewayId ?? ""),
+    enabled: Boolean(isSignedIn && isAdmin && gatewayId),
+    refetchInterval: 30_000,
+  });
+  const availableModelRefs = useMemo(
+    () =>
+      runtimeQuery.data?.status === 200
+        ? (runtimeQuery.data.data.catalog ?? [])
+            .filter((entry) => entry.selectable !== false)
+            .map((entry) => ({
+              ref: entry.ref,
+              label: entry.label || entry.ref,
+            }))
+        : [],
+    [runtimeQuery.data],
+  );
 
   const isLoading =
     gatewayQuery.isLoading ||
@@ -144,11 +178,14 @@ export default function EditGatewayPage() {
 
     const payload: GatewayUpdate = {
       name: resolvedName.trim(),
+      node_class: resolvedNodeClass,
       url: resolvedGatewayUrl.trim(),
       token: resolvedGatewayToken.trim() || null,
       disable_device_pairing: resolvedDisableDevicePairing,
       workspace_root: resolvedWorkspaceRoot.trim(),
       allow_insecure_tls: resolvedAllowInsecureTls,
+      default_model_profile: resolvedDefaultModelProfile,
+      model_profiles: resolvedModelProfiles,
     };
 
     updateMutation.mutate({ gatewayId, data: payload });
@@ -162,20 +199,24 @@ export default function EditGatewayPage() {
       }}
       title={
         resolvedName.trim()
-          ? `Edit gateway — ${resolvedName.trim()}`
-          : "Edit gateway"
+          ? `Edit node — ${resolvedName.trim()}`
+          : "Edit node"
       }
-      description="Update connection settings for this OpenClaw gateway."
+      description="Update connection, model policy, and capability defaults for this node."
       isAdmin={isAdmin}
-      adminOnlyMessage="Only organization owners and admins can edit gateways."
+      adminOnlyMessage="Only organization owners and admins can edit nodes."
     >
       <GatewayForm
         name={resolvedName}
+        nodeClass={resolvedNodeClass}
         gatewayUrl={resolvedGatewayUrl}
         gatewayToken={resolvedGatewayToken}
         disableDevicePairing={resolvedDisableDevicePairing}
         workspaceRoot={resolvedWorkspaceRoot}
         allowInsecureTls={resolvedAllowInsecureTls}
+        defaultModelProfile={resolvedDefaultModelProfile}
+        modelProfiles={resolvedModelProfiles}
+        availableModelRefs={availableModelRefs}
         gatewayUrlError={gatewayUrlError}
         gatewayCheckStatus={gatewayCheckStatus}
         gatewayCheckMessage={gatewayCheckMessage}
@@ -189,6 +230,7 @@ export default function EditGatewayPage() {
         onSubmit={handleSubmit}
         onCancel={() => router.push("/gateways")}
         onNameChange={setName}
+        onNodeClassChange={setNodeClass}
         onGatewayUrlChange={(next) => {
           setGatewayUrl(next);
           setGatewayUrlError(null);
@@ -210,6 +252,18 @@ export default function EditGatewayPage() {
           setAllowInsecureTls(next);
           setGatewayCheckStatus("idle");
           setGatewayCheckMessage(null);
+        }}
+        onDefaultModelProfileChange={setDefaultModelProfile}
+        onModelProfilePrimaryChange={(profile, value) => {
+          setModelProfiles((current) => ({
+            ...(current ?? loadedGateway?.model_profiles ?? {}),
+            [profile]: {
+              primary_model: value,
+              fallback_models:
+                (current ?? loadedGateway?.model_profiles ?? {})?.[profile]
+                  ?.fallback_models ?? [],
+            },
+          }));
         }}
       />
     </DashboardPageLayout>

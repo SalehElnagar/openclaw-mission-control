@@ -8,6 +8,7 @@ from uuid import UUID
 from pydantic import field_validator
 from sqlmodel import Field, SQLModel
 
+from app.core.node_class import GatewayNodeClass
 from app.schemas.gateway_runtime import GatewayModelProfiles, ProfileName
 
 RUNTIME_ANNOTATION_TYPES = (datetime, UUID)
@@ -18,6 +19,7 @@ class GatewayBase(SQLModel):
 
     name: str
     url: str
+    node_class: GatewayNodeClass = "cloud"
     workspace_root: str
     allow_insecure_tls: bool = False
     disable_device_pairing: bool = False
@@ -37,6 +39,17 @@ class GatewayBase(SQLModel):
             return value
         if isinstance(value, dict):
             return GatewayModelProfiles.model_validate(value)
+        return value
+
+    @field_validator("node_class", mode="before")
+    @classmethod
+    def normalize_node_class(cls, value: object) -> GatewayNodeClass | object:
+        """Normalize node class input to lowercase cloud/local values."""
+        if value is None:
+            return value
+        if isinstance(value, str):
+            normalized = value.strip().lower()
+            return normalized or value
         return value
 
 
@@ -62,6 +75,7 @@ class GatewayUpdate(SQLModel):
 
     name: str | None = None
     url: str | None = None
+    node_class: GatewayNodeClass | None = None
     token: str | None = None
     workspace_root: str | None = None
     allow_insecure_tls: bool | None = None
@@ -78,6 +92,20 @@ class GatewayUpdate(SQLModel):
         if isinstance(value, str):
             value = value.strip()
             return value or None
+        return value
+
+    @field_validator("node_class", mode="before")
+    @classmethod
+    def normalize_update_node_class(
+        cls,
+        value: object,
+    ) -> GatewayNodeClass | None | object:
+        """Normalize node class patches to lowercase cloud/local values."""
+        if value is None:
+            return None
+        if isinstance(value, str):
+            normalized = value.strip().lower()
+            return normalized or None
         return value
 
     @field_validator("model_profiles", mode="before")

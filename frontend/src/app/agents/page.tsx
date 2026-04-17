@@ -9,6 +9,7 @@ import { useAuth } from "@/auth/clerk";
 import { useQueryClient } from "@tanstack/react-query";
 
 import { AgentsTable } from "@/components/agents/AgentsTable";
+import { useNodeScope } from "@/components/providers/NodeScopeProvider";
 import { DashboardPageLayout } from "@/components/templates/DashboardPageLayout";
 import { Button } from "@/components/ui/button";
 import { ConfirmActionDialog } from "@/components/ui/confirm-action-dialog";
@@ -25,6 +26,10 @@ import {
   getListBoardsApiV1BoardsGetQueryKey,
   useListBoardsApiV1BoardsGet,
 } from "@/api/generated/boards/boards";
+import {
+  type listGatewaysApiV1GatewaysGetResponse,
+  useListGatewaysApiV1GatewaysGet,
+} from "@/api/generated/gateways/gateways";
 import { type AgentRead } from "@/api/generated/model";
 import { createOptimisticListDeleteMutation } from "@/lib/list-delete";
 import { useOrganizationMembership } from "@/lib/use-organization-membership";
@@ -44,6 +49,7 @@ export default function AgentsPage() {
   const { isSignedIn } = useAuth();
   const queryClient = useQueryClient();
   const router = useRouter();
+  const { scopedGateways, selectedGatewayId, selectedNodeClass } = useNodeScope();
 
   const { isAdmin } = useOrganizationMembership(isSignedIn);
   const { sorting, onSortingChange } = useUrlSorting({
@@ -71,13 +77,26 @@ export default function AgentsPage() {
   const agentsQuery = useListAgentsApiV1AgentsGet<
     listAgentsApiV1AgentsGetResponse,
     ApiError
-  >(undefined, {
+  >(selectedGatewayId ? { gateway_id: selectedGatewayId } : undefined, {
     query: {
       enabled: Boolean(isSignedIn && isAdmin),
       refetchInterval: 15_000,
       refetchOnMount: "always",
     },
   });
+  const gatewaysQuery = useListGatewaysApiV1GatewaysGet<
+    listGatewaysApiV1GatewaysGetResponse,
+    ApiError
+  >(
+    { limit: 200 },
+    {
+      query: {
+        enabled: Boolean(isSignedIn && isAdmin),
+        refetchInterval: 30_000,
+        refetchOnMount: "always",
+      },
+    },
+  );
 
   const boards = useMemo(
     () =>
@@ -86,12 +105,39 @@ export default function AgentsPage() {
         : [],
     [boardsQuery.data],
   );
+  const gateways = useMemo(
+    () =>
+      gatewaysQuery.data?.status === 200
+        ? (gatewaysQuery.data.data.items ?? [])
+        : [],
+    [gatewaysQuery.data],
+  );
   const agents = useMemo(
     () =>
       agentsQuery.data?.status === 200
         ? (agentsQuery.data.data.items ?? [])
         : [],
     [agentsQuery.data],
+  );
+  const scopedGatewayIds = useMemo(
+    () => new Set(scopedGateways.map((gateway) => gateway.id)),
+    [scopedGateways],
+  );
+  const visibleBoards = useMemo(
+    () =>
+      selectedGatewayId || selectedNodeClass
+        ? boards.filter((board) =>
+            board.gateway_id ? scopedGatewayIds.has(board.gateway_id) : false,
+          )
+        : boards,
+    [boards, scopedGatewayIds, selectedGatewayId, selectedNodeClass],
+  );
+  const visibleAgents = useMemo(
+    () =>
+      selectedGatewayId || selectedNodeClass
+        ? agents.filter((agent) => scopedGatewayIds.has(agent.gateway_id))
+        : agents,
+    [agents, scopedGatewayIds, selectedGatewayId, selectedNodeClass],
   );
 
   const deleteMutation = useDeleteAgentApiV1AgentsAgentIdDelete<
@@ -131,9 +177,9 @@ export default function AgentsPage() {
           signUpForceRedirectUrl: "/agents",
         }}
         title="Agents"
-        description={`${agents.length} agent${agents.length === 1 ? "" : "s"} total.`}
+        description={`${visibleAgents.length} agent${visibleAgents.length === 1 ? "" : "s"} in scope.`}
         headerActions={
-          agents.length > 0 ? (
+          visibleAgents.length > 0 ? (
             <Button onClick={() => router.push("/agents/new")}>
               New agent
             </Button>
@@ -145,8 +191,9 @@ export default function AgentsPage() {
       >
         <div className="overflow-hidden rounded-xl border border-[color:var(--border)] bg-[color:var(--surface)] shadow-sm">
           <AgentsTable
-            agents={agents}
-            boards={boards}
+            agents={visibleAgents}
+            boards={visibleBoards}
+            gateways={gateways}
             isLoading={agentsQuery.isLoading}
             sorting={sorting}
             onSortingChange={onSortingChange}

@@ -95,9 +95,9 @@ export function UserMenu({
       <PopoverContent
         align="end"
         sideOffset={12}
-        className="w-80 overflow-hidden rounded-2xl border border-[color:var(--border)] bg-[color:var(--surface-elevated)] p-0 text-strong shadow-lush backdrop-blur-xl"
+        className="w-80 overflow-hidden rounded-2xl border border-[color:var(--border-strong)] bg-[color:var(--surface-elevated)] p-0 text-[color:var(--text-strong)] shadow-lush backdrop-blur-xl"
       >
-        <div className="border-b border-[color:var(--border)] px-4 py-3">
+        <div className="border-b border-[color:var(--border-strong)] px-4 py-3">
           <div className="flex items-center gap-3">
             <span
               className={cn(
@@ -120,11 +120,11 @@ export function UserMenu({
               )}
             </span>
             <div className="min-w-0">
-              <div className="truncate text-sm font-semibold text-strong">
+              <div className="truncate text-sm font-semibold text-[color:var(--text-strong)]">
                 {displayName}
               </div>
               {displayEmail ? (
-                <div className="truncate text-xs text-muted">
+                <div className="truncate text-xs text-[color:var(--text-muted)]">
                   {displayEmail}
                 </div>
               ) : null}
@@ -135,10 +135,10 @@ export function UserMenu({
           <div className="grid grid-cols-2 gap-2">
             <Link
               href="/boards"
-              className="flex w-full items-center justify-center gap-2 rounded-xl border border-[color:var(--border-strong)] bg-[color:var(--surface)] px-3 py-2 text-sm font-semibold text-strong transition hover:border-[color:var(--accent)] hover:bg-[color:var(--surface-muted)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[color:var(--accent)] focus-visible:ring-offset-2 focus-visible:ring-offset-[color:var(--surface-elevated)]"
+              className="flex w-full items-center justify-center gap-2 rounded-xl border border-[color:var(--border-strong)] bg-[color:var(--surface)] px-3 py-2 text-sm font-semibold text-[color:var(--text-strong)] transition hover:border-[color:var(--accent)] hover:bg-[color:var(--surface-muted)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[color:var(--accent)] focus-visible:ring-offset-2 focus-visible:ring-offset-[color:var(--surface-elevated)]"
               onClick={() => setOpen(false)}
             >
-              <Trello className="h-4 w-4 text-muted" />
+              <Trello className="h-4 w-4 text-[color:var(--text-muted)]" />
               Open boards
             </Link>
             <Link
@@ -161,7 +161,7 @@ export function UserMenu({
               { href: "/docs", label: "Docs", icon: FileText },
               { href: "/team", label: "Team", icon: Users },
               { href: "/agents", label: "Agents", icon: Bot },
-              { href: "/gateways", label: "Gateways", icon: Server },
+              { href: "/gateways", label: "Nodes", icon: Server },
               {
                 href: "/skills/marketplace",
                 label: "Skills marketplace",
@@ -174,10 +174,10 @@ export function UserMenu({
             <Link
               key={item.href}
               href={item.href}
-              className="flex w-full items-center gap-2 rounded-xl px-3 py-2 text-sm font-semibold text-strong transition hover:bg-[color:var(--surface-muted)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[color:var(--accent)] focus-visible:ring-offset-2 focus-visible:ring-offset-[color:var(--surface-elevated)]"
+              className="flex w-full items-center gap-2 rounded-xl px-3 py-2 text-sm font-semibold text-[color:var(--text-strong)] transition hover:bg-[color:var(--surface-muted)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[color:var(--accent)] focus-visible:ring-offset-2 focus-visible:ring-offset-[color:var(--surface-elevated)]"
               onClick={() => setOpen(false)}
             >
-              <item.icon className="h-4 w-4 text-muted" />
+              <item.icon className="h-4 w-4 text-[color:var(--text-muted)]" />
               {item.label}
             </Link>
           ))}
@@ -187,24 +187,24 @@ export function UserMenu({
           {localMode ? (
             <button
               type="button"
-              className="flex w-full items-center gap-2 rounded-xl px-3 py-2 text-sm font-semibold text-strong transition hover:bg-[color:var(--surface-muted)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[color:var(--accent)] focus-visible:ring-offset-2 focus-visible:ring-offset-[color:var(--surface-elevated)]"
+              className="flex w-full items-center gap-2 rounded-xl px-3 py-2 text-sm font-semibold text-[color:var(--text-strong)] transition hover:bg-[color:var(--surface-muted)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[color:var(--accent)] focus-visible:ring-offset-2 focus-visible:ring-offset-[color:var(--surface-elevated)]"
               onClick={() => {
                 clearLocalAuthToken();
                 setOpen(false);
                 window.location.reload();
               }}
             >
-              <LogOut className="h-4 w-4 text-muted" />
+              <LogOut className="h-4 w-4 text-[color:var(--text-muted)]" />
               Sign out
             </button>
           ) : (
             <SignOutButton>
               <button
                 type="button"
-                className="flex w-full items-center gap-2 rounded-xl px-3 py-2 text-sm font-semibold text-strong transition hover:bg-[color:var(--surface-muted)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[color:var(--accent)] focus-visible:ring-offset-2 focus-visible:ring-offset-[color:var(--surface-elevated)]"
+                className="flex w-full items-center gap-2 rounded-xl px-3 py-2 text-sm font-semibold text-[color:var(--text-strong)] transition hover:bg-[color:var(--surface-muted)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[color:var(--accent)] focus-visible:ring-offset-2 focus-visible:ring-offset-[color:var(--surface-elevated)]"
                 onClick={() => setOpen(false)}
               >
-                <LogOut className="h-4 w-4 text-muted" />
+                <LogOut className="h-4 w-4 text-[color:var(--text-muted)]" />
                 Sign out
               </button>
             </SignOutButton>

@@ -16,6 +16,7 @@ from sse_starlette.sse import EventSourceResponse
 
 from app.api.deps import ActorContext, require_org_member, require_user_or_agent
 from app.core.time import utcnow
+from app.core.node_class import GatewayNodeClass
 from app.db.pagination import paginate
 from app.db.session import async_session_maker, get_session
 from app.models.activity_events import ActivityEvent
@@ -29,6 +30,7 @@ from app.services.organizations import (
     get_active_membership,
     list_accessible_board_ids,
 )
+from app.services.openclaw.node_class import filter_board_ids_by_gateway_scope
 
 if TYPE_CHECKING:
     from collections.abc import AsyncIterator, Sequence
@@ -46,6 +48,8 @@ ACTOR_DEP = Depends(require_user_or_agent)
 ORG_MEMBER_DEP = Depends(require_org_member)
 BOARD_ID_QUERY = Query(default=None)
 SINCE_QUERY = Query(default=None)
+GATEWAY_ID_QUERY = Query(default=None)
+NODE_CLASS_QUERY = Query(default=None)
 _RUNTIME_TYPE_REFERENCES = (UUID,)
 
 
@@ -244,6 +248,8 @@ async def _fetch_task_comment_events(
 
 @router.get("", response_model=DefaultLimitOffsetPage[ActivityEventRead])
 async def list_activity(
+    gateway_id: UUID | None = GATEWAY_ID_QUERY,
+    node_class: GatewayNodeClass | None = NODE_CLASS_QUERY,
     session: AsyncSession = SESSION_DEP,
     actor: ActorContext = ACTOR_DEP,
 ) -> LimitOffsetPage[ActivityEventRead]:
@@ -260,6 +266,12 @@ async def list_activity(
         if member is None:
             raise HTTPException(status_code=status.HTTP_403_FORBIDDEN)
         board_ids = await list_accessible_board_ids(session, member=member, write=False)
+        board_ids = await filter_board_ids_by_gateway_scope(
+            session,
+            board_ids,
+            gateway_id=gateway_id,
+            node_class=node_class,
+        )
         if not board_ids:
             statement = statement.where(col(ActivityEvent.id).is_(None))
         else:
@@ -299,6 +311,8 @@ async def list_activity(
 )
 async def list_task_comment_feed(
     board_id: UUID | None = BOARD_ID_QUERY,
+    gateway_id: UUID | None = GATEWAY_ID_QUERY,
+    node_class: GatewayNodeClass | None = NODE_CLASS_QUERY,
     session: AsyncSession = SESSION_DEP,
     ctx: OrganizationContext = ORG_MEMBER_DEP,
 ) -> LimitOffsetPage[ActivityTaskCommentFeedItemRead]:
@@ -313,10 +327,17 @@ async def list_task_comment_feed(
         .order_by(desc(col(ActivityEvent.created_at)))
     )
     board_ids = await list_accessible_board_ids(session, member=ctx.member, write=False)
+    board_ids = await filter_board_ids_by_gateway_scope(
+        session,
+        board_ids,
+        gateway_id=gateway_id,
+        node_class=node_class,
+    )
     if board_id is not None:
-        if board_id not in set(board_ids):
-            raise HTTPException(status_code=status.HTTP_403_FORBIDDEN)
-        statement = statement.where(col(Task.board_id) == board_id)
+        if board_id in set(board_ids):
+            statement = statement.where(col(Task.board_id) == board_id)
+        else:
+            statement = statement.where(col(Task.id).is_(None))
     elif board_ids:
         statement = statement.where(col(Task.board_id).in_(board_ids))
     else:
@@ -334,19 +355,23 @@ async def stream_task_comment_feed(
     request: Request,
     board_id: UUID | None = BOARD_ID_QUERY,
     since: str | None = SINCE_QUERY,
+    gateway_id: UUID | None = GATEWAY_ID_QUERY,
+    node_class: GatewayNodeClass | None = NODE_CLASS_QUERY,
     db_session: AsyncSession = SESSION_DEP,
     ctx: OrganizationContext = ORG_MEMBER_DEP,
 ) -> EventSourceResponse:
     """Stream task-comment events for accessible boards."""
     since_dt = _parse_since(since) or utcnow()
-    board_ids = await list_accessible_board_ids(
+    board_ids = await list_accessible_board_ids(db_session, member=ctx.member, write=False)
+    board_ids = await filter_board_ids_by_gateway_scope(
         db_session,
-        member=ctx.member,
-        write=False,
+        board_ids,
+        gateway_id=gateway_id,
+        node_class=node_class,
     )
     allowed_ids = set(board_ids)
     if board_id is not None and board_id not in allowed_ids:
-        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN)
+        allowed_ids = set()
     seen_ids: set[UUID] = set()
     seen_queue: deque[UUID] = deque()
 
@@ -357,11 +382,14 @@ async def stream_task_comment_feed(
                 break
             async with async_session_maker() as stream_session:
                 if board_id is not None:
-                    rows = await _fetch_task_comment_events(
-                        stream_session,
-                        last_seen,
-                        board_id=board_id,
-                    )
+                    if board_id in allowed_ids:
+                        rows = await _fetch_task_comment_events(
+                            stream_session,
+                            last_seen,
+                            board_id=board_id,
+                        )
+                    else:
+                        rows = []
                 elif allowed_ids:
                     rows = await _fetch_task_comment_events(stream_session, last_seen)
                     rows = [row for row in rows if row[1].board_id in allowed_ids]

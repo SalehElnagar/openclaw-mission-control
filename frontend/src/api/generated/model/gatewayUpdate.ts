@@ -11,6 +11,7 @@ import type { GatewayModelProfiles } from "./gatewayModelProfiles";
  */
 export interface GatewayUpdate {
   name?: string | null;
+  node_class?: "cloud" | "local" | null;
   url?: string | null;
   token?: string | null;
   workspace_root?: string | null;

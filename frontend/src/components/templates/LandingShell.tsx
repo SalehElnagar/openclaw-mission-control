@@ -19,12 +19,12 @@ export function LandingShell({ children }: { children: ReactNode }) {
     <div className="landing-enterprise">
       <nav className="landing-nav" aria-label="Primary navigation">
         <div className="nav-container">
-          <Link href="/" className="logo-section" aria-label="OpenClaw home">
+          <Link href="/" className="logo-section" aria-label="MC Delivery home">
             <div className="logo-icon" aria-hidden="true">
-              OC
+              MC
             </div>
             <div className="logo-text">
-              <div className="logo-name">OpenClaw</div>
+              <div className="logo-name">MC Delivery</div>
               <div className="logo-tagline">Mission Control</div>
             </div>
           </Link>
@@ -33,7 +33,7 @@ export function LandingShell({ children }: { children: ReactNode }) {
             <Link href="#capabilities">Capabilities</Link>
             <Link href="/boards">Boards</Link>
             <Link href="/activity">Activity</Link>
-            <Link href="/gateways">Gateways</Link>
+            <Link href="/gateways">Nodes</Link>
           </div>
 
           <div className="nav-cta">
@@ -89,7 +89,7 @@ export function LandingShell({ children }: { children: ReactNode }) {
       <footer className="landing-footer">
         <div className="footer-content">
           <div className="footer-brand">
-            <h3>OpenClaw</h3>
+            <h3>MC Delivery</h3>
             <p>A calm command center for boards, agents, and approvals.</p>
             <div className="footer-tagline">Realtime Execution Visibility</div>
           </div>
@@ -107,7 +107,7 @@ export function LandingShell({ children }: { children: ReactNode }) {
           <div className="footer-column">
             <h4>Platform</h4>
             <div className="footer-links">
-              <Link href="/gateways">Gateways</Link>
+              <Link href="/gateways">Nodes</Link>
               <Link href="/agents">Agents</Link>
               <Link href="/dashboard">Dashboard</Link>
             </div>
@@ -150,7 +150,7 @@ export function LandingShell({ children }: { children: ReactNode }) {
 
         <div className="footer-bottom">
           <div className="footer-copyright">
-            © {new Date().getFullYear()} OpenClaw. All rights reserved.
+            © {new Date().getFullYear()} MC Delivery. All rights reserved.
           </div>
           <div className="footer-bottom-links">
             <Link href="#capabilities">Capabilities</Link>

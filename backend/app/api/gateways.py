@@ -59,6 +59,7 @@ _RUNTIME_TYPE_REFERENCES = (UUID,)
 _GATEWAY_AUDIT_FIELDS = {
     "name",
     "url",
+    "node_class",
     "workspace_root",
     "allow_insecure_tls",
     "disable_device_pairing",
