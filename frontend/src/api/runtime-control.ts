@@ -30,6 +30,7 @@ export type GatewayRuntimeCatalogEntry = {
 
 export type GatewayRuntimeSummary = {
   gateway_id: string;
+  node_class?: "cloud" | "local";
   runtime_sync_generation: number;
   last_runtime_sync_at?: string | null;
   last_runtime_sync_error?: string | null;
@@ -38,6 +39,7 @@ export type GatewayRuntimeSummary = {
   model_profiles: GatewayModelProfiles;
   catalog: GatewayRuntimeCatalogEntry[];
   available_models: string[];
+  enabled_model_refs: string[];
 };
 
 export type GatewayRuntimeSyncRequest = {

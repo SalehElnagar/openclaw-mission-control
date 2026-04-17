@@ -60,6 +60,10 @@ const makeRuntime = (
     "microsoft-foundry/model-router",
     "openai-codex/gpt-5.4",
   ],
+  enabled_model_refs: [
+    "microsoft-foundry/model-router",
+    "openai-codex/gpt-5.4",
+  ],
   ...overrides,
 });
 
@@ -136,5 +140,20 @@ describe("agent-model-catalog helpers", () => {
       "Claude · Claude Sonnet 4.6 · configured",
       "Antigravity · Antigravity Claude Opus 4.6 Thinking · configured",
     ]);
+  });
+
+  it("filters selectable runtime options to node-enabled model refs", () => {
+    const runtime = makeRuntime({
+      enabled_model_refs: ["microsoft-foundry/model-router"],
+      available_models: ["microsoft-foundry/model-router"],
+    });
+
+    expect(getRuntimeModelOptions(runtime)).toEqual([
+      {
+        value: "microsoft-foundry/model-router",
+        label: "Azure Foundry · Azure Foundry Model Router · default · runtime",
+      },
+    ]);
+    expect(getProviderChoicesSummary(runtime)).toBe("Azure Foundry");
   });
 });

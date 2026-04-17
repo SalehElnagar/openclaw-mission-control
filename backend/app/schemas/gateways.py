@@ -9,7 +9,11 @@ from pydantic import field_validator
 from sqlmodel import Field, SQLModel
 
 from app.core.node_class import GatewayNodeClass
-from app.schemas.gateway_runtime import GatewayModelProfiles, ProfileName
+from app.schemas.gateway_runtime import (
+    GatewayModelProfiles,
+    ProfileName,
+    _normalize_model_list,
+)
 
 RUNTIME_ANNOTATION_TYPES = (datetime, UUID)
 
@@ -25,6 +29,7 @@ class GatewayBase(SQLModel):
     disable_device_pairing: bool = False
     default_model_profile: ProfileName = "general"
     model_profiles: GatewayModelProfiles = Field(default_factory=GatewayModelProfiles)
+    enabled_model_refs: list[str] | None = None
 
     @field_validator("model_profiles", mode="before")
     @classmethod
@@ -51,6 +56,15 @@ class GatewayBase(SQLModel):
             normalized = value.strip().lower()
             return normalized or value
         return value
+
+    @field_validator("enabled_model_refs", mode="before")
+    @classmethod
+    def normalize_enabled_model_refs(
+        cls,
+        value: object,
+    ) -> list[str] | None:
+        """Normalize enabled model refs into a stable, deduplicated list."""
+        return _normalize_model_list(value)
 
 
 class GatewayCreate(GatewayBase):
@@ -82,6 +96,7 @@ class GatewayUpdate(SQLModel):
     disable_device_pairing: bool | None = None
     default_model_profile: ProfileName | None = None
     model_profiles: GatewayModelProfiles | None = None
+    enabled_model_refs: list[str] | None = None
 
     @field_validator("token", mode="before")
     @classmethod
@@ -122,6 +137,15 @@ class GatewayUpdate(SQLModel):
         if isinstance(value, dict):
             return GatewayModelProfiles.model_validate(value)
         return value
+
+    @field_validator("enabled_model_refs", mode="before")
+    @classmethod
+    def normalize_update_enabled_model_refs(
+        cls,
+        value: object,
+    ) -> list[str] | None:
+        """Normalize enabled model refs on PATCH payloads."""
+        return _normalize_model_list(value)
 
 
 class GatewayRead(GatewayBase):

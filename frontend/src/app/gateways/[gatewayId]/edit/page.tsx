@@ -59,6 +59,9 @@ export default function EditGatewayPage() {
   const [modelProfiles, setModelProfiles] = useState<
     GatewayUpdate["model_profiles"] | undefined
   >(undefined);
+  const [enabledModelRefs, setEnabledModelRefs] = useState<string[] | undefined>(
+    undefined,
+  );
 
   const [gatewayUrlError, setGatewayUrlError] = useState<string | null>(null);
   const [gatewayCheckStatus, setGatewayCheckStatus] =
@@ -116,7 +119,7 @@ export default function EditGatewayPage() {
     enabled: Boolean(isSignedIn && isAdmin && gatewayId),
     refetchInterval: 30_000,
   });
-  const availableModelRefs = useMemo(
+  const verifiedModelRefs = useMemo(
     () =>
       runtimeQuery.data?.status === 200
         ? (runtimeQuery.data.data.catalog ?? [])
@@ -128,6 +131,16 @@ export default function EditGatewayPage() {
         : [],
     [runtimeQuery.data],
   );
+  const resolvedEnabledModelRefs =
+    enabledModelRefs ??
+    loadedGateway?.enabled_model_refs ??
+    verifiedModelRefs.map((entry) => entry.ref);
+  const normalizedEnabledModelRefsForSave =
+    verifiedModelRefs.length > 0
+      ? resolvedEnabledModelRefs.length < verifiedModelRefs.length
+        ? resolvedEnabledModelRefs
+        : null
+      : loadedGateway?.enabled_model_refs ?? null;
 
   const isLoading =
     gatewayQuery.isLoading ||
@@ -159,6 +172,10 @@ export default function EditGatewayPage() {
       setError("Workspace root is required.");
       return;
     }
+    if (verifiedModelRefs.length > 0 && resolvedEnabledModelRefs.length === 0) {
+      setError("Enable at least one verified node model for agents.");
+      return;
+    }
 
     setGatewayCheckStatus("checking");
     setGatewayCheckMessage(null);
@@ -186,6 +203,7 @@ export default function EditGatewayPage() {
       allow_insecure_tls: resolvedAllowInsecureTls,
       default_model_profile: resolvedDefaultModelProfile,
       model_profiles: resolvedModelProfiles,
+      enabled_model_refs: normalizedEnabledModelRefsForSave,
     };
 
     updateMutation.mutate({ gatewayId, data: payload });
@@ -216,7 +234,8 @@ export default function EditGatewayPage() {
         allowInsecureTls={resolvedAllowInsecureTls}
         defaultModelProfile={resolvedDefaultModelProfile}
         modelProfiles={resolvedModelProfiles}
-        availableModelRefs={availableModelRefs}
+        verifiedModelRefs={verifiedModelRefs}
+        enabledModelRefs={resolvedEnabledModelRefs}
         gatewayUrlError={gatewayUrlError}
         gatewayCheckStatus={gatewayCheckStatus}
         gatewayCheckMessage={gatewayCheckMessage}
@@ -254,6 +273,28 @@ export default function EditGatewayPage() {
           setGatewayCheckMessage(null);
         }}
         onDefaultModelProfileChange={setDefaultModelProfile}
+        onEnabledModelRefsChange={(next) => {
+          setEnabledModelRefs(next);
+          const nextRefs = new Set(next);
+          setModelProfiles((current) => {
+            const source = current ?? loadedGateway?.model_profiles ?? {};
+            let changed = false;
+            const patched = { ...source };
+            (["general", "coder", "budget"] as const).forEach((profile) => {
+              const selection = source?.[profile];
+              if (!selection?.primary_model || nextRefs.has(selection.primary_model)) {
+                return;
+              }
+              patched[profile] = {
+                ...selection,
+                primary_model: null,
+              };
+              changed = true;
+            });
+            return changed ? patched : current;
+          });
+          setError(null);
+        }}
         onModelProfilePrimaryChange={(profile, value) => {
           setModelProfiles((current) => ({
             ...(current ?? loadedGateway?.model_profiles ?? {}),

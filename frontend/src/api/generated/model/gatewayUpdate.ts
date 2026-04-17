@@ -19,4 +19,5 @@ export interface GatewayUpdate {
   disable_device_pairing?: boolean | null;
   default_model_profile?: "general" | "coder" | "budget" | null;
   model_profiles?: GatewayModelProfiles | null;
+  enabled_model_refs?: string[] | null;
 }

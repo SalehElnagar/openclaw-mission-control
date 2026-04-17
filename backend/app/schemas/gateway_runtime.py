@@ -108,6 +108,7 @@ class GatewayRuntimeSummary(SQLModel):
     model_profiles: GatewayModelProfiles = Field(default_factory=GatewayModelProfiles)
     catalog: list[GatewayRuntimeCatalogEntry] = Field(default_factory=list)
     available_models: list[str] = Field(default_factory=list)
+    enabled_model_refs: list[str] = Field(default_factory=list)
 
 
 class GatewayRuntimeSyncRequest(SQLModel):

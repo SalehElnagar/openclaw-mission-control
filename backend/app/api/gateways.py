@@ -65,6 +65,7 @@ _GATEWAY_AUDIT_FIELDS = {
     "disable_device_pairing",
     "default_model_profile",
     "model_profiles",
+    "enabled_model_refs",
     "token",
 }
 

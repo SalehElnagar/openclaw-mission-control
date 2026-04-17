@@ -136,6 +136,8 @@ export default function NewGatewayPage() {
         workspaceRoot={workspaceRoot}
         allowInsecureTls={allowInsecureTls}
         defaultModelProfile={defaultModelProfile}
+        verifiedModelRefs={[]}
+        enabledModelRefs={[]}
         gatewayUrlError={gatewayUrlError}
         gatewayCheckStatus={gatewayCheckStatus}
         gatewayCheckMessage={gatewayCheckMessage}

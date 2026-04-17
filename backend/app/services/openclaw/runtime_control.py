@@ -108,6 +108,26 @@ def _load_model_profiles(gateway: Gateway) -> GatewayModelProfiles:
     return GatewayModelProfiles.model_validate(raw)
 
 
+def _configured_enabled_model_refs(gateway: Gateway) -> list[str] | None:
+    raw = gateway.enabled_model_refs
+    if not isinstance(raw, list):
+        return None
+    return _dedupe_models(value for value in raw if isinstance(value, str)) or None
+
+
+def _effective_enabled_model_refs(
+    *,
+    gateway: Gateway,
+    runtime_available_models: Iterable[str],
+) -> list[str]:
+    runtime_available = _dedupe_models(runtime_available_models)
+    configured = _configured_enabled_model_refs(gateway)
+    if not configured:
+        return runtime_available
+    runtime_available_set = set(runtime_available)
+    return [ref for ref in configured if ref in runtime_available_set]
+
+
 def _profile_selection(
     profiles: GatewayModelProfiles,
     profile_name: str,
@@ -502,8 +522,15 @@ class GatewayRuntimeControlService(OpenClawDBService):
             default_ref=(default_selection.primary_model if default_selection else None),
         )
 
-    async def available_models(self, gateway: Gateway) -> list[str]:
+    async def runtime_available_models(self, gateway: Gateway) -> list[str]:
         return [entry.ref for entry in await self.runtime_catalog(gateway) if entry.selectable]
+
+    async def available_models(self, gateway: Gateway) -> list[str]:
+        runtime_available_models = await self.runtime_available_models(gateway)
+        return _effective_enabled_model_refs(
+            gateway=gateway,
+            runtime_available_models=runtime_available_models,
+        )
 
     async def _load_gateway_config(self, gateway: Gateway) -> tuple[str | None, dict[str, Any]]:
         payload = await openclaw_call("config.get", config=_gateway_client_config(gateway))
@@ -559,12 +586,28 @@ class GatewayRuntimeControlService(OpenClawDBService):
         if not desired_refs:
             return []
 
-        available = set(await self.available_models(gateway))
-        if not available:
+        runtime_available = set(await self.runtime_available_models(gateway))
+        if not runtime_available:
             raise HTTPException(
                 status_code=status.HTTP_502_BAD_GATEWAY,
                 detail="Gateway did not return any runtime models for validation.",
             )
+        configured_enabled = _configured_enabled_model_refs(gateway)
+        if configured_enabled:
+            unavailable_enabled = sorted(set(configured_enabled) - runtime_available)
+            if unavailable_enabled:
+                raise HTTPException(
+                    status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
+                    detail=(
+                        "Node-enabled models unavailable on runtime: "
+                        f"{', '.join(unavailable_enabled)}"
+                    ),
+                )
+        available = (
+            set(configured_enabled)
+            if configured_enabled
+            else runtime_available
+        )
         if (
             gateway.model_profiles in ({}, None)
             and DEFAULT_PRIMARY_MODEL_REF in desired_refs
@@ -574,22 +617,33 @@ class GatewayRuntimeControlService(OpenClawDBService):
             desired_refs.discard(DEFAULT_PRIMARY_MODEL_REF)
         unsupported = sorted(desired_refs - available)
         if unsupported:
+            detail = (
+                f"Node-enabled models do not include: {', '.join(unsupported)}"
+                if configured_enabled
+                else f"Unsupported runtime models: {', '.join(unsupported)}"
+            )
             raise HTTPException(
                 status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
-                detail=f"Unsupported runtime models: {', '.join(unsupported)}",
+                detail=detail,
             )
         return sorted(available)
 
     async def runtime_summary(self, *, gateway: Gateway) -> GatewayRuntimeSummary:
         catalog: list[GatewayRuntimeCatalogEntry] = []
-        available_models: list[str] = []
+        runtime_available_models: list[str] = []
+        enabled_model_refs: list[str] = []
         default_selection = resolve_default_model_selection(gateway)
         try:
             catalog = await self.runtime_catalog(gateway)
-            available_models = [entry.ref for entry in catalog if entry.selectable]
+            runtime_available_models = [entry.ref for entry in catalog if entry.selectable]
+            enabled_model_refs = _effective_enabled_model_refs(
+                gateway=gateway,
+                runtime_available_models=runtime_available_models,
+            )
         except OpenClawGatewayError:
             catalog = []
-            available_models = []
+            runtime_available_models = []
+            enabled_model_refs = []
         return GatewayRuntimeSummary(
             gateway_id=gateway.id,
             node_class=gateway.node_class,
@@ -600,7 +654,8 @@ class GatewayRuntimeControlService(OpenClawDBService):
             default_model_ref=(default_selection.primary_model if default_selection else None),
             model_profiles=_load_model_profiles(gateway),
             catalog=catalog,
-            available_models=available_models,
+            available_models=enabled_model_refs,
+            enabled_model_refs=enabled_model_refs,
         )
 
     async def _get_existing_agent_token(

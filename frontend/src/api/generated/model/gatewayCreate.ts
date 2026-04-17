@@ -19,5 +19,6 @@ export interface GatewayCreate {
   disable_device_pairing?: boolean;
   default_model_profile?: GatewayCreateDefaultModelProfile;
   model_profiles?: GatewayModelProfiles;
+  enabled_model_refs?: string[] | null;
   token?: string | null;
 }

@@ -31,6 +31,7 @@ class Gateway(QueryModel, table=True):
     allow_insecure_tls: bool = Field(default=False)
     default_model_profile: str = Field(default="general")
     model_profiles: dict[str, Any] | None = Field(default=None, sa_column=Column(JSON))
+    enabled_model_refs: list[str] | None = Field(default=None, sa_column=Column(JSON))
     runtime_sync_generation: int = Field(default=0)
     last_runtime_sync_at: datetime | None = Field(default=None)
     last_runtime_sync_error: str | None = Field(default=None, sa_column=Column(Text))

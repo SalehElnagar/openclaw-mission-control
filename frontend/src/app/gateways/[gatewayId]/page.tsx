@@ -306,6 +306,10 @@ export default function GatewayDetailPage() {
     () => runtimeCatalog.filter((entry) => entry.selectable !== false),
     [runtimeCatalog],
   );
+  const enabledModelRefSet = useMemo(
+    () => new Set(runtime?.enabled_model_refs ?? []),
+    [runtime?.enabled_model_refs],
+  );
   const configuredOnlyCatalogEntries = useMemo(
     () => runtimeCatalog.filter((entry) => entry.selectable === false),
     [runtimeCatalog],
@@ -587,10 +591,12 @@ export default function GatewayDetailPage() {
                   <div>
                     <p className="text-xs uppercase text-quiet">Supported verified models</p>
                     <p className="mt-1 text-sm font-medium text-strong">
-                      {runtime?.available_models.length ?? 0}
+                      {liveCatalogEntries.length}
                     </p>
                     <p className="mt-1 text-xs leading-5 text-muted">
-                      Mission Control will only offer models this node exposes in its verified runtime catalog.
+                      This node has {liveCatalogEntries.length} verified runtime model
+                      {liveCatalogEntries.length === 1 ? "" : "s"} and{" "}
+                      {runtime?.enabled_model_refs.length ?? 0} enabled for agents.
                     </p>
                   </div>
                   <div>
@@ -636,9 +642,9 @@ export default function GatewayDetailPage() {
                   ))}
                 </div>
                 <p className="mt-3 text-xs text-muted">
-                  Verified runtime models:{" "}
+                  Enabled for agents:{" "}
                   <span className="font-semibold text-strong">
-                    {runtime?.available_models.length ?? 0}
+                    {runtime?.enabled_model_refs.length ?? 0}
                   </span>
                 </p>
               </div>
@@ -661,7 +667,7 @@ export default function GatewayDetailPage() {
                   <div className="rounded-lg border border-[color:var(--border)] bg-[color:var(--surface-muted)] p-4">
                     <div className="flex items-center justify-between gap-3">
                       <p className="text-xs font-semibold uppercase tracking-wide text-muted">
-                        Verified and selectable
+                        Verified on runtime
                       </p>
                       <span className="rounded-full border border-emerald-500/30 bg-emerald-500/10 px-2 py-0.5 text-[11px] font-semibold text-emerald-300">
                         {liveCatalogEntries.length}
@@ -693,6 +699,17 @@ export default function GatewayDetailPage() {
                                     Default
                                   </span>
                                 ) : null}
+                                <span
+                                  className={`rounded-full border px-2 py-0.5 text-[11px] font-semibold ${
+                                    enabledModelRefSet.has(entry.ref)
+                                      ? "border-sky-500/30 bg-sky-500/10 text-sky-300"
+                                      : "border-zinc-500/30 bg-zinc-500/10 text-zinc-300"
+                                  }`}
+                                >
+                                  {enabledModelRefSet.has(entry.ref)
+                                    ? "Enabled for agents"
+                                    : "Hidden from agents"}
+                                </span>
                                 <span
                                   className={`rounded-full border px-2 py-0.5 text-[11px] font-semibold ${catalogEntryStatusClassName(entry)}`}
                                 >

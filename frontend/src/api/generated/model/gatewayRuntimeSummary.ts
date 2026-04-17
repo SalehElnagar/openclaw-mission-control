@@ -13,11 +13,14 @@ import type { GatewayRuntimeSummaryDefaultModelProfile } from "./gatewayRuntimeS
  */
 export interface GatewayRuntimeSummary {
   gateway_id: string;
+  node_class?: "cloud" | "local";
   runtime_sync_generation: number;
   last_runtime_sync_at?: string | null;
   last_runtime_sync_error?: string | null;
   default_model_profile?: GatewayRuntimeSummaryDefaultModelProfile;
+  default_model_ref?: string | null;
   model_profiles?: GatewayModelProfiles;
   catalog?: GatewayRuntimeCatalogEntry[];
   available_models?: string[];
+  enabled_model_refs?: string[];
 }

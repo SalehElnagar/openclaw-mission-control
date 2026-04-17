@@ -31,7 +31,8 @@ type GatewayFormProps = {
   allowInsecureTls: boolean;
   defaultModelProfile: ModelProfileName;
   modelProfiles?: GatewayModelProfiles;
-  availableModelRefs?: Array<{ ref: string; label: string }>;
+  verifiedModelRefs?: Array<{ ref: string; label: string }>;
+  enabledModelRefs?: string[];
   gatewayUrlError: string | null;
   gatewayCheckStatus: GatewayCheckStatus;
   gatewayCheckMessage: string | null;
@@ -52,6 +53,7 @@ type GatewayFormProps = {
   onWorkspaceRootChange: (next: string) => void;
   onAllowInsecureTlsChange: (next: boolean) => void;
   onDefaultModelProfileChange: (next: ModelProfileName) => void;
+  onEnabledModelRefsChange?: (next: string[]) => void;
   onModelProfilePrimaryChange?: (
     profile: ModelProfileName,
     value: string | null,
@@ -68,7 +70,8 @@ export function GatewayForm({
   allowInsecureTls,
   defaultModelProfile,
   modelProfiles,
-  availableModelRefs = [],
+  verifiedModelRefs = [],
+  enabledModelRefs = [],
   gatewayUrlError,
   gatewayCheckStatus,
   gatewayCheckMessage,
@@ -89,8 +92,20 @@ export function GatewayForm({
   onWorkspaceRootChange,
   onAllowInsecureTlsChange,
   onDefaultModelProfileChange,
+  onEnabledModelRefsChange,
   onModelProfilePrimaryChange,
 }: GatewayFormProps) {
+  const verifiedModelMap = new Map(
+    verifiedModelRefs.map((entry) => [entry.ref, entry]),
+  );
+  const effectiveEnabledModelRefs =
+    enabledModelRefs.length > 0
+      ? enabledModelRefs.filter((ref) => verifiedModelMap.has(ref))
+      : verifiedModelRefs.map((entry) => entry.ref);
+  const enabledModelEntries = effectiveEnabledModelRefs
+    .map((ref) => verifiedModelMap.get(ref))
+    .filter((entry): entry is { ref: string; label: string } => Boolean(entry));
+
   return (
     <form
       onSubmit={onSubmit}
@@ -268,11 +283,83 @@ export function GatewayForm({
               Verified node models
             </label>
             <div className="rounded-lg border border-dashed border-[color:var(--border)] bg-[color:var(--surface)] px-3 py-2 text-sm text-muted">
-              {availableModelRefs.length > 0
-                ? `${availableModelRefs.length} verified runtime model${availableModelRefs.length === 1 ? "" : "s"} available`
+              {verifiedModelRefs.length > 0
+                ? `${verifiedModelRefs.length} verified runtime model${verifiedModelRefs.length === 1 ? "" : "s"} available`
                 : "Save this node and reconcile runtime to unlock verified model choices."}
             </div>
           </div>
+        </div>
+
+        <div className="mt-4 space-y-3 rounded-lg border border-[color:var(--border)] bg-[color:var(--surface)] p-4">
+          <div className="flex flex-wrap items-start justify-between gap-3">
+            <div className="space-y-1">
+              <label className="text-sm font-medium text-strong">
+                Enabled for agents
+              </label>
+              <p className="text-xs text-muted">
+                Choose which verified node models agents can actually select on this node.
+              </p>
+            </div>
+            {verifiedModelRefs.length > 0 && onEnabledModelRefsChange ? (
+              <button
+                type="button"
+                onClick={() =>
+                  onEnabledModelRefsChange(verifiedModelRefs.map((entry) => entry.ref))
+                }
+                className="text-xs font-medium text-[color:var(--accent)] hover:text-[color:var(--accent-strong)]"
+                disabled={isLoading}
+              >
+                Use all verified models
+              </button>
+            ) : null}
+          </div>
+          {verifiedModelRefs.length === 0 ? (
+            <p className="rounded-md border border-[color:var(--border)] bg-[color:var(--surface-muted)] px-3 py-2 text-xs text-muted">
+              Runtime verification has to succeed before Mission Control can scope node-enabled models.
+            </p>
+          ) : (
+            <div className="grid gap-2 md:grid-cols-2">
+              {verifiedModelRefs.map((entry) => {
+                const checked = effectiveEnabledModelRefs.includes(entry.ref);
+                return (
+                  <label
+                    key={entry.ref}
+                    className="flex cursor-pointer items-start gap-3 rounded-lg border border-[color:var(--border)] bg-[color:var(--surface-muted)] px-3 py-3 text-sm text-strong"
+                  >
+                    <input
+                      type="checkbox"
+                      className="mt-1 h-4 w-4 rounded border-[color:var(--border)] text-[color:var(--accent)] focus:ring-[color:var(--accent)]"
+                      checked={checked}
+                      disabled={isLoading}
+                      onChange={(event) => {
+                        if (!onEnabledModelRefsChange) {
+                          return;
+                        }
+                        const nextRefs = event.target.checked
+                          ? [...effectiveEnabledModelRefs, entry.ref]
+                          : effectiveEnabledModelRefs.filter((ref) => ref !== entry.ref);
+                        onEnabledModelRefsChange(
+                          Array.from(new Set(nextRefs)),
+                        );
+                      }}
+                    />
+                    <div className="min-w-0">
+                      <p className="font-medium text-strong">{entry.label}</p>
+                      <p className="mt-1 truncate font-mono text-[11px] text-quiet">
+                        {entry.ref}
+                      </p>
+                    </div>
+                  </label>
+                );
+              })}
+            </div>
+          )}
+          {verifiedModelRefs.length > 0 ? (
+            <p className="text-xs text-muted">
+              {enabledModelEntries.length} of {verifiedModelRefs.length} verified model
+              {verifiedModelRefs.length === 1 ? "" : "s"} enabled for agent selection.
+            </p>
+          ) : null}
         </div>
 
         {onModelProfilePrimaryChange ? (
@@ -292,14 +379,14 @@ export function GatewayForm({
                       value === "__inherit__" ? null : value,
                     )
                   }
-                  disabled={isLoading || availableModelRefs.length === 0}
+                  disabled={isLoading || enabledModelEntries.length === 0}
                 >
                   <SelectTrigger>
                     <SelectValue placeholder="Inherit runtime default" />
                   </SelectTrigger>
                   <SelectContent>
                     <SelectItem value="__inherit__">Inherit runtime default</SelectItem>
-                    {availableModelRefs.map((entry) => (
+                    {enabledModelEntries.map((entry) => (
                       <SelectItem key={`${option.value}-${entry.ref}`} value={entry.ref}>
                         {entry.label}
                       </SelectItem>

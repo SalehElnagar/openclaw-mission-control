@@ -19,6 +19,7 @@ export interface GatewayRead {
   disable_device_pairing?: boolean;
   default_model_profile?: GatewayReadDefaultModelProfile;
   model_profiles?: GatewayModelProfiles;
+  enabled_model_refs?: string[] | null;
   id: string;
   organization_id: string;
   token?: string | null;

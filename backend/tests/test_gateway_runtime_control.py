@@ -156,10 +156,14 @@ async def test_assert_model_policies_supported_rejects_unknown_model(
     )
     service = GatewayRuntimeControlService(session=object())  # type: ignore[arg-type]
 
-    async def _fake_available_models(_gateway: Gateway) -> list[str]:
+    async def _fake_runtime_available_models(_gateway: Gateway) -> list[str]:
         return ["openai/gpt-5.4-mini"]
 
-    monkeypatch.setattr(service, "available_models", _fake_available_models)
+    monkeypatch.setattr(
+        service,
+        "runtime_available_models",
+        _fake_runtime_available_models,
+    )
 
     with pytest.raises(runtime_control.HTTPException) as excinfo:
         await service.assert_model_policies_supported(gateway=gateway, agents=[])
@@ -204,6 +208,44 @@ async def test_available_models_only_returns_runtime_verified_models(
 
     assert "openai-codex/gpt-5.4" in refs
     assert "microsoft-foundry/model-router" not in refs
+
+
+@pytest.mark.asyncio
+async def test_available_models_respect_enabled_model_refs(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    gateway = Gateway(
+        organization_id=uuid4(),
+        name="gateway",
+        url="ws://gateway.example/ws",
+        workspace_root="/tmp/workspaces",
+        enabled_model_refs=["github-copilot/gpt-5.4"],
+    )
+    service = GatewayRuntimeControlService(session=object())  # type: ignore[arg-type]
+
+    async def _fake_runtime_catalog(_gateway: Gateway) -> list[object]:
+        return [
+            runtime_control.GatewayRuntimeCatalogEntry(
+                ref="github-copilot/gpt-5.4",
+                provider="github-copilot",
+                provider_label="GitHub Copilot",
+                label="GitHub Copilot GPT-5.4",
+                selectable=True,
+            ),
+            runtime_control.GatewayRuntimeCatalogEntry(
+                ref="openai-codex/gpt-5.4",
+                provider="openai-codex",
+                provider_label="Codex",
+                label="Codex GPT-5.4",
+                selectable=True,
+            ),
+        ]
+
+    monkeypatch.setattr(service, "runtime_catalog", _fake_runtime_catalog)
+
+    refs = await service.available_models(gateway)
+
+    assert refs == ["github-copilot/gpt-5.4"]
 
 
 @pytest.mark.asyncio
@@ -299,13 +341,22 @@ async def test_runtime_summary_exposes_profile_default_model(
     service = GatewayRuntimeControlService(session=object())  # type: ignore[arg-type]
 
     async def _fake_runtime_catalog(_gateway: Gateway) -> list[object]:
-        return []
+        return [
+            runtime_control.GatewayRuntimeCatalogEntry(
+                ref="microsoft-foundry/model-router",
+                provider="microsoft-foundry",
+                provider_label="Azure Foundry",
+                label="Azure Foundry Model Router",
+                selectable=True,
+            )
+        ]
 
     monkeypatch.setattr(service, "runtime_catalog", _fake_runtime_catalog)
 
     summary = await service.runtime_summary(gateway=gateway)
 
     assert summary.default_model_ref == "microsoft-foundry/model-router"
+    assert summary.enabled_model_refs == ["microsoft-foundry/model-router"]
     assert summary.node_class == "local"
 
 
@@ -330,6 +381,41 @@ async def test_runtime_summary_exposes_codex_fallback_default_when_profiles_are_
     summary = await service.runtime_summary(gateway=gateway)
 
     assert summary.default_model_ref == DEFAULT_PRIMARY_MODEL_REF
+
+
+@pytest.mark.asyncio
+async def test_assert_model_policies_supported_rejects_models_outside_enabled_set(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    gateway = Gateway(
+        organization_id=uuid4(),
+        name="gateway",
+        url="ws://gateway.example/ws",
+        workspace_root="/tmp/workspaces",
+        default_model_profile="general",
+        enabled_model_refs=["microsoft-foundry/gpt-5.4-mini"],
+        model_profiles={
+            "general": {
+                "primary_model": "openai-codex/gpt-5.4",
+                "fallback_models": [],
+            }
+        },
+    )
+    service = GatewayRuntimeControlService(session=object())  # type: ignore[arg-type]
+
+    async def _fake_runtime_available_models(_gateway: Gateway) -> list[str]:
+        return [
+            "microsoft-foundry/gpt-5.4-mini",
+            "openai-codex/gpt-5.4",
+        ]
+
+    monkeypatch.setattr(service, "runtime_available_models", _fake_runtime_available_models)
+
+    with pytest.raises(runtime_control.HTTPException) as excinfo:
+        await service.assert_model_policies_supported(gateway=gateway, agents=[])
+
+    assert excinfo.value.status_code == 422
+    assert "Node-enabled models do not include" in str(excinfo.value.detail)
 
 
 @pytest.mark.asyncio

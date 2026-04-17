@@ -68,6 +68,7 @@ def test_gateway_read_normalizes_null_model_profiles() -> None:
             "disable_device_pairing": False,
             "default_model_profile": "general",
             "model_profiles": None,
+            "enabled_model_refs": None,
             "created_at": "2026-04-13T00:00:00Z",
             "updated_at": "2026-04-13T00:00:00Z",
         },
@@ -76,6 +77,7 @@ def test_gateway_read_normalizes_null_model_profiles() -> None:
     assert gateway.model_profiles.general is None
     assert gateway.model_profiles.coder is None
     assert gateway.model_profiles.budget is None
+    assert gateway.enabled_model_refs is None
     assert gateway.node_class == "cloud"
 
 
@@ -92,12 +94,14 @@ def test_gateway_read_normalizes_node_class_case() -> None:
             "disable_device_pairing": False,
             "default_model_profile": "general",
             "model_profiles": None,
+            "enabled_model_refs": [" microsoft-foundry/gpt-5.4-mini ", "microsoft-foundry/gpt-5.4-mini"],
             "created_at": "2026-04-13T00:00:00Z",
             "updated_at": "2026-04-13T00:00:00Z",
         },
     )
 
     assert gateway.node_class == "local"
+    assert gateway.enabled_model_refs == ["microsoft-foundry/gpt-5.4-mini"]
 
 
 def test_gateway_update_accepts_runtime_model_profile_patch() -> None:
@@ -111,6 +115,7 @@ def test_gateway_update_accepts_runtime_model_profile_patch() -> None:
                     "fallback_models": [],
                 }
             },
+            "enabled_model_refs": ["microsoft-foundry/model-router"],
         },
     )
 
@@ -119,6 +124,7 @@ def test_gateway_update_accepts_runtime_model_profile_patch() -> None:
     assert payload.model_profiles is not None
     assert payload.model_profiles.general is not None
     assert payload.model_profiles.general.primary_model == "microsoft-foundry/model-router"
+    assert payload.enabled_model_refs == ["microsoft-foundry/model-router"]
 
 
 @pytest.mark.asyncio

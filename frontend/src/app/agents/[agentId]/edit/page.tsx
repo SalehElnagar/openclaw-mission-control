@@ -339,7 +339,9 @@ export default function EditAgentPage() {
     };
     const primaryModel = resolvedIdentityProfile.primary_model.trim();
     if (primaryModel && !availableModelRefs.has(primaryModel)) {
-      setError("Pick a verified primary model or inherit the gateway profile default.");
+      setError(
+        "Pick a node-enabled primary model or inherit the node profile default.",
+      );
       return;
     }
     payload.model_primary = primaryModel || null;

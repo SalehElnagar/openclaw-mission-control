@@ -68,12 +68,26 @@ const labelForModelRef = (
 export const getRuntimeModelOptions = (
   runtime: GatewayRuntimeSummary | null | undefined,
 ): SearchableSelectOption[] =>
-  (runtime?.catalog ?? [])
-    .filter((entry) => entry.selectable !== false && (entry.kind ?? "model") === "model")
-    .map((entry) => ({
-      value: entry.ref,
-      label: optionLabel(entry),
-    }));
+  {
+    const enabledRefs = new Set(
+      runtime?.enabled_model_refs && runtime.enabled_model_refs.length > 0
+        ? runtime.enabled_model_refs
+        : (runtime?.catalog ?? [])
+            .filter((entry) => entry.selectable !== false && (entry.kind ?? "model") === "model")
+            .map((entry) => entry.ref),
+    );
+    return (runtime?.catalog ?? [])
+      .filter(
+        (entry) =>
+          entry.selectable !== false &&
+          (entry.kind ?? "model") === "model" &&
+          enabledRefs.has(entry.ref),
+      )
+      .map((entry) => ({
+        value: entry.ref,
+        label: optionLabel(entry),
+      }));
+  };
 
 export const getDefaultRuntimeModelLabel = (
   runtime: GatewayRuntimeSummary | null | undefined,
@@ -85,10 +99,17 @@ export const getDefaultRuntimeModelLabel = (
 export const getProviderChoicesSummary = (
   runtime: GatewayRuntimeSummary | null | undefined,
 ): string => {
+  const enabledRefs = new Set(
+    runtime?.enabled_model_refs && runtime.enabled_model_refs.length > 0
+      ? runtime.enabled_model_refs
+      : (runtime?.catalog ?? [])
+          .filter((entry) => entry.selectable !== false)
+          .map((entry) => entry.ref),
+  );
   const providerLabels = Array.from(
     new Set(
       (runtime?.catalog ?? [])
-        .filter((entry) => entry.selectable !== false)
+        .filter((entry) => entry.selectable !== false && enabledRefs.has(entry.ref))
         .map(providerLabelForEntry),
     ),
   );
