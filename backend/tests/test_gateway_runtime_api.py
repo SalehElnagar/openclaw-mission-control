@@ -184,6 +184,7 @@ def test_toolchain_catalog_exposes_guided_presets() -> None:
 
     assert "microsoft-foundry" in provider_ids
     assert "anthropic" in provider_ids
+    assert "claude-cli" in provider_ids
     assert "google-gemini" in provider_ids
     assert "github-models" in provider_ids
     assert provider_preset_by_id("github-copilot") is not None
@@ -191,6 +192,10 @@ def test_toolchain_catalog_exposes_guided_presets() -> None:
     assert anthropic is not None
     assert anthropic.product_line == "Hosted API"
     assert anthropic.supported_auth_modes == ["api-key"]
+    claude_code = provider_preset_by_id("claude-code")
+    assert claude_code is not None
+    assert claude_code.display_label == "Claude Code"
+    assert claude_code.supported_auth_modes == ["login"]
 
 
 @pytest.mark.asyncio

@@ -14,7 +14,7 @@ const KNOWN_PROVIDER_LABELS: Record<string, string> = {
   "google-antigravity": "Antigravity",
   antigravity: "Antigravity",
   anthropic: "Claude",
-  "claude-cli": "Claude CLI",
+  "claude-cli": "Claude Code",
   claude: "Claude",
   grok: "Grok",
 };

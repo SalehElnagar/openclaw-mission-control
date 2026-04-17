@@ -54,12 +54,12 @@ def toolchain_catalog() -> ToolchainCatalogResponse:
             ToolchainCatalogProviderPreset(
                 preset_id="anthropic-claude",
                 provider_id="anthropic",
-                display_label="Anthropic Claude",
+                display_label="Anthropic Claude API",
                 provider_type="anthropic",
                 product_line="Hosted API",
                 summary=(
                     "Anthropic's hosted Claude API for managed service-auth nodes. "
-                    "Use an API key; this is separate from any local Claude CLI sign-in flow."
+                    "Use an API key; this is separate from any local Claude Code sign-in flow."
                 ),
                 node_classes=["cloud", "local"],
                 supported_auth_modes=["api-key"],
@@ -87,9 +87,36 @@ def toolchain_catalog() -> ToolchainCatalogResponse:
                 ],
             ),
             ToolchainCatalogProviderPreset(
+                preset_id="claude-code",
+                provider_id="claude-cli",
+                display_label="Claude Code",
+                provider_type="claude-cli",
+                product_line="CLI sign-in",
+                summary=(
+                    "Uses a locally signed-in Claude Code session on a local node. "
+                    "Choose login after save; this is separate from the Anthropic Claude API key flow."
+                ),
+                node_classes=["local"],
+                supported_auth_modes=["login"],
+                kind="local-interactive",
+                models=[
+                    ToolchainCatalogModelPreset(
+                        model_id="claude-sonnet-4-6",
+                        label="Claude Sonnet 4.6",
+                        input_modalities=["text"],
+                    ),
+                    ToolchainCatalogModelPreset(
+                        model_id="claude-opus-4-6",
+                        label="Claude Opus 4.6",
+                        input_modalities=["text"],
+                        enabled_by_default=False,
+                    ),
+                ],
+            ),
+            ToolchainCatalogProviderPreset(
                 preset_id="google-gemini",
                 provider_id="google-gemini",
-                display_label="Google Gemini",
+                display_label="Google Gemini API",
                 provider_type="google-gemini",
                 product_line="Hosted API",
                 summary=(
@@ -120,7 +147,7 @@ def toolchain_catalog() -> ToolchainCatalogResponse:
             ToolchainCatalogProviderPreset(
                 preset_id="github-models",
                 provider_id="github-models",
-                display_label="GitHub Models",
+                display_label="GitHub Models API",
                 provider_type="github-models",
                 product_line="Hosted API",
                 summary=(

@@ -13,6 +13,15 @@ import type { GatewayRuntimeProviderSummary } from "@/api/runtime-control";
 import type { ToolchainCatalogProviderPreset } from "@/api/toolchain";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
+import {
+  Dialog,
+  DialogClose,
+  DialogContent,
+  DialogDescription,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+} from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
 import SearchableSelect from "@/components/ui/searchable-select";
 import {
@@ -57,6 +66,19 @@ type PresetIntegrationEditorProps = {
 };
 
 type SecretEntryMode = "existing" | "paste-once";
+
+type PresetIntegrationState = {
+  preset: ToolchainCatalogProviderPreset;
+  providerConfig: GatewayProviderConfig;
+  allowedModes: ProviderAuthMode[];
+  authMode: ProviderAuthMode;
+  runtime?: GatewayRuntimeProviderSummary;
+  hasServiceSecret: boolean;
+  selectedModelRefs: Set<string>;
+  selectedModelCount: number;
+  enabledModelCount: number;
+  status: { label: string; variant: "outline" | "warning" | "danger" | "success" };
+};
 
 const servicePurposeForMode = (
   authMode?: ProviderAuthMode | null,
@@ -192,6 +214,7 @@ export function PresetIntegrationEditor({
   onEnabledModelRefsChange,
 }: PresetIntegrationEditorProps) {
   const [pendingPresetId, setPendingPresetId] = useState<string>("");
+  const [editorProviderId, setEditorProviderId] = useState<string | null>(null);
   const [secretModes, setSecretModes] = useState<Record<string, SecretEntryMode>>(
     {},
   );
@@ -300,6 +323,16 @@ export function PresetIntegrationEditor({
       null,
     [compatiblePresets, resolvedPendingPresetId],
   );
+  const activeProviderIdSet = useMemo(
+    () => new Set(activeProviderIds),
+    [activeProviderIds],
+  );
+  const resolvedEditorProviderId = useMemo(() => {
+    if (!editorProviderId || !activeProviderIdSet.has(editorProviderId)) {
+      return null;
+    }
+    return editorProviderId;
+  }, [activeProviderIdSet, editorProviderId]);
 
   const replaceProviderSecretsForPurpose = (
     providerId: string,
@@ -330,6 +363,59 @@ export function PresetIntegrationEditor({
       nextSecretInput ? [...filtered, nextSecretInput] : filtered,
     );
   };
+
+  const getPresetIntegrationState = (
+    providerId: string,
+  ): PresetIntegrationState | null => {
+    const preset = presetByProviderId.get(providerId);
+    if (!preset) {
+      return null;
+    }
+    const providerConfig =
+      providerConfigById.get(providerId) ?? buildProviderConfig(preset);
+    const allowedModes = getPresetAllowedAuthModes(preset, nodeClass);
+    const authConfig = providerAuthById.get(providerId);
+    const authMode =
+      allowedModes.find((mode) => mode === authConfig?.auth_mode) ??
+      allowedModes[0] ??
+      "api-key";
+    const runtime = runtimeByProviderId.get(providerId);
+    const servicePurpose = servicePurposeForMode(authMode);
+    const hasServiceSecret = servicePurpose
+      ? Boolean(
+          secretRefByScope.get(secretScopeKey(providerId, servicePurpose)) ||
+            secretInputByScope.get(secretScopeKey(providerId, servicePurpose))?.value,
+        )
+      : true;
+    const selectedModelRefs = modelRefsByProvider.get(providerId) ?? new Set<string>();
+    const selectedModelCount = preset.models.filter((model) =>
+      selectedModelRefs.has(providerRef(providerId, model.model_id)),
+    ).length;
+    const enabledModelCount = preset.models.filter((model) =>
+      enabledModelRefs.includes(providerRef(providerId, model.model_id)),
+    ).length;
+    return {
+      preset,
+      providerConfig,
+      allowedModes,
+      authMode,
+      runtime,
+      hasServiceSecret,
+      selectedModelRefs,
+      selectedModelCount,
+      enabledModelCount,
+      status: integrationStatus(
+        runtime,
+        authMode,
+        hasServiceSecret,
+        selectedModelCount > 0,
+      ),
+    };
+  };
+
+  const editorIntegration = resolvedEditorProviderId
+    ? getPresetIntegrationState(resolvedEditorProviderId)
+    : null;
 
   const ensurePresetIntegration = (presetId: string) => {
     const preset = presetByProviderId.get(presetId);
@@ -369,9 +455,11 @@ export function PresetIntegrationEditor({
         ),
       ]),
     );
+    setEditorProviderId(preset.provider_id);
   };
 
   const removePresetIntegration = (providerId: string) => {
+    setEditorProviderId((current) => (current === providerId ? null : current));
     onProviderConfigsChange?.(
       providerConfigs.filter((provider) => provider.id !== providerId),
     );
@@ -613,6 +701,187 @@ export function PresetIntegrationEditor({
     );
   };
 
+  const renderIntegrationConfiguration = (
+    integration: PresetIntegrationState,
+  ) => {
+    const {
+      preset,
+      providerConfig,
+      allowedModes,
+      authMode,
+      runtime,
+      selectedModelRefs,
+    } = integration;
+    return (
+      <>
+        <div className="grid gap-4 md:grid-cols-2">
+          <div className="space-y-2">
+            <label className="text-xs font-medium uppercase tracking-wide text-quiet">
+              Provider
+            </label>
+            <div className="rounded-lg border border-[color:var(--border)] bg-[color:var(--surface)] px-4 py-3">
+              <div className="flex flex-wrap gap-2">
+                <Badge variant="outline">{getPresetProductLine(preset)}</Badge>
+                <Badge variant="outline">{getPresetScopeLabel(preset)}</Badge>
+              </div>
+              <p className="mt-3 text-sm font-medium text-strong">
+                {preset.display_label}
+              </p>
+              <p className="mt-2 text-xs leading-5 text-muted">
+                {getPresetSummary(preset)}
+              </p>
+              {providerConfig.base_url ? (
+                <p className="mt-3 text-[11px] font-mono text-quiet">
+                  {providerConfig.base_url}
+                </p>
+              ) : null}
+            </div>
+          </div>
+          <div className="space-y-2">
+            <label className="text-xs font-medium uppercase tracking-wide text-quiet">
+              Authentication
+            </label>
+            <div className="grid gap-3">
+              {allowedModes.map((mode) => {
+                const isSelected = mode === authMode;
+                return (
+                  <button
+                    key={`${preset.provider_id}-${mode}`}
+                    type="button"
+                    disabled={isLoading || isSelected}
+                    onClick={() => updateProviderAuthMode(preset, mode)}
+                    className={`rounded-xl border px-4 py-3 text-left transition ${
+                      isSelected
+                        ? "border-[color:var(--accent)] bg-[color:var(--accent-soft)]/35"
+                        : "border-[color:var(--border)] bg-[color:var(--surface)] hover:border-[color:var(--border-strong)]"
+                    } disabled:cursor-default disabled:opacity-100`}
+                  >
+                    <div className="flex items-center justify-between gap-3">
+                      <p className="text-sm font-medium text-strong">
+                        {providerAuthModeLabel(mode)}
+                      </p>
+                      <Badge variant={isSelected ? "accent" : "outline"}>
+                        {isSelected ? "Selected" : "Available"}
+                      </Badge>
+                    </div>
+                    <p className="mt-2 text-xs leading-5 text-muted">
+                      {providerAuthModeDescription(mode, nodeClass)}
+                    </p>
+                  </button>
+                );
+              })}
+            </div>
+          </div>
+        </div>
+
+        <div className="mt-4">{renderSecretEditor(preset, authMode)}</div>
+
+        <div className="mt-4 rounded-lg border border-[color:var(--border)] bg-[color:var(--surface)] p-4">
+          <div className="space-y-1">
+            <p className="text-sm font-medium text-strong">Models</p>
+            <p className="text-xs text-muted">
+              Choose the models this node should manage for {preset.display_label},
+              then decide which of the selected models are available to agents and
+              product leads.
+            </p>
+          </div>
+          <div className="mt-4 space-y-3">
+            {preset.models.map((model) => {
+              const ref = providerRef(preset.provider_id, model.model_id);
+              const selected = selectedModelRefs.has(ref);
+              const enabled = enabledModelRefs.includes(ref);
+              return (
+                <div
+                  key={ref}
+                  className="rounded-lg border border-[color:var(--border)] bg-[color:var(--surface-muted)] px-4 py-3"
+                >
+                  <div className="flex flex-wrap items-start justify-between gap-3">
+                    <label className="flex min-w-0 flex-1 cursor-pointer items-start gap-3">
+                      <input
+                        type="checkbox"
+                        className="mt-1 h-4 w-4 rounded border-[color:var(--border)] text-[color:var(--accent)] focus:ring-[color:var(--accent)]"
+                        checked={selected}
+                        disabled={isLoading}
+                        onChange={(event) =>
+                          togglePresetModel(
+                            preset,
+                            model.model_id,
+                            event.target.checked,
+                          )
+                        }
+                      />
+                      <div className="min-w-0">
+                        <p className="font-medium text-strong">{model.label}</p>
+                        <p className="mt-1 truncate font-mono text-[11px] text-quiet">
+                          {ref}
+                        </p>
+                        {model.enabled_by_default === false ? (
+                          <p className="mt-2 text-[11px] text-muted">
+                            Available on demand. Mission Control keeps it out of the
+                            initial managed set until you opt in.
+                          </p>
+                        ) : null}
+                      </div>
+                    </label>
+                    <label className="flex items-center gap-2 text-xs font-medium text-muted">
+                      <input
+                        type="checkbox"
+                        className="h-4 w-4 rounded border-[color:var(--border)] text-[color:var(--accent)] focus:ring-[color:var(--accent)]"
+                        checked={enabled}
+                        disabled={isLoading || !onEnabledModelRefsChange}
+                        onChange={(event) =>
+                          toggleEnabledModel(
+                            preset,
+                            model.model_id,
+                            event.target.checked,
+                          )
+                        }
+                      />
+                      Enable for agents
+                    </label>
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+        </div>
+
+        {runtime ? (
+          <div className="mt-4 flex flex-wrap gap-2">
+            {runtime.auth_mode ? (
+              <Badge variant="outline">
+                {providerAuthModeLabel(runtime.auth_mode)}
+              </Badge>
+            ) : null}
+            <Badge
+              variant={
+                providerAuthStateLabel(
+                  runtime.auth_state,
+                  runtime.requires_login,
+                ) === "Verified"
+                  ? "success"
+                  : providerAuthStateLabel(
+                        runtime.auth_state,
+                        runtime.requires_login,
+                      ) === "Login required"
+                    ? "warning"
+                    : "outline"
+              }
+            >
+              {providerAuthStateLabel(
+                runtime.auth_state,
+                runtime.requires_login,
+              )}
+            </Badge>
+            <Badge variant="outline">
+              {runtime.verified_model_count ?? 0} verified
+            </Badge>
+          </div>
+        ) : null}
+      </>
+    );
+  };
+
   if (!compatiblePresets.length) {
     return (
       <div className="rounded-xl border border-dashed border-[color:var(--border)] bg-[color:var(--surface)] px-4 py-5 text-sm text-muted">
@@ -642,14 +911,14 @@ export function PresetIntegrationEditor({
           </div>
           <Button
             type="button"
-              disabled={
-                isLoading ||
-                !resolvedPendingPresetId ||
-                !presetByProviderId.has(resolvedPendingPresetId)
-              }
+            disabled={
+              isLoading ||
+              !resolvedPendingPresetId ||
+              !presetByProviderId.has(resolvedPendingPresetId)
+            }
             onClick={() => ensurePresetIntegration(resolvedPendingPresetId)}
           >
-            Add integration
+            Add and configure
           </Button>
         </div>
         {pendingPreset ? (
@@ -710,224 +979,128 @@ export function PresetIntegrationEditor({
         </div>
       ) : null}
 
-      {activeProviderIds.map((providerId) => {
-        const preset = presetByProviderId.get(providerId);
-        if (!preset) {
-          return null;
-        }
-        const providerConfig =
-          providerConfigById.get(providerId) ?? buildProviderConfig(preset);
-        const allowedModes = getPresetAllowedAuthModes(preset, nodeClass);
-        const authConfig = providerAuthById.get(providerId);
-        const authMode =
-          allowedModes.find((mode) => mode === authConfig?.auth_mode) ??
-          allowedModes[0] ??
-          "api-key";
-        const runtime = runtimeByProviderId.get(providerId);
-        const servicePurpose = servicePurposeForMode(authMode);
-        const hasServiceSecret = servicePurpose
-          ? Boolean(
-              secretRefByScope.get(secretScopeKey(providerId, servicePurpose)) ||
-                secretInputByScope.get(secretScopeKey(providerId, servicePurpose))
-                  ?.value,
-            )
-          : true;
-        const selectedModelRefs = modelRefsByProvider.get(providerId) ?? new Set<string>();
-        const status = integrationStatus(
-          runtime,
-          authMode,
-          hasServiceSecret,
-          selectedModelRefs.size > 0,
-        );
-
-        return (
-          <div
-            key={providerId}
-            className="rounded-xl border border-[color:var(--border)] bg-[color:var(--surface-muted)] p-4"
-          >
-            <div className="flex flex-wrap items-start justify-between gap-3">
-              <div className="space-y-2">
-                <div className="flex flex-wrap items-center gap-2">
-                  <h2 className="text-sm font-semibold text-strong">
-                    {preset.display_label}
-                  </h2>
-                  <Badge variant={status.variant}>{status.label}</Badge>
+      {activeProviderIds.length > 0 ? (
+        <div className="grid gap-4 lg:grid-cols-2">
+          {activeProviderIds.map((providerId) => {
+            const integration = getPresetIntegrationState(providerId);
+            if (!integration) {
+              return null;
+            }
+            const {
+              preset,
+              providerConfig,
+              authMode,
+              runtime,
+              hasServiceSecret,
+              selectedModelCount,
+              enabledModelCount,
+              status,
+            } = integration;
+            const interactiveAuth =
+              authMode === "oauth" || authMode === "login";
+            return (
+              <div
+                key={providerId}
+                className="rounded-xl border border-[color:var(--border)] bg-[color:var(--surface-muted)] p-4"
+              >
+                <div className="flex flex-wrap items-start justify-between gap-3">
+                  <div className="space-y-2">
+                    <div className="flex flex-wrap items-center gap-2">
+                      <h2 className="text-sm font-semibold text-strong">
+                        {preset.display_label}
+                      </h2>
+                      <Badge variant={status.variant}>{status.label}</Badge>
+                      <Badge variant="outline">
+                        {providerAuthModeLabel(authMode)}
+                      </Badge>
+                    </div>
+                    <p className="text-xs leading-5 text-muted">
+                      {getPresetSummary(preset)}
+                    </p>
+                    {providerConfig.base_url ? (
+                      <p className="text-[11px] font-mono text-quiet">
+                        {providerConfig.base_url}
+                      </p>
+                    ) : null}
+                  </div>
+                  <div className="flex flex-wrap gap-2">
+                    <Button
+                      type="button"
+                      variant="outline"
+                      size="sm"
+                      disabled={isLoading}
+                      onClick={() => setEditorProviderId(providerId)}
+                    >
+                      Configure
+                    </Button>
+                    <Button
+                      type="button"
+                      variant="outline"
+                      size="sm"
+                      disabled={isLoading}
+                      onClick={() => removePresetIntegration(providerId)}
+                    >
+                      Remove
+                    </Button>
+                  </div>
+                </div>
+                <div className="mt-4 flex flex-wrap gap-2">
                   <Badge variant="outline">{getPresetProductLine(preset)}</Badge>
                   <Badge variant="outline">{getPresetScopeLabel(preset)}</Badge>
+                  <Badge variant="outline">{selectedModelCount} selected</Badge>
+                  <Badge variant="outline">{enabledModelCount} enabled</Badge>
+                  {runtime ? (
+                    <Badge variant="outline">
+                      {runtime.verified_model_count ?? 0} verified
+                    </Badge>
+                  ) : null}
                 </div>
-                <p className="text-xs leading-5 text-muted">
-                  {getPresetSummary(preset)}
+                <p className="mt-3 text-xs text-muted">
+                  {interactiveAuth
+                    ? "Interactive auth continues from the node detail page after you save this node."
+                    : hasServiceSecret
+                      ? "Service-auth details are staged in this form and will be stored when you save the node."
+                      : "Open Configure to attach the service secret before you save this node."}
                 </p>
-                {providerConfig.base_url ? (
-                  <p className="text-[11px] font-mono text-quiet">
-                    {providerConfig.base_url}
-                  </p>
-                ) : null}
               </div>
-              <Button
-                type="button"
-                variant="outline"
-                size="sm"
-                disabled={isLoading}
-                onClick={() => removePresetIntegration(providerId)}
-              >
-                Remove
-              </Button>
-            </div>
+            );
+          })}
+        </div>
+      ) : null}
 
-            <div className="mt-4 grid gap-4 md:grid-cols-2">
-              <div className="space-y-2">
-                <label className="text-xs font-medium uppercase tracking-wide text-quiet">
-                  Provider
-                </label>
-                <div className="rounded-lg border border-[color:var(--border)] bg-[color:var(--surface)] px-3 py-3 text-sm text-strong">
-                  {preset.display_label}
-                </div>
-              </div>
-              <div className="space-y-2">
-                <label className="text-xs font-medium uppercase tracking-wide text-quiet">
-                  Authentication
-                </label>
-                <div className="grid gap-3">
-                  {allowedModes.map((mode) => {
-                    const isSelected = mode === authMode;
-                    return (
-                      <button
-                        key={`${providerId}-${mode}`}
-                        type="button"
-                        disabled={isLoading || isSelected}
-                        onClick={() => updateProviderAuthMode(preset, mode)}
-                        className={`rounded-xl border px-4 py-3 text-left transition ${
-                          isSelected
-                            ? "border-[color:var(--accent)] bg-[color:var(--accent-soft)]/35"
-                            : "border-[color:var(--border)] bg-[color:var(--surface)] hover:border-[color:var(--border-strong)]"
-                        } disabled:cursor-default disabled:opacity-100`}
-                      >
-                        <div className="flex items-center justify-between gap-3">
-                          <p className="text-sm font-medium text-strong">
-                            {providerAuthModeLabel(mode)}
-                          </p>
-                          <Badge variant={isSelected ? "accent" : "outline"}>
-                            {isSelected ? "Selected" : "Available"}
-                          </Badge>
-                        </div>
-                        <p className="mt-2 text-xs leading-5 text-muted">
-                          {providerAuthModeDescription(mode, nodeClass)}
-                        </p>
-                      </button>
-                    );
-                  })}
-                </div>
-              </div>
-            </div>
-
+      <Dialog
+        open={Boolean(editorIntegration)}
+        onOpenChange={(open) => {
+          if (!open) {
+            setEditorProviderId(null);
+          }
+        }}
+      >
+        {editorIntegration ? (
+          <DialogContent className="max-w-4xl">
+            <DialogHeader>
+              <DialogTitle>
+                Configure {editorIntegration.preset.display_label}
+              </DialogTitle>
+              <DialogDescription>
+                Changes stay staged in this node form until you save the node.
+              </DialogDescription>
+            </DialogHeader>
             <div className="mt-4">
-              {renderSecretEditor(preset, authMode)}
+              {renderIntegrationConfiguration(editorIntegration)}
             </div>
-
-            <div className="mt-4 rounded-lg border border-[color:var(--border)] bg-[color:var(--surface)] p-4">
-              <div className="space-y-1">
-                <p className="text-sm font-medium text-strong">Models</p>
-                <p className="text-xs text-muted">
-                  Choose the models this node should manage for {preset.display_label}, then decide which of the selected models are available to agents and product leads.
-                </p>
-              </div>
-              <div className="mt-4 space-y-3">
-                {preset.models.map((model) => {
-                  const ref = providerRef(providerId, model.model_id);
-                  const selected = selectedModelRefs.has(ref);
-                  const enabled = enabledModelRefs.includes(ref);
-                  return (
-                    <div
-                      key={ref}
-                      className="rounded-lg border border-[color:var(--border)] bg-[color:var(--surface-muted)] px-4 py-3"
-                    >
-                      <div className="flex flex-wrap items-start justify-between gap-3">
-                        <label className="flex min-w-0 flex-1 cursor-pointer items-start gap-3">
-                          <input
-                            type="checkbox"
-                            className="mt-1 h-4 w-4 rounded border-[color:var(--border)] text-[color:var(--accent)] focus:ring-[color:var(--accent)]"
-                            checked={selected}
-                            disabled={isLoading}
-                            onChange={(event) =>
-                              togglePresetModel(
-                                preset,
-                                model.model_id,
-                                event.target.checked,
-                              )
-                            }
-                          />
-                          <div className="min-w-0">
-                            <p className="font-medium text-strong">{model.label}</p>
-                            <p className="mt-1 truncate font-mono text-[11px] text-quiet">
-                              {ref}
-                            </p>
-                            {model.enabled_by_default === false ? (
-                              <p className="mt-2 text-[11px] text-muted">
-                                Available on demand. Mission Control keeps it out of
-                                the initial managed set until you opt in.
-                              </p>
-                            ) : null}
-                          </div>
-                        </label>
-                        <label className="flex items-center gap-2 text-xs font-medium text-muted">
-                          <input
-                            type="checkbox"
-                            className="h-4 w-4 rounded border-[color:var(--border)] text-[color:var(--accent)] focus:ring-[color:var(--accent)]"
-                            checked={enabled}
-                            disabled={isLoading || !onEnabledModelRefsChange}
-                            onChange={(event) =>
-                              toggleEnabledModel(
-                                preset,
-                                model.model_id,
-                                event.target.checked,
-                              )
-                            }
-                          />
-                          Enable for agents
-                        </label>
-                      </div>
-                    </div>
-                  );
-                })}
-              </div>
-            </div>
-
-            {runtime ? (
-              <div className="mt-4 flex flex-wrap gap-2">
-                {runtime.auth_mode ? (
-                  <Badge variant="outline">
-                    {providerAuthModeLabel(runtime.auth_mode)}
-                  </Badge>
-                ) : null}
-                <Badge
-                  variant={
-                    providerAuthStateLabel(
-                      runtime.auth_state,
-                      runtime.requires_login,
-                    ) === "Verified"
-                      ? "success"
-                      : providerAuthStateLabel(
-                            runtime.auth_state,
-                            runtime.requires_login,
-                          ) === "Login required"
-                        ? "warning"
-                        : "outline"
-                  }
-                >
-                  {providerAuthStateLabel(
-                    runtime.auth_state,
-                    runtime.requires_login,
-                  )}
-                </Badge>
-                <Badge variant="outline">
-                  {runtime.verified_model_count ?? 0} verified
-                </Badge>
-              </div>
-            ) : null}
-          </div>
-        );
-      })}
+            <DialogFooter className="mt-6">
+              <p className="mr-auto text-xs text-muted">
+                Save the node when you are done to persist the provider auth and
+                model changes.
+              </p>
+              <DialogClose asChild>
+                <Button type="button">Done</Button>
+              </DialogClose>
+            </DialogFooter>
+          </DialogContent>
+        ) : null}
+      </Dialog>
     </div>
   );
 }
