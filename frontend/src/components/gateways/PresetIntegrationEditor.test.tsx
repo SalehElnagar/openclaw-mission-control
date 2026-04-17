@@ -103,6 +103,29 @@ const githubCopilotPreset: ToolchainCatalogProviderPreset = {
   ],
 };
 
+const azureFoundryPreset: ToolchainCatalogProviderPreset = {
+  preset_id: "microsoft-foundry",
+  provider_id: "microsoft-foundry",
+  display_label: "Azure Foundry",
+  provider_type: "microsoft-foundry",
+  product_line: "Hosted API",
+  summary: "Azure-hosted model endpoint for managed service-auth nodes.",
+  node_classes: ["cloud", "local"],
+  supported_auth_modes: ["api-key"],
+  kind: "preset-only",
+  models: [
+    {
+      model_id: "model-router",
+      label: "Model Router (Azure Foundry)",
+      enabled_by_default: false,
+    },
+    {
+      model_id: "gpt-5.4-mini",
+      label: "GPT-5.4 Mini (Azure Foundry)",
+    },
+  ],
+};
+
 describe("PresetIntegrationEditor", () => {
   it("keeps a new integration in draft until the dialog is confirmed", async () => {
     const user = userEvent.setup();
@@ -161,5 +184,25 @@ describe("PresetIntegrationEditor", () => {
     expect(screen.getAllByText("OAuth").length).toBeGreaterThan(0);
     expect(screen.getAllByText("Login").length).toBeGreaterThan(0);
     expect(screen.queryByText("Unavailable")).not.toBeInTheDocument();
+  });
+
+  it("renders every preset model option while only enabling defaults initially", async () => {
+    const user = userEvent.setup();
+    render(<Harness catalog={[azureFoundryPreset]} />);
+
+    await user.click(screen.getByRole("button", { name: "Add and configure" }));
+
+    expect(
+      screen.getByRole("heading", { name: "Configure Azure Foundry" }),
+    ).toBeInTheDocument();
+    expect(
+      screen.getByText("Model Router (Azure Foundry)"),
+    ).toBeInTheDocument();
+    expect(
+      screen.getByText("GPT-5.4 Mini (Azure Foundry)"),
+    ).toBeInTheDocument();
+    expect(screen.getByText("2 available")).toBeInTheDocument();
+    expect(screen.getByText("2 selected")).toBeInTheDocument();
+    expect(screen.getByText("1 enabled")).toBeInTheDocument();
   });
 });

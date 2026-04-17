@@ -192,6 +192,9 @@ def test_toolchain_catalog_exposes_guided_presets() -> None:
     assert anthropic is not None
     assert anthropic.product_line == "Hosted API"
     assert anthropic.supported_auth_modes == ["api-key"]
+    foundry = provider_preset_by_id("microsoft-foundry")
+    assert foundry is not None
+    assert [model.model_id for model in foundry.models] == ["model-router", "gpt-5.4-mini"]
     claude_code = provider_preset_by_id("claude-code")
     assert claude_code is not None
     assert claude_code.display_label == "Claude Code"

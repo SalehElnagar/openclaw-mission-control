@@ -629,7 +629,7 @@ async def test_sync_model_policies_renders_managed_oauth_profiles(
         provider_auth_configs=[
             {
                 "provider_id": "google-gemini-cli",
-                "auth_mode": "oauth",
+                "auth_mode": "login",
                 "profile_id": "google-gemini-cli:managed",
             }
         ],
@@ -680,7 +680,128 @@ async def test_sync_model_policies_renders_managed_oauth_profiles(
     patch = captured["patch"]
     assert isinstance(patch, dict)
     assert patch["auth"]["profiles"]["google-gemini-cli:managed"]["mode"] == "oauth"
+    assert "managedBy" not in patch["auth"]["profiles"]["google-gemini-cli:managed"]
     assert patch["auth"]["order"]["google-gemini-cli"] == ["google-gemini-cli:managed"]
+
+
+@pytest.mark.asyncio
+async def test_sync_model_policies_renders_runtime_safe_auth_and_cost_payload(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    class _SessionStub:
+        def add(self, _value: object) -> None:
+            return None
+
+        async def commit(self) -> None:
+            return None
+
+    model_ref = "microsoft-foundry/gpt-5.4-mini"
+    gateway = Gateway(
+        organization_id=uuid4(),
+        name="gateway",
+        node_class="cloud",
+        url="ws://gateway.example/ws",
+        workspace_root="/tmp/workspaces",
+        default_model_profile="general",
+        enabled_model_refs=[model_ref],
+        model_profiles={
+            "general": {
+                "primary_model": model_ref,
+                "fallback_models": [],
+            }
+        },
+        provider_configs=[
+            {
+                "id": "microsoft-foundry",
+                "provider_type": "microsoft-foundry",
+                "base_url": "https://ai-foundry-advanced-claw.cognitiveservices.azure.com/openai/v1",
+                "api_mode": "openai-completions",
+                "auth_header": False,
+            }
+        ],
+        model_definitions=[
+            {
+                "provider_id": "microsoft-foundry",
+                "model_id": "gpt-5.4-mini",
+                "label": "GPT-5.4 Mini (Azure Foundry)",
+                "api_mode": "openai-completions",
+                "input_modalities": ["text"],
+                "context_window": 128000,
+                "max_tokens": 16384,
+                "cost": {
+                    "input": 0.75,
+                    "output": 4.5,
+                    "cache_read": 0.075,
+                    "cache_write": 0.75,
+                },
+            }
+        ],
+        provider_auth_configs=[
+            {
+                "provider_id": "google-gemini-cli",
+                "auth_mode": "login",
+                "profile_id": "google-gemini-cli:managed",
+            }
+        ],
+    )
+    service = GatewayRuntimeControlService(session=_SessionStub())  # type: ignore[arg-type]
+    captured: dict[str, object] = {}
+
+    async def _fake_load_gateway_config_with_retry(
+        _gateway: Gateway,
+        *,
+        context: str,
+    ) -> tuple[str | None, dict[str, object]]:
+        assert "gateway runtime sync" in context
+        return (
+            "hash",
+            {
+                "agents": {"defaults": {"models": {}}, "list": []},
+                "auth": {"profiles": {}, "order": {}},
+                "models": {"providers": {}},
+            },
+        )
+
+    async def _fake_available_models(_gateway: Gateway) -> list[str]:
+        return [model_ref]
+
+    async def _fake_openclaw_call(
+        method: str,
+        params: dict[str, object] | None = None,
+        *,
+        config: object,
+    ) -> object:
+        assert method == "config.patch"
+        assert config is not None
+        assert params is not None
+        captured["patch"] = json.loads(str(params["raw"]))
+        return {}
+
+    monkeypatch.setattr(
+        service,
+        "_load_gateway_config_with_retry",
+        _fake_load_gateway_config_with_retry,
+    )
+    monkeypatch.setattr(service, "available_models", _fake_available_models)
+    monkeypatch.setattr(runtime_control, "openclaw_call", _fake_openclaw_call)
+
+    changed = await service.sync_model_policies(gateway=gateway, agents=[], auth=None)
+
+    assert changed is True
+    patch = captured["patch"]
+    assert isinstance(patch, dict)
+    auth_profile = patch["auth"]["profiles"]["google-gemini-cli:managed"]
+    assert auth_profile["mode"] == "oauth"
+    assert "managedBy" not in auth_profile
+    model_cost = patch["models"]["providers"]["microsoft-foundry"]["models"][0]["cost"]
+    assert model_cost == {
+        "input": 0.75,
+        "output": 4.5,
+        "cacheRead": 0.075,
+        "cacheWrite": 0.75,
+    }
+    assert "cache_read" not in model_cost
+    assert "cache_write" not in model_cost
 
 
 @pytest.mark.asyncio

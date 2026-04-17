@@ -1211,8 +1211,31 @@ def _render_runtime_model_definition(
     if definition.max_tokens is not None:
         model_payload["maxTokens"] = definition.max_tokens
     if definition.cost is not None:
-        model_payload["cost"] = definition.cost.model_dump(exclude_none=True, by_alias=True)
+        cost_payload = _runtime_model_cost_payload(definition.cost)
+        if cost_payload:
+            model_payload["cost"] = cost_payload
     return model_payload
+
+
+def _runtime_model_cost_payload(cost: GatewayModelCost) -> dict[str, float]:
+    payload: dict[str, float] = {}
+    if cost.input is not None:
+        payload["input"] = cost.input
+    if cost.output is not None:
+        payload["output"] = cost.output
+    if cost.cache_read is not None:
+        payload["cacheRead"] = cost.cache_read
+    if cost.cache_write is not None:
+        payload["cacheWrite"] = cost.cache_write
+    return payload
+
+
+def _runtime_auth_profile_mode(auth_mode: ProviderAuthMode) -> str:
+    if auth_mode == "login":
+        return "oauth"
+    if auth_mode == "api-key":
+        return "api_key"
+    return auth_mode
 
 
 async def _render_managed_provider_patch(
@@ -1358,16 +1381,35 @@ def _render_managed_auth_patch(
         if isinstance(auth_section, dict) and isinstance(auth_section.get("order"), dict)
         else {}
     )
+    desired_interactive_profile_ids: dict[str, set[str]] = {}
+    for auth_config in auth_configs:
+        if auth_config.auth_mode not in {"oauth", "login"}:
+            continue
+        provider_id = auth_config.provider_id.strip()
+        if not provider_id:
+            continue
+        desired_interactive_profile_ids.setdefault(provider_id, set()).add(
+            auth_config.profile_id or f"{provider_id}:managed"
+        )
+        desired_interactive_profile_ids[provider_id].add(f"{provider_id}:managed")
     current_managed_profiles_by_provider: dict[str, list[str]] = {}
     for profile_id, raw_profile in current_profiles.items():
         if not isinstance(profile_id, str) or not isinstance(raw_profile, dict):
             continue
-        if raw_profile.get("managedBy") != "mission-control":
-            continue
         provider_id = raw_profile.get("provider")
         if not isinstance(provider_id, str) or not provider_id.strip():
             continue
-        current_managed_profiles_by_provider.setdefault(provider_id.strip(), []).append(profile_id)
+        normalized_provider_id = provider_id.strip()
+        is_managed_profile = (
+            profile_id == f"{normalized_provider_id}:managed"
+            or profile_id in desired_interactive_profile_ids.get(normalized_provider_id, set())
+            or raw_profile.get("managedBy") == "mission-control"
+        )
+        if not is_managed_profile:
+            continue
+        current_managed_profiles_by_provider.setdefault(normalized_provider_id, []).append(
+            profile_id
+        )
 
     desired_lookup = {item.provider_id: item for item in auth_configs}
     profiles_patch: dict[str, Any] = {}
@@ -1399,8 +1441,7 @@ def _render_managed_auth_patch(
             profile_id = auth_config.profile_id or f"{provider_id}:managed"
             profile_payload: dict[str, Any] = {
                 "provider": provider_id,
-                "mode": auth_config.auth_mode,
-                "managedBy": "mission-control",
+                "mode": _runtime_auth_profile_mode(auth_config.auth_mode),
             }
             if auth_config.display_label:
                 profile_payload["displayName"] = auth_config.display_label

@@ -36,6 +36,13 @@ def toolchain_catalog() -> ToolchainCatalogResponse:
                 kind="preset-only",
                 models=[
                     ToolchainCatalogModelPreset(
+                        model_id="model-router",
+                        label="Model Router (Azure Foundry)",
+                        api_mode="openai-completions",
+                        input_modalities=["text"],
+                        enabled_by_default=False,
+                    ),
+                    ToolchainCatalogModelPreset(
                         model_id="gpt-5.4-mini",
                         label="GPT-5.4 Mini (Azure Foundry)",
                         api_mode="openai-completions",
