@@ -70,8 +70,12 @@ class GatewaySecretStoreService:
             await asyncio.to_thread(self._set_keyvault_secret, record.external_key, value)
         else:
             record.external_key = None
-            record.encrypted_value = self._database_fernet().encrypt(value.encode("utf-8")).decode(
-                "utf-8",
+            record.encrypted_value = (
+                self._database_fernet()
+                .encrypt(value.encode("utf-8"))
+                .decode(
+                    "utf-8",
+                )
             )
         record.updated_at = utcnow()
         self.session.add(record)
@@ -129,15 +133,23 @@ class GatewaySecretStoreService:
         if not record.encrypted_value:
             return None, f"Managed secret {ref} has no stored value."
         try:
-            value = self._database_fernet().decrypt(record.encrypted_value.encode("utf-8")).decode(
-                "utf-8",
+            value = (
+                self._database_fernet()
+                .decrypt(record.encrypted_value.encode("utf-8"))
+                .decode(
+                    "utf-8",
+                )
             )
         except Exception as exc:  # pragma: no cover - corrupted ciphertext
             return None, f"Unable to decrypt managed secret {record.alias}: {exc}"
         return value, None
 
-    async def list_metadata_for_gateway(self, *, gateway: Gateway) -> dict[tuple[str, str], GatewayProviderSecretRef]:
-        records = await GatewayProviderSecret.objects.filter_by(gateway_id=gateway.id).all(self.session)
+    async def list_metadata_for_gateway(
+        self, *, gateway: Gateway
+    ) -> dict[tuple[str, str], GatewayProviderSecretRef]:
+        records = await GatewayProviderSecret.objects.filter_by(gateway_id=gateway.id).all(
+            self.session
+        )
         metadata: dict[tuple[str, str], GatewayProviderSecretRef] = {}
         for record in records:
             metadata[(record.provider_id, record.purpose)] = GatewayProviderSecretRef(

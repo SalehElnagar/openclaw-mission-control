@@ -11,9 +11,9 @@ from app.models.board_onboarding import BoardOnboardingSession
 from app.models.board_webhook_payloads import BoardWebhookPayload
 from app.models.board_webhooks import BoardWebhook
 from app.models.boards import Board
+from app.models.gateway_provider_secrets import GatewayProviderSecret
 from app.models.gateway_usage_samples import GatewayUsageSample
 from app.models.gateways import Gateway
-from app.models.gateway_provider_secrets import GatewayProviderSecret
 from app.models.organization_board_access import OrganizationBoardAccess
 from app.models.organization_invite_board_access import OrganizationInviteBoardAccess
 from app.models.organization_invites import OrganizationInvite

@@ -86,7 +86,9 @@ async def _apply_provider_secret_inputs(
     if not secret_inputs:
         return
     service = GatewaySecretStoreService(session)
-    existing_refs = gateway.provider_secret_refs if isinstance(gateway.provider_secret_refs, list) else []
+    existing_refs = (
+        gateway.provider_secret_refs if isinstance(gateway.provider_secret_refs, list) else []
+    )
     refs_by_scope: dict[tuple[str, str], dict[str, object]] = {}
     order: list[tuple[str, str]] = []
     for raw in existing_refs:
@@ -107,7 +109,11 @@ async def _apply_provider_secret_inputs(
         purpose = raw.get("purpose")
         value = raw.get("value")
         alias = raw.get("alias")
-        if not isinstance(provider_id, str) or not isinstance(purpose, str) or not isinstance(value, str):
+        if (
+            not isinstance(provider_id, str)
+            or not isinstance(purpose, str)
+            or not isinstance(value, str)
+        ):
             continue
         stored_ref = await service.upsert_secret(
             gateway=gateway,

@@ -18,11 +18,11 @@ from app.schemas.gateway_runtime import (
     GatewayModelCost,
     GatewayModelDefinition,
     GatewayModelProfiles,
+    GatewayProviderAuthActionResponse,
     GatewayProviderAuthChallenge,
     GatewayProviderAuthConfig,
     GatewayProviderConfig,
     GatewayProviderSecretRef,
-    GatewayProviderAuthActionResponse,
     GatewayRuntimeCatalogEntry,
     GatewayRuntimeProviderSummary,
     GatewayRuntimeSummary,
@@ -32,11 +32,9 @@ from app.schemas.gateway_runtime import (
     ModelSelection,
     ProviderAuthMode,
     ToolProfileName,
+    _normalize_model_definitions,
     _normalize_provider_auth_configs,
     _normalize_provider_auth_mode,
-    _normalize_model_definitions,
-    _normalize_model_list,
-    _normalize_model_ref,
     _normalize_provider_configs,
     _normalize_provider_secret_refs,
     _normalize_tool_profile,
@@ -44,7 +42,6 @@ from app.schemas.gateway_runtime import (
 from app.schemas.telemetry import UsageSampleCreate
 from app.services.activity_log import actor_fields_from_auth, record_activity
 from app.services.gateway_secret_store import GatewaySecretStoreService
-from app.services.openclaw.constants import DEFAULT_HEARTBEAT_CONFIG
 from app.services.openclaw.db_service import OpenClawDBService
 from app.services.openclaw.gateway_agent_pack import (
     MAIN_AGENT_SPEC,
@@ -57,11 +54,9 @@ from app.services.openclaw.gateway_agent_pack import (
 )
 from app.services.openclaw.gateway_rpc import GatewayConfig as GatewayClientConfig
 from app.services.openclaw.gateway_rpc import OpenClawGatewayError, openclaw_call
-from app.services.openclaw.internal.agent_key import agent_key as runtime_agent_id
 from app.services.openclaw.internal.retry import GatewayBackoff
 from app.services.openclaw.lifecycle_orchestrator import AgentLifecycleOrchestrator
 from app.services.openclaw.provisioning import OpenClawGatewayControlPlane
-from app.services.openclaw.shared import GatewayAgentIdentity
 from app.services.telemetry import UsageTelemetryService
 
 PROFILE_NAMES = ("general", "coder", "budget")
