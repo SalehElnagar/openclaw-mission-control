@@ -54,12 +54,12 @@ from app.services.openclaw.db_agent_state import (
     mint_agent_token,
 )
 from app.services.openclaw.db_service import OpenClawDBService
+from app.services.openclaw.gateway_agent_pack import is_gateway_main_agent
 from app.services.openclaw.gateway_resolver import (
     gateway_client_config,
     optional_gateway_client_config,
     require_gateway_for_board,
 )
-from app.services.openclaw.gateway_agent_pack import is_gateway_main_agent
 from app.services.openclaw.gateway_rpc import GatewayConfig as GatewayClientConfig
 from app.services.openclaw.gateway_rpc import (
     OpenClawGatewayError,

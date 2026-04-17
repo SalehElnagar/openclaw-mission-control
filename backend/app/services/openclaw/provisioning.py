@@ -39,6 +39,7 @@ from app.services.openclaw.constants import (
     MAIN_TEMPLATE_MAP,
     PRESERVE_AGENT_EDITABLE_FILES,
 )
+from app.services.openclaw.gateway_agent_pack import is_gateway_main_agent
 from app.services.openclaw.gateway_rpc import GatewayConfig as GatewayClientConfig
 from app.services.openclaw.gateway_rpc import (
     OpenClawGatewayError,
@@ -53,7 +54,6 @@ from app.services.openclaw.internal.session_keys import (
     board_agent_session_key,
     board_lead_session_key,
 )
-from app.services.openclaw.gateway_agent_pack import is_gateway_main_agent
 from app.services.openclaw.shared import GatewayAgentIdentity
 
 if TYPE_CHECKING:
