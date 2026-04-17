@@ -1286,6 +1286,24 @@ async def _render_managed_provider_patch(
     for provider_id in sorted(desired_provider_ids):
         provider_config = provider_lookup.get(provider_id)
         provider_auth = auth_lookup.get(provider_id)
+        provider_secret_refs = secret_refs_by_provider.get(provider_id, [])
+        interactive_auth_only_provider = (
+            provider_auth is not None
+            and provider_auth.auth_mode in {"oauth", "login"}
+            and (provider_config is None or not provider_config.base_url)
+            and (provider_config is None or not provider_config.api_mode)
+            and not provider_secret_refs
+            and (
+                provider_config is None
+                or not provider_config.headers
+            )
+            and (
+                provider_config is None
+                or provider_config.auth_header in {None, False}
+            )
+        )
+        if interactive_auth_only_provider:
+            continue
         provider_patch: dict[str, Any] = {
             "models": [
                 _render_runtime_model_definition(definition, provider_config=provider_config)
@@ -1305,7 +1323,7 @@ async def _render_managed_provider_patch(
             dict(provider_config.headers or {}) if provider_config else {}
         )
         static_token_ref: dict[str, str] | str | None = None
-        for secret_ref in secret_refs_by_provider.get(provider_id, []):
+        for secret_ref in provider_secret_refs:
             resolved, error = await _resolve_secret_ref_value(
                 secret_ref.ref,
                 gateway=gateway,
