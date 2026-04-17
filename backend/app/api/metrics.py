@@ -7,15 +7,14 @@ from datetime import datetime, timedelta
 from uuid import UUID
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
-from sqlalchemy import DateTime, case
+from sqlalchemy import DateTime, case, func
 from sqlalchemy import cast as sql_cast
-from sqlalchemy import func
 from sqlmodel import col, select
 from sqlmodel.ext.asyncio.session import AsyncSession
 
 from app.api.deps import require_org_member
-from app.core.time import utcnow
 from app.core.node_class import GatewayNodeClass
+from app.core.time import utcnow
 from app.db.session import get_session
 from app.models.activity_events import ActivityEvent
 from app.models.agents import Agent
@@ -36,8 +35,8 @@ from app.schemas.metrics import (
     DashboardWipRangeSeries,
     DashboardWipSeriesSet,
 )
-from app.services.organizations import OrganizationContext, list_accessible_board_ids
 from app.services.openclaw.node_class import filter_board_ids_by_gateway_scope
+from app.services.organizations import OrganizationContext, list_accessible_board_ids
 
 router = APIRouter(prefix="/metrics", tags=["metrics"])
 

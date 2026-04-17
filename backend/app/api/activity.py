@@ -15,22 +15,25 @@ from sqlmodel import col, select
 from sse_starlette.sse import EventSourceResponse
 
 from app.api.deps import ActorContext, require_org_member, require_user_or_agent
-from app.core.time import utcnow
 from app.core.node_class import GatewayNodeClass
+from app.core.time import utcnow
 from app.db.pagination import paginate
 from app.db.session import async_session_maker, get_session
 from app.models.activity_events import ActivityEvent
 from app.models.agents import Agent
 from app.models.boards import Board
 from app.models.tasks import Task
-from app.schemas.activity_events import ActivityEventRead, ActivityTaskCommentFeedItemRead
+from app.schemas.activity_events import (
+    ActivityEventRead,
+    ActivityTaskCommentFeedItemRead,
+)
 from app.schemas.pagination import DefaultLimitOffsetPage
+from app.services.openclaw.node_class import filter_board_ids_by_gateway_scope
 from app.services.organizations import (
     OrganizationContext,
     get_active_membership,
     list_accessible_board_ids,
 )
-from app.services.openclaw.node_class import filter_board_ids_by_gateway_scope
 
 if TYPE_CHECKING:
     from collections.abc import AsyncIterator, Sequence
