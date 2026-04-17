@@ -329,6 +329,20 @@ export default function EditGatewayPage() {
       loadedGateway?.model_definitions,
       runtimeSummary?.configured_model_definitions,
     );
+  const configuredModelRefs = useMemo(
+    () =>
+      Array.from(
+        new Set(
+          resolvedModelDefinitions.map(
+            (definition) => `${definition.provider_id}/${definition.model_id}`,
+          ),
+        ),
+      ),
+    [resolvedModelDefinitions],
+  );
+  const availableModelRefs = configuredModelRefs.length > 0
+    ? configuredModelRefs
+    : verifiedModelRefs.map((entry) => entry.ref);
   const resolvedProviderSecretRefs =
     providerSecretRefs ??
     pickManagedList(
@@ -341,8 +355,8 @@ export default function EditGatewayPage() {
     runtimeSummary?.effective_tool_profile ??
     "coding";
   const normalizedEnabledModelRefsForSave =
-    verifiedModelRefs.length > 0
-      ? resolvedEnabledModelRefs.length < verifiedModelRefs.length
+    availableModelRefs.length > 0
+      ? resolvedEnabledModelRefs.length < availableModelRefs.length
         ? resolvedEnabledModelRefs
         : null
       : loadedGateway?.enabled_model_refs ?? null;
@@ -377,8 +391,8 @@ export default function EditGatewayPage() {
       setError("Workspace root is required.");
       return;
     }
-    if (verifiedModelRefs.length > 0 && resolvedEnabledModelRefs.length === 0) {
-      setError("Enable at least one verified node model for agents.");
+    if (availableModelRefs.length > 0 && resolvedEnabledModelRefs.length === 0) {
+      setError("Enable at least one node model for agents.");
       return;
     }
 
@@ -451,7 +465,16 @@ export default function EditGatewayPage() {
         allowInsecureTls={resolvedAllowInsecureTls}
         defaultModelProfile={resolvedDefaultModelProfile}
         modelProfiles={resolvedModelProfiles}
-        verifiedModelRefs={verifiedModelRefs}
+        verifiedModelRefs={
+          configuredModelRefs.length > 0
+            ? resolvedModelDefinitions.map((definition) => ({
+                ref: `${definition.provider_id}/${definition.model_id}`,
+                label:
+                  definition.label?.trim() ||
+                  `${definition.provider_id}/${definition.model_id}`,
+              }))
+            : verifiedModelRefs
+        }
         enabledModelRefs={resolvedEnabledModelRefs}
         providerConfigs={resolvedProviderConfigs}
         providerAuthConfigs={resolvedProviderAuthConfigs}

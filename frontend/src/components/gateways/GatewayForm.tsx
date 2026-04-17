@@ -1,4 +1,4 @@
-import type { FormEvent } from "react";
+import { useState, type FormEvent } from "react";
 
 import type {
   GatewayProviderAuthConfig,
@@ -171,6 +171,7 @@ export function GatewayForm({
   onProviderSecretInputsChange,
   onToolProfileChange,
 }: GatewayFormProps) {
+  const [showGatewayToken, setShowGatewayToken] = useState(false);
   const configuredModelEntries = Array.from(
     new Map(
       modelDefinitions.map((definition) => {
@@ -186,7 +187,7 @@ export function GatewayForm({
     ).values(),
   );
   const availableModelEntries =
-    verifiedModelRefs.length > 0 ? verifiedModelRefs : configuredModelEntries;
+    configuredModelEntries.length > 0 ? configuredModelEntries : verifiedModelRefs;
   const verifiedModelMap = new Map(
     availableModelEntries.map((entry) => [entry.ref, entry]),
   );
@@ -339,12 +340,28 @@ export function GatewayForm({
       <div className="grid gap-6 md:grid-cols-2">
         <div className="space-y-2">
           <label className="text-sm font-medium text-strong">Gateway token</label>
-          <Input
-            value={gatewayToken}
-            onChange={(event) => onGatewayTokenChange(event.target.value)}
-            placeholder="Bearer token"
-            disabled={isLoading}
-          />
+          <div className="flex gap-2">
+            <Input
+              type={showGatewayToken ? "text" : "password"}
+              value={gatewayToken}
+              onChange={(event) => onGatewayTokenChange(event.target.value)}
+              placeholder="Bearer token"
+              disabled={isLoading}
+              autoComplete="new-password"
+              spellCheck={false}
+            />
+            <Button
+              type="button"
+              variant="outline"
+              disabled={isLoading}
+              onClick={() => setShowGatewayToken((current) => !current)}
+            >
+              {showGatewayToken ? "Hide" : "Show"}
+            </Button>
+          </div>
+          <p className="text-xs text-muted">
+            The node token stays hidden by default in Mission Control.
+          </p>
         </div>
         <div className="space-y-2">
           <label className="text-sm font-medium text-strong">
@@ -1222,11 +1239,13 @@ export function GatewayForm({
           </div>
           <div className="space-y-2">
             <label className="text-sm font-medium text-strong">
-              Verified node models
+              Node model pool
             </label>
             <div className="rounded-lg border border-dashed border-[color:var(--border)] bg-[color:var(--surface)] px-3 py-2 text-sm text-muted">
-              {verifiedModelRefs.length > 0
-                ? `${verifiedModelRefs.length} verified runtime model${verifiedModelRefs.length === 1 ? "" : "s"} available`
+              {configuredModelEntries.length > 0
+                ? `${configuredModelEntries.length} managed model${configuredModelEntries.length === 1 ? "" : "s"} configured for this node`
+                : verifiedModelRefs.length > 0
+                  ? `${verifiedModelRefs.length} verified runtime model${verifiedModelRefs.length === 1 ? "" : "s"} available`
                 : availableModelEntries.length > 0
                   ? `${availableModelEntries.length} configured model${availableModelEntries.length === 1 ? "" : "s"} pending runtime verification`
                   : "Add a guided integration or save this node and reconcile runtime to unlock model choices."}
@@ -1241,7 +1260,7 @@ export function GatewayForm({
                 Enabled for agents
               </label>
               <p className="text-xs text-muted">
-                Choose which verified node models agents and product leads can actually select on this node.
+                Choose which managed node models agents and product leads can actually select on this node.
               </p>
             </div>
             {availableModelEntries.length > 0 && onEnabledModelRefsChange ? (
