@@ -202,7 +202,7 @@ async def get_product(
     product_id: UUID,
     session: AsyncSession = SESSION_DEP,
     ctx: OrganizationContext = ORG_MEMBER_DEP,
-    ) -> ProductRead:
+) -> ProductRead:
     product = await _require_product(
         session,
         product_id=product_id,

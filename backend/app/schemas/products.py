@@ -87,9 +87,7 @@ class ProductLeadRuntimeDefaults(SQLModel):
         if not isinstance(value, dict):
             return value
         normalized = dict(value)
-        normalized["model_profile"] = cls._normalize_model_profile(
-            normalized.get("model_profile")
-        )
+        normalized["model_profile"] = cls._normalize_model_profile(normalized.get("model_profile"))
         normalized["model_primary"] = _normalize_model_ref(normalized.get("model_primary"))
         normalized["model_fallbacks"] = _normalize_model_list(normalized.get("model_fallbacks"))
         return normalized

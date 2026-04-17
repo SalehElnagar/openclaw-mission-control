@@ -213,12 +213,14 @@ def _config_model_definitions(config_data: dict[str, Any]) -> list[GatewayModelD
                     label=item.get("name") if isinstance(item.get("name"), str) else None,
                     api_mode=item.get("api") if isinstance(item.get("api"), str) else None,
                     reasoning=(
-                        item.get("reasoning")
-                        if isinstance(item.get("reasoning"), bool)
-                        else None
+                        item.get("reasoning") if isinstance(item.get("reasoning"), bool) else None
                     ),
                     input_modalities=(
-                        [str(value).strip() for value in item.get("input", []) if str(value).strip()]
+                        [
+                            str(value).strip()
+                            for value in item.get("input", [])
+                            if str(value).strip()
+                        ]
                         if isinstance(item.get("input"), list)
                         else []
                     ),
@@ -228,9 +230,7 @@ def _config_model_definitions(config_data: dict[str, Any]) -> list[GatewayModelD
                         else None
                     ),
                     max_tokens=(
-                        item.get("maxTokens")
-                        if isinstance(item.get("maxTokens"), int)
-                        else None
+                        item.get("maxTokens") if isinstance(item.get("maxTokens"), int) else None
                     ),
                     cost=(
                         GatewayModelCost.model_validate(item["cost"])
@@ -725,7 +725,9 @@ def _toolchain_drift_detected(
         ):
             return True
     managed_tool_profile = _load_tool_profile(gateway)
-    return managed_tool_profile is not None and managed_tool_profile != effective_tool_policy.profile
+    return (
+        managed_tool_profile is not None and managed_tool_profile != effective_tool_policy.profile
+    )
 
 
 def _provider_runtime_summaries(
@@ -743,7 +745,9 @@ def _provider_runtime_summaries(
     runtime_verified_models: dict[str, int] = {}
     for entry in catalog:
         if entry.selectable:
-            runtime_verified_models[entry.provider] = runtime_verified_models.get(entry.provider, 0) + 1
+            runtime_verified_models[entry.provider] = (
+                runtime_verified_models.get(entry.provider, 0) + 1
+            )
     model_counts: dict[str, int] = {}
     for definition in effective_models:
         model_counts[definition.provider_id] = model_counts.get(definition.provider_id, 0) + 1
@@ -836,9 +840,7 @@ def _render_managed_provider_patch(
         if isinstance(models_section, dict) and isinstance(models_section.get("providers"), dict)
         else {}
     )
-    current_provider_ids = {
-        key for key in current_providers.keys() if isinstance(key, str)
-    }
+    current_provider_ids = {key for key in current_providers.keys() if isinstance(key, str)}
     desired_provider_ids = {
         *provider_lookup.keys(),
         *model_defs_by_provider.keys(),
@@ -1382,13 +1384,10 @@ class GatewayRuntimeControlService(OpenClawDBService):
             if desired_tool_profile is not None
             else None
         )
-        tool_profile_changed = (
-            desired_tool_policy is not None
-            and (
-                actual_tool_policy.profile != desired_tool_policy.profile
-                or actual_tool_policy.browser_enabled != desired_tool_policy.browser_enabled
-                or actual_tool_policy.workspace_only_fs != desired_tool_policy.workspace_only_fs
-            )
+        tool_profile_changed = desired_tool_policy is not None and (
+            actual_tool_policy.profile != desired_tool_policy.profile
+            or actual_tool_policy.browser_enabled != desired_tool_policy.browser_enabled
+            or actual_tool_policy.workspace_only_fs != desired_tool_policy.workspace_only_fs
         )
         managed_provider_patch, toolchain_warnings = _render_managed_provider_patch(
             gateway=gateway,
