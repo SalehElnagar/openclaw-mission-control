@@ -54,6 +54,8 @@ MAIN_AGENT_SPEC = GatewayManagedAgentSpec(
     role="Gateway Agent",
     purpose=MAIN_AGENT_PURPOSE,
     emoji=":compass:",
+    model_profile="general",
+    model_primary=STARTER_PACK_PRIMARY_MODEL_REF,
 )
 
 STARTER_PACK_SPECS: tuple[GatewayManagedAgentSpec, ...] = (
@@ -100,12 +102,28 @@ MANAGED_GATEWAY_AGENT_SPECS: tuple[GatewayManagedAgentSpec, ...] = (
 def is_gateway_main_agent(agent: Agent) -> bool:
     """Return whether an agent is the gateway-main record."""
 
-    if agent.board_id is not None:
+    board_id = getattr(agent, "board_id", None)
+    if board_id is not None:
         return False
-    if agent.purpose == MAIN_AGENT_PURPOSE:
+    purpose = getattr(agent, "purpose", None)
+    if purpose == MAIN_AGENT_PURPOSE:
         return True
+    gateway_id = getattr(agent, "gateway_id", None)
+    session_id = getattr(agent, "openclaw_session_id", None)
+    if gateway_id is None or not session_id:
+        return False
     return (
-        agent.openclaw_session_id == GatewayAgentIdentity.session_key_for_id(agent.gateway_id)
+        session_id == GatewayAgentIdentity.session_key_for_id(gateway_id)
+    )
+
+
+def is_gateway_execution_agent(agent: Agent) -> bool:
+    """Return whether an agent is a boardless reusable gateway execution role."""
+
+    return (
+        getattr(agent, "board_id", None) is None
+        and getattr(agent, "purpose", None) == "execution"
+        and not is_gateway_main_agent(agent)
     )
 
 

@@ -32,6 +32,7 @@ from app.services.openclaw.gateway_agent_pack import (
     STARTER_PACK_PRIMARY_MODEL_REF,
     GatewayManagedAgentSpec,
     apply_gateway_managed_agent_spec,
+    is_gateway_execution_agent,
     runtime_agent_identifier,
 )
 from app.services.openclaw.gateway_rpc import GatewayConfig as GatewayClientConfig
@@ -252,6 +253,8 @@ def _is_transient_runtime_patch_error(exc: OpenClawGatewayError) -> bool:
             "did not receive a valid http response",
             "connection refused",
             "connection reset",
+            "invalidmessage",
+            "invalid message",
             "connection closed",
             "received 1012",
             "service restart",
@@ -641,6 +644,7 @@ class GatewayRuntimeControlService(OpenClawDBService):
         board = None
         if agent.board_id is not None:
             board = await Board.objects.by_id(agent.board_id).first(self.session)
+        wake_after_repair = wake_agents and not is_gateway_execution_agent(agent)
         existing_token = await self._get_existing_agent_token(gateway=gateway, agent=agent)
         try:
             await AgentLifecycleOrchestrator(self.session).run_lifecycle(
@@ -652,9 +656,9 @@ class GatewayRuntimeControlService(OpenClawDBService):
                 auth_token=existing_token,
                 force_bootstrap=False,
                 reset_session=True,
-                wake=wake_agents,
-                deliver_wakeup=wake_agents,
-                wakeup_verb="updated",
+                wake=wake_after_repair,
+                deliver_wakeup=wake_after_repair,
+                wakeup_verb=("updated" if wake_after_repair else None),
                 clear_confirm_token=True,
                 raise_gateway_errors=True,
             )

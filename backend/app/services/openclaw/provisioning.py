@@ -124,6 +124,8 @@ def _is_transient_agent_upsert_error(exc: OpenClawGatewayError) -> bool:
         for marker in (
             "connection refused",
             "connection reset",
+            "invalidmessage",
+            "invalid message",
             "timed out",
             "timeout",
             "temporarily unavailable",
@@ -142,6 +144,8 @@ def _is_transient_gateway_patch_error(exc: OpenClawGatewayError) -> bool:
             "did not receive a valid http response",
             "connection refused",
             "connection reset",
+            "invalidmessage",
+            "invalid message",
             "connection closed",
             "received 1012",
             "service restart",
@@ -690,9 +694,9 @@ class OpenClawGatewayControlPlane(GatewayControlPlane):
         if agent_just_created:
             await asyncio.sleep(0.75)
 
-        # Retry agents.update only when this call just created the agent.
-        # If create reported "already exists", "not found" and transport failures
-        # should still fail fast.
+        # Retry transient agents.update failures even when the agent already exists.
+        # Gateway-managed agents can be hit by a short restart window after config
+        # patching, and that should not leave their DB lifecycle stuck in updating.
         _update_retries = 5
         _update_delay = 0.5
         for _attempt in range(_update_retries):
@@ -709,10 +713,11 @@ class OpenClawGatewayControlPlane(GatewayControlPlane):
                 break
             except OpenClawGatewayError as exc:
                 should_retry = (
-                    agent_just_created
-                    and (_is_missing_agent_error(exc) or _is_transient_agent_upsert_error(exc))
-                    and _attempt < _update_retries - 1
-                )
+                    (
+                        agent_just_created and _is_missing_agent_error(exc)
+                    )
+                    or _is_transient_agent_upsert_error(exc)
+                ) and _attempt < _update_retries - 1
                 if should_retry:
                     await asyncio.sleep(_update_delay)
                     _update_delay = min(_update_delay * 2, 4.0)

@@ -17,7 +17,7 @@ from app.models.boards import Board
 from app.models.gateways import Gateway
 from app.models.organizations import Organization
 from app.schemas.gateway_runtime import GatewayRuntimeSyncRequest
-from app.services.openclaw.gateway_agent_pack import STARTER_PACK_PRIMARY_MODEL_REF
+from app.services.openclaw.gateway_agent_pack import MAIN_AGENT_SPEC, STARTER_PACK_PRIMARY_MODEL_REF
 from app.services.openclaw import runtime_control
 from app.services.openclaw.runtime_control import (
     DEFAULT_PRIMARY_MODEL_REF,
@@ -33,6 +33,11 @@ async def _make_engine() -> AsyncEngine:
     async with engine.begin() as conn:
         await conn.run_sync(SQLModel.metadata.create_all)
     return engine
+
+
+def test_gateway_main_agent_uses_foundry_mini_by_default() -> None:
+    assert MAIN_AGENT_SPEC.model_profile == "general"
+    assert MAIN_AGENT_SPEC.model_primary == STARTER_PACK_PRIMARY_MODEL_REF
 
 
 def test_resolve_agent_model_selection_merges_profile_and_explicit_fallbacks() -> None:
@@ -474,3 +479,64 @@ async def test_reconcile_gateway_runtime_backfills_gateway_starter_pack(
             assert gateway.model_profiles is not None
     finally:
         await engine.dispose()
+
+
+@pytest.mark.asyncio
+async def test_repair_gateway_execution_agent_stays_standby_without_wake(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    class _SessionStub:
+        def add(self, _value: object) -> None:
+            return None
+
+        async def commit(self) -> None:
+            return None
+
+        async def refresh(self, _value: object) -> None:
+            return None
+
+    gateway = Gateway(
+        organization_id=uuid4(),
+        name="Gateway",
+        url="ws://gateway.example/ws",
+        workspace_root="/tmp/workspaces",
+    )
+    agent = Agent(
+        gateway_id=gateway.id,
+        name="Gateway Builder",
+        purpose="execution",
+        board_id=None,
+        model_profile="coder",
+        model_primary=STARTER_PACK_PRIMARY_MODEL_REF,
+        status="updating",
+    )
+    service = GatewayRuntimeControlService(session=_SessionStub())  # type: ignore[arg-type]
+    auth = AuthContext(actor_type="user", user=SimpleNamespace(id=uuid4()))
+    captured: dict[str, object] = {}
+
+    async def _fake_get_existing_token(**_kwargs: object) -> str | None:
+        return None
+
+    async def _fake_run_lifecycle(self, **kwargs: object) -> Agent:
+        captured.update(kwargs)
+        agent.status = "online"
+        return agent
+
+    monkeypatch.setattr(service, "_get_existing_agent_token", _fake_get_existing_token)
+    monkeypatch.setattr(
+        runtime_control.AgentLifecycleOrchestrator,
+        "run_lifecycle",
+        _fake_run_lifecycle,
+    )
+
+    repaired = await service._repair_agent_runtime(
+        gateway=gateway,
+        agent=agent,
+        auth=auth,
+        wake_agents=True,
+    )
+
+    assert repaired is True
+    assert captured["wake"] is False
+    assert captured["deliver_wakeup"] is False
+    assert captured["wakeup_verb"] is None
