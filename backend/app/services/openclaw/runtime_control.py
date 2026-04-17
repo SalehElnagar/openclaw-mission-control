@@ -933,6 +933,8 @@ def _is_transient_runtime_patch_error(exc: OpenClawGatewayError) -> bool:
     return any(
         marker in message
         for marker in (
+            "rate limit",
+            "retry after",
             "did not receive a valid http response",
             "connection refused",
             "connection reset",

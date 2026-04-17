@@ -20,6 +20,7 @@ from app.models.organizations import Organization
 from app.schemas.gateway_runtime import GatewayRuntimeSyncRequest
 from app.services.openclaw import runtime_control
 from app.services.openclaw.gateway_agent_pack import MAIN_AGENT_SPEC, STARTER_PACK_PRIMARY_MODEL_REF
+from app.services.openclaw.gateway_rpc import OpenClawGatewayError
 from app.services.openclaw.runtime_control import (
     DEFAULT_PRIMARY_MODEL_REF,
     GatewayRuntimeControlService,
@@ -802,6 +803,98 @@ async def test_sync_model_policies_renders_runtime_safe_auth_and_cost_payload(
     }
     assert "cache_read" not in model_cost
     assert "cache_write" not in model_cost
+
+
+@pytest.mark.asyncio
+async def test_sync_model_policies_retries_rate_limited_runtime_patch(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    class _SessionStub:
+        def add(self, _value: object) -> None:
+            return None
+
+        async def commit(self) -> None:
+            return None
+
+    class _ImmediateBackoff:
+        def __init__(self, **_: object) -> None:
+            return None
+
+        async def run(self, fn):  # type: ignore[no-untyped-def]
+            return await fn()
+
+    gateway = Gateway(
+        organization_id=uuid4(),
+        name="gateway",
+        node_class="cloud",
+        url="ws://gateway.example/ws",
+        workspace_root="/tmp/workspaces",
+        default_model_profile="general",
+        enabled_model_refs=[STARTER_PACK_PRIMARY_MODEL_REF],
+        model_profiles={
+            "general": {
+                "primary_model": STARTER_PACK_PRIMARY_MODEL_REF,
+                "fallback_models": [],
+            }
+        },
+    )
+    service = GatewayRuntimeControlService(session=_SessionStub())  # type: ignore[arg-type]
+    load_contexts: list[str] = []
+    patch_attempts = 0
+
+    async def _fake_load_gateway_config_with_retry(
+        _gateway: Gateway,
+        *,
+        context: str,
+    ) -> tuple[str | None, dict[str, object]]:
+        load_contexts.append(context)
+        return (
+            "hash",
+            {
+                "agents": {
+                    "defaults": {"models": {}},
+                    "list": [],
+                }
+            },
+        )
+
+    async def _fake_available_models(_gateway: Gateway) -> list[str]:
+        return [STARTER_PACK_PRIMARY_MODEL_REF]
+
+    async def _fake_openclaw_call(
+        method: str,
+        params: dict[str, object] | None = None,
+        *,
+        config: object,
+    ) -> object:
+        nonlocal patch_attempts
+        assert method == "config.patch"
+        assert config is not None
+        assert params is not None
+        patch_attempts += 1
+        if patch_attempts == 1:
+            raise OpenClawGatewayError(
+                "rate limit exceeded for config.patch; retry after 31s",
+            )
+        return {}
+
+    monkeypatch.setattr(
+        service,
+        "_load_gateway_config_with_retry",
+        _fake_load_gateway_config_with_retry,
+    )
+    monkeypatch.setattr(service, "available_models", _fake_available_models)
+    monkeypatch.setattr(runtime_control, "GatewayBackoff", _ImmediateBackoff)
+    monkeypatch.setattr(runtime_control, "openclaw_call", _fake_openclaw_call)
+
+    changed = await service.sync_model_policies(gateway=gateway, agents=[], auth=None)
+
+    assert changed is True
+    assert patch_attempts == 2
+    assert load_contexts[-2:] == [
+        "gateway runtime sync base hash",
+        "gateway runtime sync recovery",
+    ]
 
 
 @pytest.mark.asyncio

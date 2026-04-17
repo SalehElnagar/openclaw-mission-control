@@ -136,6 +136,8 @@ _TRANSIENT_GATEWAY_ERROR_MARKERS = (
     "connection refused",
     "errno 111",
     "econnrefused",
+    "rate limit",
+    "retry after",
     "invalidmessage",
     "invalid message",
     "did not receive a valid http response",
