@@ -90,6 +90,22 @@ const catalogEntryStatusClassName = (entry: GatewayRuntimeCatalogEntry): string 
     ? "border-emerald-500/30 bg-emerald-500/10 text-emerald-300"
     : "border-amber-500/30 bg-amber-500/10 text-amber-300";
 
+const toolProfileLabel = (
+  value?: "restricted" | "coding" | "research" | "browser-assisted" | null,
+): string => {
+  switch (value) {
+    case "restricted":
+      return "Restricted";
+    case "research":
+      return "Research";
+    case "browser-assisted":
+      return "Browser-assisted";
+    case "coding":
+    default:
+      return "Coding";
+  }
+};
+
 export default function GatewayDetailPage() {
   const router = useRouter();
   const queryClient = useQueryClient();
@@ -395,6 +411,11 @@ export default function GatewayDetailPage() {
     () => runtimeCatalog.filter((entry) => entry.selectable === false),
     [runtimeCatalog],
   );
+  const runtimeProviders = runtime?.providers ?? [];
+  const configuredProviderConfigs = runtime?.configured_provider_configs ?? [];
+  const configuredModelDefinitions = runtime?.configured_model_definitions ?? [];
+  const configuredProviderSecretRefs =
+    runtime?.configured_provider_secret_refs ?? [];
   const handleDelete = () => {
     if (!deleteTarget) return;
     deleteMutation.mutate({ agentId: deleteTarget.id });
@@ -535,6 +556,31 @@ export default function GatewayDetailPage() {
                       {formatTimestamp(runtime?.last_runtime_sync_at ?? null)}
                     </p>
                   </div>
+                  <div>
+                    <p className="text-xs uppercase text-quiet">Tool profile</p>
+                    <p className="mt-1 text-sm font-medium text-strong">
+                      {toolProfileLabel(runtime?.effective_tool_profile)}
+                    </p>
+                    <p className="mt-1 text-xs text-muted">
+                      {runtime?.effective_tool_policy?.summary ??
+                        "Managed runtime safety profile ready to apply."}
+                    </p>
+                  </div>
+                  <div>
+                    <p className="text-xs uppercase text-quiet">
+                      Desired toolchain
+                    </p>
+                    <p className="mt-1 text-sm font-medium text-strong">
+                      {configuredProviderConfigs.length} providers ·{" "}
+                      {configuredModelDefinitions.length} models ·{" "}
+                      {configuredProviderSecretRefs.length} secret refs
+                    </p>
+                    <p className="mt-1 text-xs text-muted">
+                      {runtime?.drift_detected
+                        ? "Runtime drift detected. Reconcile will re-apply the Mission Control managed fragment."
+                        : "Runtime matches the current Mission Control managed fragment."}
+                    </p>
+                  </div>
                   <div className="flex flex-wrap gap-2 pt-1">
                     <Button
                       variant="outline"
@@ -576,6 +622,25 @@ export default function GatewayDetailPage() {
                         ? "Pulling…"
                         : "Pull telemetry"}
                     </Button>
+                  </div>
+                  <div className="flex flex-wrap gap-2">
+                    <span className="rounded-full border border-[color:var(--border)] bg-[color:var(--surface-muted)] px-3 py-1 text-xs font-medium text-strong">
+                      Browser{" "}
+                      {runtime?.effective_tool_policy?.browser_enabled
+                        ? "enabled"
+                        : "disabled"}
+                    </span>
+                    <span className="rounded-full border border-[color:var(--border)] bg-[color:var(--surface-muted)] px-3 py-1 text-xs font-medium text-strong">
+                      FS{" "}
+                      {runtime?.effective_tool_policy?.workspace_only_fs
+                        ? "workspace-only"
+                        : "broader access"}
+                    </span>
+                    {runtime?.drift_detected ? (
+                      <span className="rounded-full border border-amber-500/30 bg-amber-500/10 px-3 py-1 text-xs font-medium text-amber-200">
+                        Drift detected
+                      </span>
+                    ) : null}
                   </div>
                   {controlMessage ? (
                     <p className="rounded-md border border-[color:var(--border)] bg-[color:var(--surface-muted)] px-3 py-2 text-xs text-muted">
@@ -683,6 +748,69 @@ export default function GatewayDetailPage() {
                   <div>
                     <p className="text-xs uppercase text-quiet">Modules</p>
                     <div className="mt-2 space-y-3">
+                      <div className="rounded-lg border border-[color:var(--border)] bg-[color:var(--surface-muted)] p-3">
+                        <div className="flex items-center justify-between gap-3">
+                          <p className="text-xs uppercase text-quiet">
+                            Managed providers
+                          </p>
+                          <span className="text-xs text-muted">
+                            {runtimeProviders.length} observed
+                          </span>
+                        </div>
+                        <div className="mt-2 space-y-2">
+                          {runtimeProviders.length > 0 ? (
+                            runtimeProviders.map((provider) => (
+                              <div
+                                key={provider.id}
+                                className="rounded-md border border-[color:var(--border)] bg-[color:var(--surface)] px-3 py-2"
+                              >
+                                <div className="flex items-center justify-between gap-3">
+                                  <div className="min-w-0">
+                                    <p className="text-sm font-medium text-strong">
+                                      {provider.label}
+                                    </p>
+                                    <p className="mt-1 text-xs text-muted">
+                                      {provider.provider_type}
+                                    </p>
+                                  </div>
+                                  <span
+                                    className={`rounded-full border px-2 py-0.5 text-[11px] font-semibold ${
+                                      provider.verification_state === "runtime"
+                                        ? "border-emerald-500/30 bg-emerald-500/10 text-emerald-200"
+                                        : "border-amber-500/30 bg-amber-500/10 text-amber-200"
+                                    }`}
+                                  >
+                                    {provider.verification_state === "runtime"
+                                      ? "Verified"
+                                      : "Configured"}
+                                  </span>
+                                </div>
+                                <p className="mt-2 text-xs text-muted">
+                                  {provider.verified_model_count ?? 0} verified /{" "}
+                                  {provider.configured_model_count ?? 0} configured
+                                  models
+                                  {provider.secret_ref_count
+                                    ? ` · ${provider.secret_ref_count} secret ref${
+                                        provider.secret_ref_count === 1 ? "" : "s"
+                                      }`
+                                    : ""}
+                                </p>
+                                {provider.unresolved_secret_refs?.length ? (
+                                  <p className="mt-2 text-xs text-amber-200">
+                                    Missing refs:{" "}
+                                    {provider.unresolved_secret_refs.join(", ")}
+                                  </p>
+                                ) : null}
+                              </div>
+                            ))
+                          ) : (
+                            <p className="text-xs text-muted">
+                              No managed providers observed yet. Save the node toolchain
+                              from Edit node to let Mission Control author the runtime.
+                            </p>
+                          )}
+                        </div>
+                      </div>
                       <div className="rounded-lg border border-[color:var(--border)] bg-[color:var(--surface-muted)] p-3">
                         <div className="flex items-center justify-between gap-3">
                           <p className="text-xs uppercase text-quiet">Installed marketplace skills</p>

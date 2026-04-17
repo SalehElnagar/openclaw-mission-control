@@ -4,7 +4,10 @@
  * Mission Control API
  * OpenAPI spec version: 0.1.0
  */
+import type { GatewayModelDefinition } from "./gatewayModelDefinition";
 import type { GatewayModelProfiles } from "./gatewayModelProfiles";
+import type { GatewayProviderConfig } from "./gatewayProviderConfig";
+import type { GatewayProviderSecretRef } from "./gatewayProviderSecretRef";
 import type { GatewayReadDefaultModelProfile } from "./gatewayReadDefaultModelProfile";
 
 /**
@@ -20,6 +23,10 @@ export interface GatewayRead {
   default_model_profile?: GatewayReadDefaultModelProfile;
   model_profiles?: GatewayModelProfiles;
   enabled_model_refs?: string[] | null;
+  tool_profile?: "restricted" | "coding" | "research" | "browser-assisted" | null;
+  provider_configs?: GatewayProviderConfig[] | null;
+  model_definitions?: GatewayModelDefinition[] | null;
+  provider_secret_refs?: GatewayProviderSecretRef[] | null;
   id: string;
   organization_id: string;
   token?: string | null;

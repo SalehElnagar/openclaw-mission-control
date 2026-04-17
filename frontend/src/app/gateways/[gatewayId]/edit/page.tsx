@@ -15,7 +15,12 @@ import {
 } from "@/api/generated/gateways/gateways";
 import { useQuery } from "@tanstack/react-query";
 import { useOrganizationMembership } from "@/lib/use-organization-membership";
-import type { GatewayUpdate } from "@/api/generated/model";
+import type {
+  GatewayModelDefinition,
+  GatewayProviderConfig,
+  GatewayProviderSecretRef,
+  GatewayUpdate,
+} from "@/api/generated/model";
 import { GatewayForm } from "@/components/gateways/GatewayForm";
 import { DashboardPageLayout } from "@/components/templates/DashboardPageLayout";
 import {
@@ -26,6 +31,79 @@ import {
 } from "@/lib/gateway-form";
 import { getGatewayRuntime } from "@/api/runtime-control";
 import type { NodeClass } from "@/lib/node-scope";
+
+function sanitizeProviderConfigs(
+  providerConfigs: GatewayProviderConfig[],
+): GatewayProviderConfig[] | null {
+  const sanitized = providerConfigs
+    .map((provider) => ({
+      id: provider.id.trim(),
+      provider_type: provider.provider_type?.trim() || null,
+      label: provider.label?.trim() || null,
+      base_url: provider.base_url?.trim() || null,
+      api_mode: provider.api_mode?.trim() || null,
+      auth_header: Boolean(provider.auth_header),
+    }))
+    .filter((provider) => provider.id.length > 0);
+  return sanitized.length > 0 ? sanitized : null;
+}
+
+function sanitizeModelDefinitions(
+  modelDefinitions: GatewayModelDefinition[],
+): GatewayModelDefinition[] | null {
+  const sanitized = modelDefinitions
+    .map((definition) => ({
+      ...definition,
+      provider_id: definition.provider_id.trim(),
+      model_id: definition.model_id.trim(),
+      label: definition.label?.trim() || null,
+      api_mode: definition.api_mode?.trim() || null,
+      input_modalities: (definition.input_modalities ?? [])
+        .map((value) => value.trim())
+        .filter(Boolean),
+      cost: definition.cost
+        ? {
+            input: definition.cost.input ?? null,
+            output: definition.cost.output ?? null,
+            cache_read: definition.cost.cache_read ?? null,
+            cache_write: definition.cost.cache_write ?? null,
+          }
+        : null,
+    }))
+    .filter(
+      (definition) =>
+        definition.provider_id.length > 0 && definition.model_id.length > 0,
+    );
+  return sanitized.length > 0 ? sanitized : null;
+}
+
+function sanitizeProviderSecretRefs(
+  providerSecretRefs: GatewayProviderSecretRef[],
+): GatewayProviderSecretRef[] | null {
+  const sanitized = providerSecretRefs
+    .map((secretRef) => ({
+      provider_id: secretRef.provider_id.trim(),
+      purpose: secretRef.purpose.trim(),
+      ref: secretRef.ref.trim(),
+    }))
+    .filter(
+      (secretRef) =>
+        secretRef.provider_id.length > 0 &&
+        secretRef.purpose.length > 0 &&
+        secretRef.ref.length > 0,
+    );
+  return sanitized.length > 0 ? sanitized : null;
+}
+
+function pickManagedList<T>(saved: T[] | null | undefined, observed: T[] | null | undefined): T[] {
+  if ((saved?.length ?? 0) > 0) {
+    return saved ?? [];
+  }
+  if ((observed?.length ?? 0) > 0) {
+    return observed ?? [];
+  }
+  return [];
+}
 
 export default function EditGatewayPage() {
   const { isSignedIn } = useAuth();
@@ -62,6 +140,18 @@ export default function EditGatewayPage() {
   const [enabledModelRefs, setEnabledModelRefs] = useState<string[] | undefined>(
     undefined,
   );
+  const [providerConfigs, setProviderConfigs] = useState<
+    GatewayProviderConfig[] | undefined
+  >(undefined);
+  const [modelDefinitions, setModelDefinitions] = useState<
+    GatewayModelDefinition[] | undefined
+  >(undefined);
+  const [providerSecretRefs, setProviderSecretRefs] = useState<
+    GatewayProviderSecretRef[] | undefined
+  >(undefined);
+  const [toolProfile, setToolProfile] = useState<
+    "restricted" | "coding" | "research" | "browser-assisted" | undefined
+  >(undefined);
 
   const [gatewayUrlError, setGatewayUrlError] = useState<string | null>(null);
   const [gatewayCheckStatus, setGatewayCheckStatus] =
@@ -136,6 +226,31 @@ export default function EditGatewayPage() {
     loadedGateway?.enabled_model_refs ??
     runtimeQuery.data?.data.enabled_model_refs ??
     verifiedModelRefs.map((entry) => entry.ref);
+  const runtimeSummary =
+    runtimeQuery.data?.status === 200 ? runtimeQuery.data.data : null;
+  const resolvedProviderConfigs =
+    providerConfigs ??
+    pickManagedList(
+      loadedGateway?.provider_configs,
+      runtimeSummary?.configured_provider_configs,
+    );
+  const resolvedModelDefinitions =
+    modelDefinitions ??
+    pickManagedList(
+      loadedGateway?.model_definitions,
+      runtimeSummary?.configured_model_definitions,
+    );
+  const resolvedProviderSecretRefs =
+    providerSecretRefs ??
+    pickManagedList(
+      loadedGateway?.provider_secret_refs,
+      runtimeSummary?.configured_provider_secret_refs,
+    );
+  const resolvedToolProfile =
+    toolProfile ??
+    loadedGateway?.tool_profile ??
+    runtimeSummary?.effective_tool_profile ??
+    "coding";
   const normalizedEnabledModelRefsForSave =
     verifiedModelRefs.length > 0
       ? resolvedEnabledModelRefs.length < verifiedModelRefs.length
@@ -205,6 +320,12 @@ export default function EditGatewayPage() {
       default_model_profile: resolvedDefaultModelProfile,
       model_profiles: resolvedModelProfiles,
       enabled_model_refs: normalizedEnabledModelRefsForSave,
+      tool_profile: resolvedToolProfile,
+      provider_configs: sanitizeProviderConfigs(resolvedProviderConfigs),
+      model_definitions: sanitizeModelDefinitions(resolvedModelDefinitions),
+      provider_secret_refs: sanitizeProviderSecretRefs(
+        resolvedProviderSecretRefs,
+      ),
     };
 
     updateMutation.mutate({ gatewayId, data: payload });
@@ -237,6 +358,13 @@ export default function EditGatewayPage() {
         modelProfiles={resolvedModelProfiles}
         verifiedModelRefs={verifiedModelRefs}
         enabledModelRefs={resolvedEnabledModelRefs}
+        providerConfigs={resolvedProviderConfigs}
+        modelDefinitions={resolvedModelDefinitions}
+        providerSecretRefs={resolvedProviderSecretRefs}
+        toolProfile={resolvedToolProfile}
+        effectiveToolPolicy={runtimeSummary?.effective_tool_policy ?? null}
+        runtimeProviderSummaries={runtimeSummary?.providers ?? []}
+        driftDetected={runtimeSummary?.drift_detected ?? false}
         gatewayUrlError={gatewayUrlError}
         gatewayCheckStatus={gatewayCheckStatus}
         gatewayCheckMessage={gatewayCheckMessage}
@@ -274,6 +402,10 @@ export default function EditGatewayPage() {
           setGatewayCheckMessage(null);
         }}
         onDefaultModelProfileChange={setDefaultModelProfile}
+        onProviderConfigsChange={setProviderConfigs}
+        onModelDefinitionsChange={setModelDefinitions}
+        onProviderSecretRefsChange={setProviderSecretRefs}
+        onToolProfileChange={setToolProfile}
         onEnabledModelRefsChange={(next) => {
           setEnabledModelRefs(next);
           const nextRefs = new Set(next);

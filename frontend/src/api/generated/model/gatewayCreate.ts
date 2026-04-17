@@ -5,7 +5,10 @@
  * OpenAPI spec version: 0.1.0
  */
 import type { GatewayCreateDefaultModelProfile } from "./gatewayCreateDefaultModelProfile";
+import type { GatewayModelDefinition } from "./gatewayModelDefinition";
 import type { GatewayModelProfiles } from "./gatewayModelProfiles";
+import type { GatewayProviderConfig } from "./gatewayProviderConfig";
+import type { GatewayProviderSecretRef } from "./gatewayProviderSecretRef";
 
 /**
  * Payload for creating a gateway configuration.
@@ -20,5 +23,9 @@ export interface GatewayCreate {
   default_model_profile?: GatewayCreateDefaultModelProfile;
   model_profiles?: GatewayModelProfiles;
   enabled_model_refs?: string[] | null;
+  tool_profile?: "restricted" | "coding" | "research" | "browser-assisted" | null;
+  provider_configs?: GatewayProviderConfig[] | null;
+  model_definitions?: GatewayModelDefinition[] | null;
+  provider_secret_refs?: GatewayProviderSecretRef[] | null;
   token?: string | null;
 }

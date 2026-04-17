@@ -17,6 +17,58 @@ type GatewayModelProfiles = {
   budget?: ModelSelection | null;
 };
 
+export type GatewayProviderConfig = {
+  id: string;
+  provider_type?: string | null;
+  label?: string | null;
+  base_url?: string | null;
+  api_mode?: string | null;
+  auth_header?: boolean | null;
+};
+
+export type GatewayProviderSecretRef = {
+  provider_id: string;
+  purpose: string;
+  ref: string;
+};
+
+export type GatewayModelCost = {
+  input?: number | null;
+  output?: number | null;
+  cache_read?: number | null;
+  cache_write?: number | null;
+};
+
+export type GatewayModelDefinition = {
+  provider_id: string;
+  model_id: string;
+  label?: string | null;
+  api_mode?: string | null;
+  reasoning?: boolean | null;
+  input_modalities?: string[];
+  context_window?: number | null;
+  max_tokens?: number | null;
+  cost?: GatewayModelCost | null;
+};
+
+export type GatewayRuntimeProviderSummary = {
+  id: string;
+  provider_type: string;
+  label: string;
+  verification_state?: "runtime" | "configured";
+  configured_model_count?: number;
+  verified_model_count?: number;
+  secret_ref_count?: number;
+  unresolved_secret_refs?: string[];
+};
+
+export type GatewayToolProfilePolicy = {
+  profile?: "restricted" | "coding" | "research" | "browser-assisted";
+  browser_enabled?: boolean;
+  workspace_only_fs?: boolean;
+  summary?: string | null;
+};
+
 export type GatewayRuntimeCatalogEntry = {
   ref: string;
   provider: string;
@@ -40,6 +92,13 @@ export type GatewayRuntimeSummary = {
   catalog: GatewayRuntimeCatalogEntry[];
   available_models: string[];
   enabled_model_refs: string[];
+  configured_provider_configs?: GatewayProviderConfig[];
+  configured_model_definitions?: GatewayModelDefinition[];
+  configured_provider_secret_refs?: GatewayProviderSecretRef[];
+  providers?: GatewayRuntimeProviderSummary[];
+  effective_tool_profile?: "restricted" | "coding" | "research" | "browser-assisted";
+  effective_tool_policy?: GatewayToolProfilePolicy;
+  drift_detected?: boolean;
 };
 
 export type GatewayRuntimeSyncRequest = {

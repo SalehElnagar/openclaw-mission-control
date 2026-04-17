@@ -66,6 +66,10 @@ _GATEWAY_AUDIT_FIELDS = {
     "default_model_profile",
     "model_profiles",
     "enabled_model_refs",
+    "tool_profile",
+    "provider_configs",
+    "model_definitions",
+    "provider_secret_refs",
     "token",
 }
 

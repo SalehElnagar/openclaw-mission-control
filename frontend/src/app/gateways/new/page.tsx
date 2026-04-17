@@ -12,6 +12,11 @@ import { useCreateGatewayApiV1GatewaysPost } from "@/api/generated/gateways/gate
 import { useOrganizationMembership } from "@/lib/use-organization-membership";
 import { GatewayForm } from "@/components/gateways/GatewayForm";
 import { DashboardPageLayout } from "@/components/templates/DashboardPageLayout";
+import type {
+  GatewayModelDefinition,
+  GatewayProviderConfig,
+  GatewayProviderSecretRef,
+} from "@/api/generated/model";
 import {
   DEFAULT_WORKSPACE_ROOT,
   checkGatewayConnection,
@@ -19,6 +24,69 @@ import {
   validateGatewayUrl,
 } from "@/lib/gateway-form";
 import type { NodeClass } from "@/lib/node-scope";
+
+function sanitizeProviderConfigs(
+  providerConfigs: GatewayProviderConfig[],
+): GatewayProviderConfig[] | null {
+  const sanitized = providerConfigs
+    .map((provider) => ({
+      id: provider.id.trim(),
+      provider_type: provider.provider_type?.trim() || null,
+      label: provider.label?.trim() || null,
+      base_url: provider.base_url?.trim() || null,
+      api_mode: provider.api_mode?.trim() || null,
+      auth_header: Boolean(provider.auth_header),
+    }))
+    .filter((provider) => provider.id.length > 0);
+  return sanitized.length > 0 ? sanitized : null;
+}
+
+function sanitizeModelDefinitions(
+  modelDefinitions: GatewayModelDefinition[],
+): GatewayModelDefinition[] | null {
+  const sanitized = modelDefinitions
+    .map((definition) => ({
+      ...definition,
+      provider_id: definition.provider_id.trim(),
+      model_id: definition.model_id.trim(),
+      label: definition.label?.trim() || null,
+      api_mode: definition.api_mode?.trim() || null,
+      input_modalities: (definition.input_modalities ?? [])
+        .map((value) => value.trim())
+        .filter(Boolean),
+      cost: definition.cost
+        ? {
+            input: definition.cost.input ?? null,
+            output: definition.cost.output ?? null,
+            cache_read: definition.cost.cache_read ?? null,
+            cache_write: definition.cost.cache_write ?? null,
+          }
+        : null,
+    }))
+    .filter(
+      (definition) =>
+        definition.provider_id.length > 0 && definition.model_id.length > 0,
+    );
+  return sanitized.length > 0 ? sanitized : null;
+}
+
+function sanitizeProviderSecretRefs(
+  providerSecretRefs: GatewayProviderSecretRef[],
+): GatewayProviderSecretRef[] | null {
+  const sanitized = providerSecretRefs
+    .map((secretRef) => ({
+      provider_id: secretRef.provider_id.trim(),
+      purpose: secretRef.purpose.trim(),
+      ref: secretRef.ref.trim(),
+    }))
+    .filter(
+      (secretRef) =>
+        secretRef.provider_id.length > 0 &&
+        secretRef.purpose.length > 0 &&
+        secretRef.ref.length > 0,
+    );
+  return sanitized.length > 0 ? sanitized : null;
+}
 
 export default function NewGatewayPage() {
   const { isSignedIn } = useAuth();
@@ -36,6 +104,18 @@ export default function NewGatewayPage() {
   const [defaultModelProfile, setDefaultModelProfile] = useState<
     "general" | "coder" | "budget"
   >("general");
+  const [providerConfigs, setProviderConfigs] = useState<GatewayProviderConfig[]>(
+    [],
+  );
+  const [modelDefinitions, setModelDefinitions] = useState<
+    GatewayModelDefinition[]
+  >([]);
+  const [providerSecretRefs, setProviderSecretRefs] = useState<
+    GatewayProviderSecretRef[]
+  >([]);
+  const [toolProfile, setToolProfile] = useState<
+    "restricted" | "coding" | "research" | "browser-assisted"
+  >("coding");
 
   const [gatewayUrlError, setGatewayUrlError] = useState<string | null>(null);
   const [gatewayCheckStatus, setGatewayCheckStatus] =
@@ -112,6 +192,10 @@ export default function NewGatewayPage() {
         workspace_root: workspaceRoot.trim(),
         allow_insecure_tls: allowInsecureTls,
         default_model_profile: defaultModelProfile,
+        tool_profile: toolProfile,
+        provider_configs: sanitizeProviderConfigs(providerConfigs),
+        model_definitions: sanitizeModelDefinitions(modelDefinitions),
+        provider_secret_refs: sanitizeProviderSecretRefs(providerSecretRefs),
       },
     });
   };
@@ -136,6 +220,10 @@ export default function NewGatewayPage() {
         workspaceRoot={workspaceRoot}
         allowInsecureTls={allowInsecureTls}
         defaultModelProfile={defaultModelProfile}
+        providerConfigs={providerConfigs}
+        modelDefinitions={modelDefinitions}
+        providerSecretRefs={providerSecretRefs}
+        toolProfile={toolProfile}
         verifiedModelRefs={[]}
         enabledModelRefs={[]}
         gatewayUrlError={gatewayUrlError}
@@ -175,6 +263,10 @@ export default function NewGatewayPage() {
           setGatewayCheckMessage(null);
         }}
         onDefaultModelProfileChange={setDefaultModelProfile}
+        onProviderConfigsChange={setProviderConfigs}
+        onModelDefinitionsChange={setModelDefinitions}
+        onProviderSecretRefsChange={setProviderSecretRefs}
+        onToolProfileChange={setToolProfile}
       />
     </DashboardPageLayout>
   );

@@ -4,7 +4,10 @@
  * Mission Control API
  * OpenAPI spec version: 0.1.0
  */
+import type { GatewayModelDefinition } from "./gatewayModelDefinition";
 import type { GatewayModelProfiles } from "./gatewayModelProfiles";
+import type { GatewayProviderConfig } from "./gatewayProviderConfig";
+import type { GatewayProviderSecretRef } from "./gatewayProviderSecretRef";
 
 /**
  * Payload for partial gateway updates.
@@ -20,4 +23,8 @@ export interface GatewayUpdate {
   default_model_profile?: "general" | "coder" | "budget" | null;
   model_profiles?: GatewayModelProfiles | null;
   enabled_model_refs?: string[] | null;
+  tool_profile?: "restricted" | "coding" | "research" | "browser-assisted" | null;
+  provider_configs?: GatewayProviderConfig[] | null;
+  model_definitions?: GatewayModelDefinition[] | null;
+  provider_secret_refs?: GatewayProviderSecretRef[] | null;
 }

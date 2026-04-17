@@ -10,9 +10,17 @@ from sqlmodel import Field, SQLModel
 
 from app.core.node_class import GatewayNodeClass
 from app.schemas.gateway_runtime import (
+    GatewayModelDefinition,
     GatewayModelProfiles,
+    GatewayProviderConfig,
+    GatewayProviderSecretRef,
     ProfileName,
+    ToolProfileName,
     _normalize_model_list,
+    _normalize_model_definitions,
+    _normalize_provider_configs,
+    _normalize_provider_secret_refs,
+    _normalize_tool_profile,
 )
 
 RUNTIME_ANNOTATION_TYPES = (datetime, UUID)
@@ -30,6 +38,10 @@ class GatewayBase(SQLModel):
     default_model_profile: ProfileName = "general"
     model_profiles: GatewayModelProfiles = Field(default_factory=GatewayModelProfiles)
     enabled_model_refs: list[str] | None = None
+    tool_profile: ToolProfileName | None = None
+    provider_configs: list[GatewayProviderConfig] | None = None
+    model_definitions: list[GatewayModelDefinition] | None = None
+    provider_secret_refs: list[GatewayProviderSecretRef] | None = None
 
     @field_validator("model_profiles", mode="before")
     @classmethod
@@ -66,6 +78,42 @@ class GatewayBase(SQLModel):
         """Normalize enabled model refs into a stable, deduplicated list."""
         return _normalize_model_list(value)
 
+    @field_validator("tool_profile", mode="before")
+    @classmethod
+    def normalize_tool_profile(
+        cls,
+        value: object,
+    ) -> ToolProfileName | None | object:
+        """Normalize node tool-profile selection."""
+        return _normalize_tool_profile(value)
+
+    @field_validator("provider_configs", mode="before")
+    @classmethod
+    def normalize_provider_configs(
+        cls,
+        value: object,
+    ) -> list[GatewayProviderConfig] | None:
+        """Normalize managed node provider definitions."""
+        return _normalize_provider_configs(value)
+
+    @field_validator("model_definitions", mode="before")
+    @classmethod
+    def normalize_model_definitions(
+        cls,
+        value: object,
+    ) -> list[GatewayModelDefinition] | None:
+        """Normalize managed node model definitions."""
+        return _normalize_model_definitions(value)
+
+    @field_validator("provider_secret_refs", mode="before")
+    @classmethod
+    def normalize_provider_secret_refs(
+        cls,
+        value: object,
+    ) -> list[GatewayProviderSecretRef] | None:
+        """Normalize managed provider secret references."""
+        return _normalize_provider_secret_refs(value)
+
 
 class GatewayCreate(GatewayBase):
     """Payload for creating a gateway configuration."""
@@ -97,6 +145,10 @@ class GatewayUpdate(SQLModel):
     default_model_profile: ProfileName | None = None
     model_profiles: GatewayModelProfiles | None = None
     enabled_model_refs: list[str] | None = None
+    tool_profile: ToolProfileName | None = None
+    provider_configs: list[GatewayProviderConfig] | None = None
+    model_definitions: list[GatewayModelDefinition] | None = None
+    provider_secret_refs: list[GatewayProviderSecretRef] | None = None
 
     @field_validator("token", mode="before")
     @classmethod
@@ -146,6 +198,42 @@ class GatewayUpdate(SQLModel):
     ) -> list[str] | None:
         """Normalize enabled model refs on PATCH payloads."""
         return _normalize_model_list(value)
+
+    @field_validator("tool_profile", mode="before")
+    @classmethod
+    def normalize_update_tool_profile(
+        cls,
+        value: object,
+    ) -> ToolProfileName | None | object:
+        """Normalize patched tool-profile selections."""
+        return _normalize_tool_profile(value)
+
+    @field_validator("provider_configs", mode="before")
+    @classmethod
+    def normalize_update_provider_configs(
+        cls,
+        value: object,
+    ) -> list[GatewayProviderConfig] | None:
+        """Normalize patched managed provider definitions."""
+        return _normalize_provider_configs(value)
+
+    @field_validator("model_definitions", mode="before")
+    @classmethod
+    def normalize_update_model_definitions(
+        cls,
+        value: object,
+    ) -> list[GatewayModelDefinition] | None:
+        """Normalize patched managed model definitions."""
+        return _normalize_model_definitions(value)
+
+    @field_validator("provider_secret_refs", mode="before")
+    @classmethod
+    def normalize_update_provider_secret_refs(
+        cls,
+        value: object,
+    ) -> list[GatewayProviderSecretRef] | None:
+        """Normalize patched provider secret references."""
+        return _normalize_provider_secret_refs(value)
 
 
 class GatewayRead(GatewayBase):

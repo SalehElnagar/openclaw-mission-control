@@ -4,9 +4,14 @@
  * Mission Control API
  * OpenAPI spec version: 0.1.0
  */
+import type { GatewayModelDefinition } from "./gatewayModelDefinition";
 import type { GatewayModelProfiles } from "./gatewayModelProfiles";
+import type { GatewayProviderConfig } from "./gatewayProviderConfig";
+import type { GatewayProviderSecretRef } from "./gatewayProviderSecretRef";
+import type { GatewayRuntimeProviderSummary } from "./gatewayRuntimeProviderSummary";
 import type { GatewayRuntimeCatalogEntry } from "./gatewayRuntimeCatalogEntry";
 import type { GatewayRuntimeSummaryDefaultModelProfile } from "./gatewayRuntimeSummaryDefaultModelProfile";
+import type { GatewayToolProfilePolicy } from "./gatewayToolProfilePolicy";
 
 /**
  * Gateway runtime state returned by Mission Control.
@@ -23,4 +28,11 @@ export interface GatewayRuntimeSummary {
   catalog?: GatewayRuntimeCatalogEntry[];
   available_models?: string[];
   enabled_model_refs?: string[];
+  configured_provider_configs?: GatewayProviderConfig[];
+  configured_model_definitions?: GatewayModelDefinition[];
+  configured_provider_secret_refs?: GatewayProviderSecretRef[];
+  providers?: GatewayRuntimeProviderSummary[];
+  effective_tool_profile?: "restricted" | "coding" | "research" | "browser-assisted";
+  effective_tool_policy?: GatewayToolProfilePolicy;
+  drift_detected?: boolean;
 }

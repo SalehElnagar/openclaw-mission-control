@@ -15,12 +15,25 @@ from app.models.agents import Agent
 from app.models.boards import Board
 from app.models.gateways import Gateway
 from app.schemas.gateway_runtime import (
+    GatewayModelCost,
+    GatewayModelDefinition,
     GatewayModelProfiles,
+    GatewayProviderConfig,
+    GatewayProviderSecretRef,
     GatewayRuntimeCatalogEntry,
+    GatewayRuntimeProviderSummary,
     GatewayRuntimeSummary,
     GatewayRuntimeSyncRequest,
     GatewayRuntimeSyncResponse,
+    GatewayToolProfilePolicy,
     ModelSelection,
+    ToolProfileName,
+    _normalize_model_definitions,
+    _normalize_model_list,
+    _normalize_model_ref,
+    _normalize_provider_configs,
+    _normalize_provider_secret_refs,
+    _normalize_tool_profile,
 )
 from app.schemas.telemetry import UsageSampleCreate
 from app.services.activity_log import actor_fields_from_auth, record_activity
@@ -45,6 +58,12 @@ from app.services.openclaw.shared import GatewayAgentIdentity
 from app.services.telemetry import UsageTelemetryService
 
 PROFILE_NAMES = ("general", "coder", "budget")
+TOOL_PROFILE_SUMMARIES: dict[str, str] = {
+    "restricted": "Tight execution posture with workspace-only filesystem access and browser disabled.",
+    "coding": "Balanced coding posture with workspace-only filesystem access and browser disabled.",
+    "research": "Research-oriented posture with workspace-only filesystem access and browser disabled.",
+    "browser-assisted": "Coding posture plus browser access for nodes that explicitly support browser-assisted workflows.",
+}
 DEFAULT_PRIMARY_MODEL_REF = "openai-codex/gpt-5.4"
 KNOWN_PROVIDER_LABELS: dict[str, str] = {
     "microsoft-foundry": "Azure Foundry",
@@ -99,6 +118,22 @@ def _parse_tools_content(tools_md: str) -> dict[str, str]:
     return values
 
 
+def _load_provider_configs(gateway: Gateway) -> list[GatewayProviderConfig] | None:
+    return _normalize_provider_configs(gateway.provider_configs)
+
+
+def _load_model_definitions(gateway: Gateway) -> list[GatewayModelDefinition] | None:
+    return _normalize_model_definitions(gateway.model_definitions)
+
+
+def _load_provider_secret_refs(gateway: Gateway) -> list[GatewayProviderSecretRef] | None:
+    return _normalize_provider_secret_refs(gateway.provider_secret_refs)
+
+
+def _load_tool_profile(gateway: Gateway) -> ToolProfileName | None:
+    return _normalize_tool_profile(gateway.tool_profile)
+
+
 def _load_model_profiles(gateway: Gateway) -> GatewayModelProfiles:
     raw = gateway.model_profiles or {}
     if isinstance(raw, GatewayModelProfiles):
@@ -113,6 +148,304 @@ def _configured_enabled_model_refs(gateway: Gateway) -> list[str] | None:
     if not isinstance(raw, list):
         return None
     return _dedupe_models(value for value in raw if isinstance(value, str)) or None
+
+
+def _config_provider_configs(config_data: dict[str, Any]) -> list[GatewayProviderConfig]:
+    models_section = config_data.get("models")
+    if not isinstance(models_section, dict):
+        return []
+    providers = models_section.get("providers")
+    if not isinstance(providers, dict):
+        return []
+    parsed: list[GatewayProviderConfig] = []
+    for provider_id, provider_config in providers.items():
+        if not isinstance(provider_id, str) or not isinstance(provider_config, dict):
+            continue
+        parsed.append(
+            GatewayProviderConfig(
+                id=provider_id,
+                provider_type=str(provider_config.get("type") or provider_id),
+                label=_catalog_provider_label(provider_id),
+                base_url=(
+                    provider_config.get("baseUrl")
+                    if isinstance(provider_config.get("baseUrl"), str)
+                    else None
+                ),
+                api_mode=(
+                    provider_config.get("api")
+                    if isinstance(provider_config.get("api"), str)
+                    else None
+                ),
+                auth_header=(
+                    provider_config.get("authHeader")
+                    if isinstance(provider_config.get("authHeader"), bool)
+                    else None
+                ),
+            ),
+        )
+    return sorted(parsed, key=lambda item: item.id)
+
+
+def _config_model_definitions(config_data: dict[str, Any]) -> list[GatewayModelDefinition]:
+    models_section = config_data.get("models")
+    if not isinstance(models_section, dict):
+        return []
+    providers = models_section.get("providers")
+    if not isinstance(providers, dict):
+        return []
+    parsed: list[GatewayModelDefinition] = []
+    for provider_id, provider_config in providers.items():
+        if not isinstance(provider_id, str) or not isinstance(provider_config, dict):
+            continue
+        provider_models = provider_config.get("models")
+        if not isinstance(provider_models, list):
+            continue
+        for item in provider_models:
+            if not isinstance(item, dict):
+                continue
+            model_id = item.get("id")
+            if not isinstance(model_id, str) or not model_id.strip():
+                continue
+            parsed.append(
+                GatewayModelDefinition(
+                    provider_id=provider_id,
+                    model_id=model_id.strip(),
+                    label=item.get("name") if isinstance(item.get("name"), str) else None,
+                    api_mode=item.get("api") if isinstance(item.get("api"), str) else None,
+                    reasoning=(
+                        item.get("reasoning")
+                        if isinstance(item.get("reasoning"), bool)
+                        else None
+                    ),
+                    input_modalities=(
+                        [str(value).strip() for value in item.get("input", []) if str(value).strip()]
+                        if isinstance(item.get("input"), list)
+                        else []
+                    ),
+                    context_window=(
+                        item.get("contextWindow")
+                        if isinstance(item.get("contextWindow"), int)
+                        else None
+                    ),
+                    max_tokens=(
+                        item.get("maxTokens")
+                        if isinstance(item.get("maxTokens"), int)
+                        else None
+                    ),
+                    cost=(
+                        GatewayModelCost.model_validate(item["cost"])
+                        if isinstance(item.get("cost"), dict)
+                        else None
+                    ),
+                ),
+            )
+    return sorted(parsed, key=lambda item: (item.provider_id, item.model_id))
+
+
+def _secret_ref_label_from_runtime_value(
+    value: object,
+    *,
+    config_data: dict[str, Any],
+) -> str | None:
+    if not isinstance(value, dict):
+        return None
+    provider_name = value.get("provider")
+    secret_id = value.get("id")
+    source = value.get("source")
+    if not isinstance(provider_name, str) or not isinstance(secret_id, str):
+        return None
+    default_env_provider = _default_env_secret_provider(config_data)
+    if source == "env" and provider_name == default_env_provider:
+        return f"env:{secret_id}"
+    return f"{provider_name}:{secret_id}"
+
+
+def _config_provider_secret_refs(config_data: dict[str, Any]) -> list[GatewayProviderSecretRef]:
+    models_section = config_data.get("models")
+    if not isinstance(models_section, dict):
+        return []
+    providers = models_section.get("providers")
+    if not isinstance(providers, dict):
+        return []
+    parsed: list[GatewayProviderSecretRef] = []
+    for provider_id, provider_config in providers.items():
+        if not isinstance(provider_id, str) or not isinstance(provider_config, dict):
+            continue
+        api_key_ref = _secret_ref_label_from_runtime_value(
+            provider_config.get("apiKey"),
+            config_data=config_data,
+        )
+        if api_key_ref:
+            parsed.append(
+                GatewayProviderSecretRef(
+                    provider_id=provider_id,
+                    purpose="apiKey",
+                    ref=api_key_ref,
+                ),
+            )
+        headers = provider_config.get("headers")
+        if not isinstance(headers, dict):
+            continue
+        for header_name, header_value in headers.items():
+            if not isinstance(header_name, str):
+                continue
+            header_ref = _secret_ref_label_from_runtime_value(
+                header_value,
+                config_data=config_data,
+            )
+            if not header_ref:
+                continue
+            parsed.append(
+                GatewayProviderSecretRef(
+                    provider_id=provider_id,
+                    purpose=f"header:{header_name}",
+                    ref=header_ref,
+                ),
+            )
+    normalized = _normalize_provider_secret_refs(
+        [item.model_dump(exclude_none=True) for item in parsed],
+    )
+    return normalized or []
+
+
+def _default_env_secret_provider(config_data: dict[str, Any]) -> str | None:
+    secrets_section = config_data.get("secrets")
+    if not isinstance(secrets_section, dict):
+        return None
+    defaults = secrets_section.get("defaults")
+    if isinstance(defaults, dict):
+        env_provider = defaults.get("env")
+        if isinstance(env_provider, str) and env_provider.strip():
+            return env_provider.strip()
+    providers = secrets_section.get("providers")
+    if not isinstance(providers, dict):
+        return None
+    for provider_name, provider_config in providers.items():
+        if not isinstance(provider_name, str) or not isinstance(provider_config, dict):
+            continue
+        if provider_config.get("source") == "env":
+            return provider_name
+    return None
+
+
+def _secret_provider_source(
+    config_data: dict[str, Any],
+    provider_name: str,
+) -> str | None:
+    secrets_section = config_data.get("secrets")
+    if not isinstance(secrets_section, dict):
+        return None
+    providers = secrets_section.get("providers")
+    if not isinstance(providers, dict):
+        return None
+    provider_config = providers.get(provider_name)
+    if not isinstance(provider_config, dict):
+        return None
+    source = provider_config.get("source")
+    return source.strip() if isinstance(source, str) and source.strip() else None
+
+
+def _resolve_secret_ref_value(
+    ref: str,
+    *,
+    config_data: dict[str, Any],
+) -> tuple[dict[str, str] | None, str | None]:
+    prefix, separator, secret_id = ref.partition(":")
+    if not separator or not secret_id.strip():
+        return None, "Secret refs must use env:NAME or provider:secret-id syntax."
+    if prefix == "env":
+        provider_name = _default_env_secret_provider(config_data)
+        if provider_name is None:
+            return None, "Node runtime does not advertise an env secret provider."
+        source = _secret_provider_source(config_data, provider_name) or "env"
+        return (
+            {"source": source, "provider": provider_name, "id": secret_id.strip()},
+            None,
+        )
+    source = _secret_provider_source(config_data, prefix)
+    if source is None:
+        return None, f"Node runtime does not advertise a secret provider named {prefix}."
+    return (
+        {"source": source, "provider": prefix, "id": secret_id.strip()},
+        None,
+    )
+
+
+def _tool_policy_from_profile(profile: ToolProfileName) -> GatewayToolProfilePolicy:
+    return GatewayToolProfilePolicy(
+        profile=profile,
+        browser_enabled=profile == "browser-assisted",
+        workspace_only_fs=True,
+        summary=TOOL_PROFILE_SUMMARIES.get(profile),
+    )
+
+
+def _effective_tool_policy(
+    *,
+    gateway: Gateway,
+    config_data: dict[str, Any] | None,
+) -> GatewayToolProfilePolicy:
+    tools = config_data.get("tools") if isinstance(config_data, dict) else {}
+    browser = config_data.get("browser") if isinstance(config_data, dict) else {}
+    profile = None
+    if isinstance(tools, dict):
+        profile = _normalize_tool_profile(tools.get("profile"))
+    if profile is None:
+        profile = _load_tool_profile(gateway) or "coding"
+    policy = _tool_policy_from_profile(profile)
+    if isinstance(tools, dict):
+        fs = tools.get("fs")
+        if isinstance(fs, dict) and isinstance(fs.get("workspaceOnly"), bool):
+            policy.workspace_only_fs = fs["workspaceOnly"]
+    if isinstance(browser, dict) and isinstance(browser.get("enabled"), bool):
+        policy.browser_enabled = browser["enabled"]
+    return policy
+
+
+def _effective_provider_configs(
+    *,
+    gateway: Gateway,
+    config_data: dict[str, Any] | None,
+) -> list[GatewayProviderConfig]:
+    stored = _load_provider_configs(gateway)
+    if stored is not None:
+        return stored
+    if not isinstance(config_data, dict):
+        return []
+    return _config_provider_configs(config_data)
+
+
+def _effective_model_definitions(
+    *,
+    gateway: Gateway,
+    config_data: dict[str, Any] | None,
+) -> list[GatewayModelDefinition]:
+    stored = _load_model_definitions(gateway)
+    if stored is not None:
+        return stored
+    if not isinstance(config_data, dict):
+        return []
+    return _config_model_definitions(config_data)
+
+
+def _effective_provider_secret_refs(
+    *,
+    gateway: Gateway,
+    config_data: dict[str, Any] | None,
+) -> list[GatewayProviderSecretRef]:
+    stored = _load_provider_secret_refs(gateway)
+    if stored is not None:
+        return stored
+    if not isinstance(config_data, dict):
+        return []
+    return _config_provider_secret_refs(config_data)
+
+
+def _managed_declared_model_refs(gateway: Gateway) -> list[str]:
+    definitions = _load_model_definitions(gateway)
+    if not definitions:
+        return []
+    return sorted({item.ref for item in definitions})
 
 
 def _effective_enabled_model_refs(
@@ -370,6 +703,187 @@ def _runtime_catalog_entries(
     return entries
 
 
+def _toolchain_drift_detected(
+    *,
+    gateway: Gateway,
+    config_data: dict[str, Any] | None,
+    effective_tool_policy: GatewayToolProfilePolicy,
+) -> bool:
+    if gateway.provider_configs is not None:
+        if _effective_provider_configs(gateway=gateway, config_data=config_data) != (
+            _config_provider_configs(config_data or {})
+        ):
+            return True
+    if gateway.model_definitions is not None:
+        if _effective_model_definitions(gateway=gateway, config_data=config_data) != (
+            _config_model_definitions(config_data or {})
+        ):
+            return True
+    if gateway.provider_secret_refs is not None:
+        if _effective_provider_secret_refs(gateway=gateway, config_data=config_data) != (
+            _config_provider_secret_refs(config_data or {})
+        ):
+            return True
+    managed_tool_profile = _load_tool_profile(gateway)
+    return managed_tool_profile is not None and managed_tool_profile != effective_tool_policy.profile
+
+
+def _provider_runtime_summaries(
+    *,
+    gateway: Gateway,
+    config_data: dict[str, Any] | None,
+    catalog: Iterable[GatewayRuntimeCatalogEntry],
+) -> list[GatewayRuntimeProviderSummary]:
+    effective_configs = _effective_provider_configs(gateway=gateway, config_data=config_data)
+    effective_models = _effective_model_definitions(gateway=gateway, config_data=config_data)
+    effective_secret_refs = _effective_provider_secret_refs(
+        gateway=gateway,
+        config_data=config_data,
+    )
+    runtime_verified_models: dict[str, int] = {}
+    for entry in catalog:
+        if entry.selectable:
+            runtime_verified_models[entry.provider] = runtime_verified_models.get(entry.provider, 0) + 1
+    model_counts: dict[str, int] = {}
+    for definition in effective_models:
+        model_counts[definition.provider_id] = model_counts.get(definition.provider_id, 0) + 1
+    secret_refs_by_provider: dict[str, list[GatewayProviderSecretRef]] = {}
+    for secret_ref in effective_secret_refs:
+        secret_refs_by_provider.setdefault(secret_ref.provider_id, []).append(secret_ref)
+    ids = {
+        *runtime_verified_models.keys(),
+        *model_counts.keys(),
+        *(provider.id for provider in effective_configs),
+    }
+    provider_lookup = {provider.id: provider for provider in effective_configs}
+    summaries: list[GatewayRuntimeProviderSummary] = []
+    for provider_id in sorted(ids):
+        provider_config = provider_lookup.get(provider_id)
+        unresolved_secret_refs: list[str] = []
+        for secret_ref in secret_refs_by_provider.get(provider_id, []):
+            _value, error = _resolve_secret_ref_value(secret_ref.ref, config_data=config_data or {})
+            if error:
+                unresolved_secret_refs.append(f"{secret_ref.purpose} ({secret_ref.ref})")
+        summaries.append(
+            GatewayRuntimeProviderSummary(
+                id=provider_id,
+                provider_type=(provider_config.provider_type if provider_config else provider_id),
+                label=(
+                    provider_config.label
+                    if provider_config and provider_config.label
+                    else _catalog_provider_label(provider_id)
+                ),
+                verification_state=(
+                    "runtime" if runtime_verified_models.get(provider_id, 0) > 0 else "configured"
+                ),
+                configured_model_count=model_counts.get(provider_id, 0),
+                verified_model_count=runtime_verified_models.get(provider_id, 0),
+                secret_ref_count=len(secret_refs_by_provider.get(provider_id, [])),
+                unresolved_secret_refs=unresolved_secret_refs,
+            ),
+        )
+    return summaries
+
+
+def _render_runtime_model_definition(
+    definition: GatewayModelDefinition,
+    *,
+    provider_config: GatewayProviderConfig | None,
+) -> dict[str, Any]:
+    model_payload: dict[str, Any] = {"id": definition.model_id}
+    if definition.label:
+        model_payload["name"] = definition.label
+    if definition.api_mode:
+        model_payload["api"] = definition.api_mode
+    elif provider_config and provider_config.api_mode:
+        model_payload["api"] = provider_config.api_mode
+    if definition.reasoning is not None:
+        model_payload["reasoning"] = definition.reasoning
+    if definition.input_modalities:
+        model_payload["input"] = list(definition.input_modalities)
+    if definition.context_window is not None:
+        model_payload["contextWindow"] = definition.context_window
+    if definition.max_tokens is not None:
+        model_payload["maxTokens"] = definition.max_tokens
+    if definition.cost is not None:
+        model_payload["cost"] = definition.cost.model_dump(exclude_none=True, by_alias=True)
+    return model_payload
+
+
+def _render_managed_provider_patch(
+    *,
+    gateway: Gateway,
+    config_data: dict[str, Any],
+) -> tuple[dict[str, Any], list[str]]:
+    provider_configs = _load_provider_configs(gateway)
+    model_definitions = _load_model_definitions(gateway)
+    secret_refs = _load_provider_secret_refs(gateway)
+    if provider_configs is None and model_definitions is None and secret_refs is None:
+        return {}, []
+    provider_configs = provider_configs or []
+    model_definitions = model_definitions or []
+    secret_refs = secret_refs or []
+    provider_lookup = {provider.id: provider for provider in provider_configs}
+    model_defs_by_provider: dict[str, list[GatewayModelDefinition]] = {}
+    for definition in model_definitions:
+        model_defs_by_provider.setdefault(definition.provider_id, []).append(definition)
+    secret_refs_by_provider: dict[str, list[GatewayProviderSecretRef]] = {}
+    for secret_ref in secret_refs:
+        secret_refs_by_provider.setdefault(secret_ref.provider_id, []).append(secret_ref)
+    models_section = config_data.get("models")
+    current_providers = (
+        models_section.get("providers")
+        if isinstance(models_section, dict) and isinstance(models_section.get("providers"), dict)
+        else {}
+    )
+    current_provider_ids = {
+        key for key in current_providers.keys() if isinstance(key, str)
+    }
+    desired_provider_ids = {
+        *provider_lookup.keys(),
+        *model_defs_by_provider.keys(),
+        *secret_refs_by_provider.keys(),
+    }
+    warnings: list[str] = []
+    providers_patch: dict[str, Any] = {}
+    for provider_id in sorted(desired_provider_ids):
+        provider_config = provider_lookup.get(provider_id)
+        provider_patch: dict[str, Any] = {
+            "models": [
+                _render_runtime_model_definition(definition, provider_config=provider_config)
+                for definition in sorted(
+                    model_defs_by_provider.get(provider_id, []),
+                    key=lambda item: item.model_id,
+                )
+            ],
+        }
+        if provider_config and provider_config.base_url:
+            provider_patch["baseUrl"] = provider_config.base_url
+        if provider_config and provider_config.api_mode:
+            provider_patch["api"] = provider_config.api_mode
+        if provider_config and provider_config.auth_header is not None:
+            provider_patch["authHeader"] = provider_config.auth_header
+        header_refs: dict[str, dict[str, str]] = {}
+        for secret_ref in secret_refs_by_provider.get(provider_id, []):
+            resolved, error = _resolve_secret_ref_value(secret_ref.ref, config_data=config_data)
+            if error:
+                warnings.append(f"{provider_id} {secret_ref.purpose}: {error}")
+                continue
+            if secret_ref.purpose == "apiKey":
+                provider_patch["apiKey"] = resolved
+                continue
+            if secret_ref.purpose.startswith("header:"):
+                header_name = secret_ref.purpose.partition(":")[2].strip()
+                if header_name:
+                    header_refs[header_name] = resolved
+        if header_refs:
+            provider_patch["headers"] = header_refs
+        providers_patch[provider_id] = provider_patch
+    for provider_id in sorted(current_provider_ids - desired_provider_ids):
+        providers_patch[provider_id] = None
+    return providers_patch, warnings
+
+
 def _extract_numeric(payload: dict[str, Any], *keys: str) -> int | float | None:
     for key in keys:
         value = payload.get(key)
@@ -539,6 +1053,7 @@ class GatewayRuntimeControlService(OpenClawDBService):
         except OpenClawGatewayError:
             config_data = {}
         configured_refs.update(_config_declared_model_refs(config_data))
+        configured_refs.update(_managed_declared_model_refs(gateway))
         default_selection = resolve_default_model_selection(gateway)
         return _runtime_catalog_entries(
             runtime_refs=runtime_refs,
@@ -652,7 +1167,12 @@ class GatewayRuntimeControlService(OpenClawDBService):
         catalog: list[GatewayRuntimeCatalogEntry] = []
         runtime_available_models: list[str] = []
         enabled_model_refs: list[str] = []
+        config_data: dict[str, Any] | None = None
         default_selection = resolve_default_model_selection(gateway)
+        try:
+            _base_hash, config_data = await self._load_gateway_config(gateway)
+        except OpenClawGatewayError:
+            config_data = None
         try:
             catalog = await self.runtime_catalog(gateway)
             runtime_available_models = [entry.ref for entry in catalog if entry.selectable]
@@ -664,6 +1184,7 @@ class GatewayRuntimeControlService(OpenClawDBService):
             catalog = []
             runtime_available_models = []
             enabled_model_refs = []
+        tool_policy = _effective_tool_policy(gateway=gateway, config_data=config_data)
         return GatewayRuntimeSummary(
             gateway_id=gateway.id,
             node_class=gateway.node_class,
@@ -676,6 +1197,30 @@ class GatewayRuntimeControlService(OpenClawDBService):
             catalog=catalog,
             available_models=enabled_model_refs,
             enabled_model_refs=enabled_model_refs,
+            configured_provider_configs=_effective_provider_configs(
+                gateway=gateway,
+                config_data=config_data,
+            ),
+            configured_model_definitions=_effective_model_definitions(
+                gateway=gateway,
+                config_data=config_data,
+            ),
+            configured_provider_secret_refs=_effective_provider_secret_refs(
+                gateway=gateway,
+                config_data=config_data,
+            ),
+            providers=_provider_runtime_summaries(
+                gateway=gateway,
+                config_data=config_data,
+                catalog=catalog,
+            ),
+            effective_tool_profile=tool_policy.profile,
+            effective_tool_policy=tool_policy,
+            drift_detected=_toolchain_drift_detected(
+                gateway=gateway,
+                config_data=config_data,
+                effective_tool_policy=tool_policy,
+            ),
         )
 
     async def _get_existing_agent_token(
@@ -753,7 +1298,7 @@ class GatewayRuntimeControlService(OpenClawDBService):
         agents: Iterable[Agent] | None = None,
         auth: AuthContext | None = None,
     ) -> bool:
-        """Patch gateway runtime config for Mission Control model policy state."""
+        """Patch gateway runtime config for Mission Control model/toolchain state."""
         managed_agents = (
             list(agents)
             if agents is not None
@@ -830,12 +1375,61 @@ class GatewayRuntimeControlService(OpenClawDBService):
         default_changed = (
             desired_default_payload is not None and defaults.get("model") != desired_default_payload
         )
-        if not catalog_changed and not list_changed and not default_changed:
+        actual_tool_policy = _effective_tool_policy(gateway=gateway, config_data=config_data)
+        desired_tool_profile = _load_tool_profile(gateway)
+        desired_tool_policy = (
+            _tool_policy_from_profile(desired_tool_profile)
+            if desired_tool_profile is not None
+            else None
+        )
+        tool_profile_changed = (
+            desired_tool_policy is not None
+            and (
+                actual_tool_policy.profile != desired_tool_policy.profile
+                or actual_tool_policy.browser_enabled != desired_tool_policy.browser_enabled
+                or actual_tool_policy.workspace_only_fs != desired_tool_policy.workspace_only_fs
+            )
+        )
+        managed_provider_patch, toolchain_warnings = _render_managed_provider_patch(
+            gateway=gateway,
+            config_data=config_data,
+        )
+        providers_changed = _toolchain_drift_detected(
+            gateway=gateway,
+            config_data=config_data,
+            effective_tool_policy=actual_tool_policy,
+        )
+        if desired_tool_profile is not None:
+            providers_changed = providers_changed or tool_profile_changed
+        warning_text = "; ".join(toolchain_warnings) if toolchain_warnings else None
+        if not any(
+            (
+                catalog_changed,
+                list_changed,
+                default_changed,
+                providers_changed,
+                tool_profile_changed,
+            ),
+        ):
+            if gateway.last_runtime_sync_error != warning_text:
+                gateway.last_runtime_sync_error = warning_text
+                self.session.add(gateway)
+                await self.session.commit()
             return False
 
-        patch: dict[str, Any] = {"agents": {"list": updated_list, "defaults": {"models": catalog}}}
-        if desired_default_payload is not None:
-            patch["agents"]["defaults"]["model"] = desired_default_payload
+        patch: dict[str, Any] = {}
+        if catalog_changed or list_changed or default_changed:
+            patch["agents"] = {"list": updated_list, "defaults": {"models": catalog}}
+            if desired_default_payload is not None:
+                patch["agents"]["defaults"]["model"] = desired_default_payload
+        if managed_provider_patch:
+            patch.setdefault("models", {})["providers"] = managed_provider_patch
+        if desired_tool_policy is not None:
+            patch["tools"] = {
+                "profile": desired_tool_policy.profile,
+                "fs": {"workspaceOnly": desired_tool_policy.workspace_only_fs},
+            }
+            patch["browser"] = {"enabled": desired_tool_policy.browser_enabled}
 
         base_hash, _ = await self._load_gateway_config_with_retry(
             gateway,
@@ -853,46 +1447,28 @@ class GatewayRuntimeControlService(OpenClawDBService):
                 gateway,
                 context="gateway runtime sync recovery",
             )
-            recovered_agents = recovered_config.get("agents")
-            recovered_defaults = (
-                recovered_agents.get("defaults") if isinstance(recovered_agents, dict) else {}
+            retry_params: dict[str, Any] = {"raw": json.dumps(patch)}
+            if recovered_hash:
+                retry_params["baseHash"] = recovered_hash
+            backoff = GatewayBackoff(
+                timeout_s=45.0,
+                base_delay_s=0.5,
+                max_delay_s=5.0,
+                jitter=0.15,
+                timeout_context="gateway runtime sync patch retry",
             )
-            recovered_list = (
-                recovered_agents.get("list") if isinstance(recovered_agents, dict) else []
+            await backoff.run(
+                lambda: openclaw_call(
+                    "config.patch",
+                    retry_params,
+                    config=_gateway_client_config(gateway),
+                )
             )
-            if (
-                recovered_list == updated_list
-                and isinstance(recovered_defaults, dict)
-                and recovered_defaults.get("models") == catalog
-                and (
-                    desired_default_payload is None
-                    or recovered_defaults.get("model") == desired_default_payload
-                )
-            ):
-                base_hash = recovered_hash
-            else:
-                retry_params: dict[str, Any] = {"raw": json.dumps(patch)}
-                if recovered_hash:
-                    retry_params["baseHash"] = recovered_hash
-                backoff = GatewayBackoff(
-                    timeout_s=45.0,
-                    base_delay_s=0.5,
-                    max_delay_s=5.0,
-                    jitter=0.15,
-                    timeout_context="gateway runtime sync patch retry",
-                )
-                await backoff.run(
-                    lambda: openclaw_call(
-                        "config.patch",
-                        retry_params,
-                        config=_gateway_client_config(gateway),
-                    )
-                )
 
         now = utcnow()
         gateway.runtime_sync_generation += 1
         gateway.last_runtime_sync_at = now
-        gateway.last_runtime_sync_error = None
+        gateway.last_runtime_sync_error = warning_text
         self.session.add(gateway)
         for agent in managed_agents:
             agent.last_runtime_sync_at = now
@@ -903,12 +1479,18 @@ class GatewayRuntimeControlService(OpenClawDBService):
             record_activity(
                 self.session,
                 event_type="gateway.runtime.sync",
-                message=f"Synced runtime model policy for gateway {gateway.name}.",
+                message=f"Synced runtime toolchain and model policy for gateway {gateway.name}.",
                 entity_type="gateway",
                 entity_id=str(gateway.id),
                 previous_values=None,
-                new_values={"default_model_profile": gateway.default_model_profile},
-                details={"synced_agents": [str(agent.id) for agent in managed_agents]},
+                new_values={
+                    "default_model_profile": gateway.default_model_profile,
+                    "tool_profile": gateway.tool_profile,
+                },
+                details={
+                    "synced_agents": [str(agent.id) for agent in managed_agents],
+                    "warnings": toolchain_warnings,
+                },
                 **actor_fields_from_auth(auth),
             )
             await self.session.commit()
@@ -1023,6 +1605,8 @@ class GatewayRuntimeControlService(OpenClawDBService):
                     status_code=status.HTTP_502_BAD_GATEWAY,
                     detail=f"Runtime sync failed: {exc}",
                 ) from exc
+            if gateway.last_runtime_sync_error:
+                warnings.append(gateway.last_runtime_sync_error)
 
         return GatewayRuntimeSyncResponse(
             gateway_id=gateway.id,
