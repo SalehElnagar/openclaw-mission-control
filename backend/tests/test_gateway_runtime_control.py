@@ -38,7 +38,7 @@ async def _make_engine() -> AsyncEngine:
 
 def test_gateway_main_agent_uses_foundry_mini_by_default() -> None:
     assert MAIN_AGENT_SPEC.model_profile == "general"
-    assert MAIN_AGENT_SPEC.model_primary == STARTER_PACK_PRIMARY_MODEL_REF
+    assert MAIN_AGENT_SPEC.model_primary is None
 
 
 def test_resolve_agent_model_selection_merges_profile_and_explicit_fallbacks() -> None:
@@ -684,9 +684,7 @@ async def test_reconcile_gateway_runtime_backfills_gateway_starter_pack(
             assert by_name[f"{gateway.name} Lead"].model_profile == "general"
             assert by_name[f"{gateway.name} Builder"].model_profile == "coder"
             assert by_name[f"{gateway.name} Security"].model_profile == "budget"
-            assert (
-                by_name[f"{gateway.name} Builder"].model_primary == STARTER_PACK_PRIMARY_MODEL_REF
-            )
+            assert by_name[f"{gateway.name} Builder"].model_primary is None
             assert gateway.model_profiles is not None
     finally:
         await engine.dispose()

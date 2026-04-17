@@ -55,7 +55,6 @@ MAIN_AGENT_SPEC = GatewayManagedAgentSpec(
     purpose=MAIN_AGENT_PURPOSE,
     emoji=":compass:",
     model_profile="general",
-    model_primary=STARTER_PACK_PRIMARY_MODEL_REF,
 )
 
 STARTER_PACK_SPECS: tuple[GatewayManagedAgentSpec, ...] = (
@@ -65,7 +64,6 @@ STARTER_PACK_SPECS: tuple[GatewayManagedAgentSpec, ...] = (
         purpose="execution",
         emoji=":compass:",
         model_profile="general",
-        model_primary=STARTER_PACK_PRIMARY_MODEL_REF,
     ),
     GatewayManagedAgentSpec(
         key="builder",
@@ -73,7 +71,6 @@ STARTER_PACK_SPECS: tuple[GatewayManagedAgentSpec, ...] = (
         purpose="execution",
         emoji=":hammer_and_wrench:",
         model_profile="coder",
-        model_primary=STARTER_PACK_PRIMARY_MODEL_REF,
     ),
     GatewayManagedAgentSpec(
         key="reviewer",
@@ -81,7 +78,6 @@ STARTER_PACK_SPECS: tuple[GatewayManagedAgentSpec, ...] = (
         purpose="execution",
         emoji=":mag:",
         model_profile="general",
-        model_primary=STARTER_PACK_PRIMARY_MODEL_REF,
     ),
     GatewayManagedAgentSpec(
         key="security",
@@ -89,7 +85,6 @@ STARTER_PACK_SPECS: tuple[GatewayManagedAgentSpec, ...] = (
         purpose="execution",
         emoji=":shield:",
         model_profile="budget",
-        model_primary=STARTER_PACK_PRIMARY_MODEL_REF,
     ),
 )
 
@@ -189,10 +184,10 @@ def apply_gateway_managed_agent_spec(
     if agent.identity_profile != desired_identity_profile:
         agent.identity_profile = desired_identity_profile
         changed = True
-    if spec.model_profile is not None and agent.model_profile != spec.model_profile:
+    if agent.model_profile != spec.model_profile:
         agent.model_profile = spec.model_profile
         changed = True
-    if spec.model_primary is not None and agent.model_primary != spec.model_primary:
+    if agent.model_primary != spec.model_primary:
         agent.model_primary = spec.model_primary
         changed = True
     if not agent.status:

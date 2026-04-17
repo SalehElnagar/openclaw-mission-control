@@ -50,6 +50,8 @@ type IdentityProfile = {
   max_tokens_per_run: string;
 };
 
+type ModelPolicyMode = "inherit" | "custom";
+
 const MODEL_PROFILE_OPTIONS: Array<IdentityProfile["model_profile"]> = [
   "general",
   "coder",
@@ -104,8 +106,10 @@ export default function NewAgentPage() {
   const [name, setName] = useState("");
   const [boardId, setBoardId] = useState<string>("");
   const [heartbeatEvery, setHeartbeatEvery] = useState("0m");
+  const [modelPolicyMode, setModelPolicyMode] =
+    useState<ModelPolicyMode>("inherit");
   const [identityProfile, setIdentityProfile] = useState<IdentityProfile>({
-                    ...DEFAULT_IDENTITY_PROFILE,
+    ...DEFAULT_IDENTITY_PROFILE,
     model_profile: "coder",
     primary_model: "",
     fallback_models: [],
@@ -221,7 +225,11 @@ export default function NewAgentPage() {
       return;
     }
     const primaryModel = identityProfile.primary_model.trim();
-    if (primaryModel && !availableModelRefs.has(primaryModel)) {
+    if (
+      modelPolicyMode === "custom" &&
+      primaryModel &&
+      !availableModelRefs.has(primaryModel)
+    ) {
       setError(
         "Pick a node-enabled primary model or inherit the node profile default.",
       );
@@ -237,17 +245,22 @@ export default function NewAgentPage() {
         includeReasoning: false,
       },
       identity_profile: normalizeIdentityProfile(identityProfile),
-      model_profile: identityProfile.model_profile,
-      model_fallback_policy: identityProfile.fallback_policy,
     };
-    if (primaryModel) {
-      payload.model_primary = primaryModel;
-    }
-    const fallbackModels = identityProfile.fallback_models.filter(
-      (value) => value !== primaryModel,
-    );
-    if (fallbackModels.length > 0) {
-      payload.model_fallbacks = fallbackModels;
+    if (modelPolicyMode === "custom") {
+      payload.model_profile = identityProfile.model_profile;
+      payload.model_fallback_policy = identityProfile.fallback_policy;
+      if (primaryModel) {
+        payload.model_primary = primaryModel;
+      }
+      const fallbackModels =
+        identityProfile.fallback_policy === "none"
+          ? []
+          : identityProfile.fallback_models.filter(
+              (value) => value !== primaryModel,
+            );
+      if (fallbackModels.length > 0) {
+        payload.model_fallbacks = fallbackModels;
+      }
     }
     createAgentMutation.mutate({
       data: {
@@ -387,6 +400,37 @@ export default function NewAgentPage() {
           <p className="text-xs font-semibold uppercase tracking-wider text-muted">
             Model policy
           </p>
+          <div className="mt-4 flex flex-wrap gap-2">
+            <Button
+              type="button"
+              variant={modelPolicyMode === "inherit" ? "primary" : "outline"}
+              size="sm"
+              onClick={() => setModelPolicyMode("inherit")}
+              disabled={isLoading}
+            >
+              Inherit node default
+            </Button>
+            <Button
+              type="button"
+              variant={modelPolicyMode === "custom" ? "primary" : "outline"}
+              size="sm"
+              onClick={() => setModelPolicyMode("custom")}
+              disabled={isLoading}
+            >
+              Custom for this agent
+            </Button>
+          </div>
+          {modelPolicyMode === "inherit" ? (
+            <div className="mt-4 rounded-xl border border-[color:var(--border)] bg-[color:var(--surface-muted)] p-4 text-sm text-muted">
+              This agent will inherit the selected node’s default toolchain.
+              The current node default resolves to{" "}
+              <span className="font-medium text-strong">
+                {defaultRuntimeModelLabel}
+              </span>
+              .
+            </div>
+          ) : null}
+          {modelPolicyMode === "custom" ? (
           <div className="mt-4 grid gap-6 md:grid-cols-2">
             <div className="space-y-2">
               <label className="text-sm font-medium text-strong">
@@ -566,18 +610,22 @@ export default function NewAgentPage() {
               />
             </div>
           </div>
+          ) : null}
           {runtimeQuery.isLoading ? (
             <p className="mt-4 text-xs text-muted">
               Loading verified model catalog from the gateway…
             </p>
           ) : null}
-          {runtimeQuery.data && runtimeModelOptions.length === 0 ? (
+          {runtimeQuery.data &&
+          runtimeModelOptions.length === 0 &&
+          modelPolicyMode === "custom" ? (
             <p className="mt-4 text-xs text-muted">
               This gateway has no approved models exposed for agent selection
               yet.
             </p>
           ) : null}
-          {identityProfile.primary_model &&
+          {modelPolicyMode === "custom" &&
+          identityProfile.primary_model &&
           !availableModelRefs.has(identityProfile.primary_model) ? (
             <p className="mt-4 text-xs text-[color:var(--warning)]">
               The selected primary model is outside the verified gateway

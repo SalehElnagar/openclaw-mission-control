@@ -13,6 +13,7 @@ from app.api.deps import require_org_member, require_user_auth
 from app.core.time import utcnow
 from app.db import crud
 from app.db.session import get_session
+from app.models.agents import Agent
 from app.models.board_groups import BoardGroup
 from app.models.gateways import Gateway
 from app.models.products import Product
@@ -22,12 +23,14 @@ from app.schemas.products import (
     ProductMessageCreate,
     ProductMessageRead,
     ProductPlanApproveRequest,
+    ProductLeadRuntimeDefaults,
     ProductPlanRead,
     ProductRead,
     ProductSummaryRead,
     ProductUpdate,
 )
 from app.services.organizations import OrganizationContext
+from app.services.openclaw.runtime_control import GatewayRuntimeControlService
 from app.services.product_planning import (
     ProductPlanningService,
     message_to_read,
@@ -51,15 +54,50 @@ async def _require_gateway(
     *,
     organization_id: UUID,
     gateway_id: UUID | None,
-) -> None:
+) -> Gateway | None:
     if gateway_id is None:
-        return
+        return None
     gateway = await crud.get_by_id(session, Gateway, gateway_id)
     if gateway is None or gateway.organization_id != organization_id:
         raise HTTPException(
             status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
             detail="default_gateway_id is invalid",
         )
+    return gateway
+
+
+def _lead_runtime_validation_agent(
+    *,
+    gateway_id: UUID,
+    defaults: ProductLeadRuntimeDefaults,
+) -> Agent:
+    return Agent(
+        name="Product Lead Runtime Validation",
+        gateway_id=gateway_id,
+        model_profile=defaults.model_profile,
+        model_primary=defaults.model_primary,
+        model_fallback_policy=defaults.model_fallback_policy,
+        model_fallbacks=defaults.model_fallbacks,
+    )
+
+
+async def _validate_lead_runtime_defaults(
+    session: AsyncSession,
+    *,
+    gateway: Gateway | None,
+    defaults: ProductLeadRuntimeDefaults | None,
+) -> None:
+    if defaults is None:
+        return
+    if gateway is None:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
+            detail="lead_runtime_defaults require a default gateway.",
+        )
+    await GatewayRuntimeControlService(session).assert_model_policies_supported(
+        gateway=gateway,
+        agents=[_lead_runtime_validation_agent(gateway_id=gateway.id, defaults=defaults)],
+    )
 
 
 async def _require_product(
@@ -118,10 +156,15 @@ async def create_product(
     session: AsyncSession = SESSION_DEP,
     ctx: OrganizationContext = ORG_MEMBER_DEP,
 ) -> ProductRead:
-    await _require_gateway(
+    gateway = await _require_gateway(
         session,
         organization_id=ctx.organization.id,
         gateway_id=payload.default_gateway_id,
+    )
+    await _validate_lead_runtime_defaults(
+        session,
+        gateway=gateway,
+        defaults=payload.lead_runtime_defaults,
     )
     slug = await _unique_slug(
         session,
@@ -142,6 +185,11 @@ async def create_product(
         optimize_for=payload.budget_policy.optimize_for,
         planner_mode=payload.planner_policy.mode,
         planner_model_override=payload.planner_policy.model_override,
+        lead_runtime_defaults=(
+            payload.lead_runtime_defaults.model_dump(exclude_none=True)
+            if payload.lead_runtime_defaults is not None
+            else None
+        ),
         daily_budget_cap_usd=payload.budget_policy.daily_budget_cap_usd,
         total_budget_cap_usd=payload.budget_policy.total_budget_cap_usd,
         execution_policy=payload.execution_policy.model_dump(exclude_none=True),
@@ -154,7 +202,7 @@ async def get_product(
     product_id: UUID,
     session: AsyncSession = SESSION_DEP,
     ctx: OrganizationContext = ORG_MEMBER_DEP,
-) -> ProductRead:
+    ) -> ProductRead:
     product = await _require_product(
         session,
         product_id=product_id,
@@ -177,10 +225,23 @@ async def update_product(
     )
     updates = payload.model_dump(exclude_unset=True)
     gateway_id = updates.get("default_gateway_id", product.default_gateway_id)
-    await _require_gateway(
+    gateway = await _require_gateway(
         session,
         organization_id=ctx.organization.id,
         gateway_id=gateway_id,
+    )
+    effective_lead_runtime_defaults = updates.get(
+        "lead_runtime_defaults",
+        product.lead_runtime_defaults,
+    )
+    await _validate_lead_runtime_defaults(
+        session,
+        gateway=gateway,
+        defaults=(
+            ProductLeadRuntimeDefaults.model_validate(effective_lead_runtime_defaults)
+            if effective_lead_runtime_defaults is not None
+            else None
+        ),
     )
     if "name" in updates and updates["name"]:
         product.name = str(updates["name"])
@@ -211,6 +272,13 @@ async def update_product(
     if "planner_policy" in updates and updates["planner_policy"] is not None:
         product.planner_mode = updates["planner_policy"].mode
         product.planner_model_override = updates["planner_policy"].model_override
+    if "lead_runtime_defaults" in updates:
+        lead_runtime_defaults = updates["lead_runtime_defaults"]
+        product.lead_runtime_defaults = (
+            lead_runtime_defaults.model_dump(exclude_none=True)
+            if lead_runtime_defaults is not None
+            else None
+        )
     if not (product.local_working_directory or product.remote_repository_url):
         raise HTTPException(
             status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,

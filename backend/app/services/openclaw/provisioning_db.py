@@ -175,6 +175,44 @@ class OpenClawProvisioningService(OpenClawDBService):
             )
         return merged_identity_profile
 
+    @staticmethod
+    def _resolved_lead_options(
+        *,
+        gateway: Gateway,
+        options: LeadAgentOptions,
+    ) -> LeadAgentOptions:
+        return LeadAgentOptions(
+            agent_name=options.agent_name,
+            identity_profile=options.identity_profile,
+            model_profile=options.model_profile or gateway.default_model_profile,
+            model_primary=options.model_primary,
+            model_fallback_policy=options.model_fallback_policy,
+            model_fallbacks=options.model_fallbacks,
+            action=options.action,
+        )
+
+    async def _assert_board_lead_model_policies_supported(
+        self,
+        *,
+        board: Board,
+        gateway: Gateway,
+        options: LeadAgentOptions,
+    ) -> None:
+        candidate = Agent(
+            name=options.agent_name or self.lead_agent_name(board),
+            board_id=board.id,
+            gateway_id=gateway.id,
+            is_board_lead=True,
+            model_profile=options.model_profile,
+            model_primary=options.model_primary,
+            model_fallback_policy=options.model_fallback_policy,
+            model_fallbacks=options.model_fallbacks,
+        )
+        await GatewayRuntimeControlService(self.session).assert_model_policies_supported(
+            gateway=gateway,
+            agents=[candidate],
+        )
+
     async def ensure_board_lead_agent(
         self,
         *,
@@ -182,7 +220,15 @@ class OpenClawProvisioningService(OpenClawDBService):
     ) -> tuple[Agent, bool]:
         """Ensure a board has a lead agent; return `(agent, created)`."""
         board = request.board
-        config_options = request.options
+        config_options = self._resolved_lead_options(
+            gateway=request.gateway,
+            options=request.options,
+        )
+        await self._assert_board_lead_model_policies_supported(
+            board=board,
+            gateway=request.gateway,
+            options=config_options,
+        )
 
         existing = (
             await self.session.exec(
@@ -193,12 +239,30 @@ class OpenClawProvisioningService(OpenClawDBService):
         ).first()
         if existing:
             desired_name = config_options.agent_name or self.lead_agent_name(board)
+            desired_identity_profile = self._merged_lead_identity_profile(
+                config_options.identity_profile,
+            )
             changed = False
             if existing.name != desired_name:
                 existing.name = desired_name
                 changed = True
             if existing.gateway_id != request.gateway.id:
                 existing.gateway_id = request.gateway.id
+                changed = True
+            if existing.identity_profile != desired_identity_profile:
+                existing.identity_profile = desired_identity_profile
+                changed = True
+            if existing.model_profile != config_options.model_profile:
+                existing.model_profile = config_options.model_profile
+                changed = True
+            if existing.model_primary != config_options.model_primary:
+                existing.model_primary = config_options.model_primary
+                changed = True
+            if existing.model_fallback_policy != config_options.model_fallback_policy:
+                existing.model_fallback_policy = config_options.model_fallback_policy
+                changed = True
+            if (existing.model_fallbacks or []) != (config_options.model_fallbacks or []):
+                existing.model_fallbacks = list(config_options.model_fallbacks or [])
                 changed = True
             desired_session_key = self.lead_session_key(board)
             if existing.openclaw_session_id != desired_session_key:
@@ -211,7 +275,7 @@ class OpenClawProvisioningService(OpenClawDBService):
                 await self.session.refresh(existing)
             return existing, False
 
-        merged_identity_profile = self._merged_lead_identity_profile(
+        desired_identity_profile = self._merged_lead_identity_profile(
             config_options.identity_profile,
         )
 
@@ -221,7 +285,7 @@ class OpenClawProvisioningService(OpenClawDBService):
             gateway_id=request.gateway.id,
             is_board_lead=True,
             heartbeat_config=DEFAULT_HEARTBEAT_CONFIG.copy(),
-            identity_profile=merged_identity_profile,
+            identity_profile=desired_identity_profile,
             model_profile=config_options.model_profile,
             model_primary=config_options.model_primary,
             model_fallback_policy=config_options.model_fallback_policy,
@@ -263,10 +327,19 @@ class OpenClawProvisioningService(OpenClawDBService):
             request.options.identity_profile,
         )
         desired_session_key = self.lead_session_key(request.board)
-        desired_model_profile = request.options.model_profile
-        desired_model_primary = request.options.model_primary
-        desired_model_fallback_policy = request.options.model_fallback_policy
-        desired_model_fallbacks = request.options.model_fallbacks
+        resolved_options = self._resolved_lead_options(
+            gateway=request.gateway,
+            options=request.options,
+        )
+        await self._assert_board_lead_model_policies_supported(
+            board=request.board,
+            gateway=request.gateway,
+            options=resolved_options,
+        )
+        desired_model_profile = resolved_options.model_profile
+        desired_model_primary = resolved_options.model_primary
+        desired_model_fallback_policy = resolved_options.model_fallback_policy
+        desired_model_fallbacks = resolved_options.model_fallbacks
 
         changed = False
         if agent.name != desired_name:

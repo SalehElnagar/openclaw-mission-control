@@ -536,8 +536,6 @@ async def ensure_board_lead(
                     "communication_style": "direct, concise, practical",
                     "emoji": ":gear:",
                 },
-                model_profile="general",
-                model_fallback_policy="profile",
             ),
         )
     )

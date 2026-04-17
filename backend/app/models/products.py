@@ -31,6 +31,7 @@ class Product(TenantScoped, table=True):
     optimize_for: str = Field(default="balanced")
     planner_mode: str = Field(default="auto")
     planner_model_override: str | None = None
+    lead_runtime_defaults: dict[str, object] | None = Field(default=None, sa_column=Column(JSON))
     daily_budget_cap_usd: float | None = None
     total_budget_cap_usd: float | None = None
     execution_policy: dict[str, object] | None = Field(default=None, sa_column=Column(JSON))

@@ -5,7 +5,10 @@ from uuid import uuid4
 
 import pytest
 
-from app.schemas.board_onboarding import BoardOnboardingConfirm
+from app.schemas.board_onboarding import (
+    BoardOnboardingConfirm,
+    BoardOnboardingLeadAgentDraft,
+)
 from app.schemas.boards import BoardCreate, BoardUpdate
 
 
@@ -149,3 +152,23 @@ def test_onboarding_confirm_requires_goal_fields() -> None:
     )
 
     BoardOnboardingConfirm(board_type="general")
+
+
+def test_onboarding_lead_agent_draft_accepts_runtime_defaults() -> None:
+    """Lead-agent drafts may carry explicit runtime preferences."""
+    draft = BoardOnboardingLeadAgentDraft(
+        name="Ava",
+        model_profile="coder",
+        model_primary="microsoft-foundry/gpt-5.4-mini",
+        model_fallback_policy="explicit-only",
+        model_fallbacks=["microsoft-foundry/gpt-5.4-mini"],
+    )
+
+    assert draft.model_profile == "coder"
+    assert draft.model_primary == "microsoft-foundry/gpt-5.4-mini"
+
+
+def test_onboarding_lead_agent_draft_rejects_invalid_fallback_policy_shape() -> None:
+    """Explicit-only policies must reference a primary or fallback model."""
+    with pytest.raises(ValueError, match="explicit-only fallback policy requires"):
+        BoardOnboardingLeadAgentDraft(model_fallback_policy="explicit-only")

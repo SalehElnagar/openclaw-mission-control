@@ -102,6 +102,7 @@ async def test_product_chat_and_approval_seed_services(
         app = _build_app(session_maker, organization=organization, user=user)
 
         planner_calls: list[dict[str, object]] = []
+        lead_requests: list[object] = []
 
         async def _fake_runtime_models_for_product(self, *, product: Product):
             del product
@@ -205,6 +206,7 @@ async def test_product_chat_and_approval_seed_services(
             return gateway, object()
 
         async def _fake_ensure_board_lead_defaults(self, *, request):
+            lead_requests.append(request.options)
             existing = (
                 await Agent.objects.filter_by(board_id=request.board.id)
                 .filter(col(Agent.is_board_lead).is_(True))
@@ -230,6 +232,10 @@ async def test_product_chat_and_approval_seed_services(
         async def _fake_sync_model_policies(self, *, gateway, agents=None, auth=None):
             del gateway, agents, auth
             return False
+
+        async def _fake_assert_model_policies_supported(self, *, gateway, agents):
+            del gateway, agents
+            return None
 
         async def _fake_notify_lead_on_task_create(*, session, board, task):
             del session, board, task
@@ -258,6 +264,10 @@ async def test_product_chat_and_approval_seed_services(
         monkeypatch.setattr(
             "app.services.product_planning.GatewayRuntimeControlService.sync_model_policies",
             _fake_sync_model_policies,
+        )
+        monkeypatch.setattr(
+            "app.api.products.GatewayRuntimeControlService.assert_model_policies_supported",
+            _fake_assert_model_policies_supported,
         )
         monkeypatch.setattr(
             "app.api.tasks._notify_lead_on_task_create",
@@ -289,10 +299,17 @@ async def test_product_chat_and_approval_seed_services(
                         "mode": "fast-thinking",
                         "model_override": None,
                     },
+                    "lead_runtime_defaults": {
+                        "model_profile": "coder",
+                        "model_primary": "microsoft-foundry/gpt-5.4-mini",
+                        "model_fallback_policy": "explicit-only",
+                        "model_fallbacks": ["microsoft-foundry/gpt-5.4-mini"],
+                    },
                 },
             )
             assert create_response.status_code == 200
             product_id = create_response.json()["id"]
+            assert create_response.json()["lead_runtime_defaults"]["model_profile"] == "coder"
 
             chat_response = await client.post(
                 f"/api/v1/products/{product_id}/chat",
@@ -342,6 +359,8 @@ async def test_product_chat_and_approval_seed_services(
             assert product.status == "active"
             assert product.local_working_directory == "/tmp/fleetops"
             assert product.planner_mode == "fast-thinking"
+            assert product.lead_runtime_defaults is not None
+            assert product.lead_runtime_defaults["model_profile"] == "coder"
 
             plan = await ProductPlan.objects.filter_by(product_id=product.id).first(session)
             assert plan is not None
@@ -376,6 +395,12 @@ async def test_product_chat_and_approval_seed_services(
                 )
             ).all()
             assert len(tasks) >= 1
+            assert lead_requests
+            assert all(request.model_profile == "coder" for request in lead_requests)
+            assert all(
+                request.model_primary == "microsoft-foundry/gpt-5.4-mini"
+                for request in lead_requests
+            )
     finally:
         await engine.dispose()
 
@@ -410,6 +435,44 @@ async def test_create_product_requires_workspace_or_repo() -> None:
             )
             assert create_response.status_code == 422
             assert "local working directory" in create_response.text.lower()
+    finally:
+        await engine.dispose()
+
+
+@pytest.mark.asyncio
+async def test_create_product_rejects_explicit_lead_defaults_without_gateway() -> None:
+    engine = await _make_engine()
+    session_maker = async_sessionmaker(engine, class_=AsyncSession, expire_on_commit=False)
+    try:
+        async with session_maker() as session:
+            organization = Organization(id=uuid4(), name="Personal")
+            user = User(
+                id=uuid4(),
+                clerk_user_id="product-test-user-2b",
+                email="operator2b@example.com",
+                name="Operator",
+            )
+            session.add(organization)
+            session.add(user)
+            await session.commit()
+
+        app = _build_app(session_maker, organization=organization, user=user)
+        async with AsyncClient(
+            transport=ASGITransport(app=app),
+            base_url="http://testserver",
+        ) as client:
+            create_response = await client.post(
+                "/api/v1/products",
+                json={
+                    "name": "LeadDefaultsWithoutGateway",
+                    "local_working_directory": "/tmp/lead-defaults-without-gateway",
+                    "lead_runtime_defaults": {
+                        "model_profile": "general",
+                    },
+                },
+            )
+            assert create_response.status_code == 422
+            assert "default gateway" in create_response.text.lower()
     finally:
         await engine.dispose()
 

@@ -10,6 +10,7 @@ from pydantic import Field, field_validator, model_validator
 from sqlmodel import SQLModel
 
 from app.schemas.common import NonEmptyStr
+from app.schemas.gateway_runtime import _normalize_model_list, _normalize_model_ref
 
 _RUNTIME_TYPE_REFERENCES = (datetime, UUID, NonEmptyStr)
 
@@ -105,6 +106,10 @@ class BoardOnboardingLeadAgentDraft(SQLModel):
     output_format: LeadAgentOutputFormat | None = None
     update_cadence: LeadAgentUpdateCadence | None = None
     custom_instructions: str | None = None
+    model_profile: Literal["general", "coder", "budget"] | None = None
+    model_primary: str | None = None
+    model_fallback_policy: Literal["profile", "explicit-only", "none"] = "profile"
+    model_fallbacks: list[str] | None = None
 
     @field_validator(
         "autonomy_level",
@@ -118,6 +123,28 @@ class BoardOnboardingLeadAgentDraft(SQLModel):
     def normalize_text_fields(cls, value: object) -> object | None:
         """Trim optional lead-agent preference fields."""
         return _normalize_optional_text(value)
+
+    @field_validator("model_profile", mode="before")
+    @classmethod
+    def normalize_model_profile(cls, value: object) -> str | None | object:
+        normalized = _normalize_model_ref(value)
+        if normalized is None:
+            return None
+        if not isinstance(normalized, str):
+            return normalized
+        if normalized not in {"general", "coder", "budget"}:
+            raise ValueError("model_profile must be one of: general, coder, budget")
+        return normalized
+
+    @field_validator("model_primary", mode="before")
+    @classmethod
+    def normalize_model_primary(cls, value: object) -> str | None | object:
+        return _normalize_model_ref(value)
+
+    @field_validator("model_fallbacks", mode="before")
+    @classmethod
+    def normalize_model_fallbacks(cls, value: object) -> list[str] | None:
+        return _normalize_model_list(value)
 
     @field_validator("identity_profile", mode="before")
     @classmethod
@@ -141,6 +168,18 @@ class BoardOnboardingLeadAgentDraft(SQLModel):
             if val:
                 normalized[key] = val
         return normalized or None
+
+    @model_validator(mode="after")
+    def validate_model_policy(self) -> Self:
+        if self.model_fallback_policy == "none" and self.model_fallbacks:
+            raise ValueError("model_fallbacks must be empty when fallback policy is none")
+        if self.model_fallback_policy == "explicit-only" and not (
+            self.model_primary or self.model_fallbacks
+        ):
+            raise ValueError(
+                "explicit-only fallback policy requires a primary model or fallback models"
+            )
+        return self
 
 
 class BoardOnboardingAgentComplete(BoardOnboardingConfirm):

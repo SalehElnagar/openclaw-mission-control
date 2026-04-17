@@ -170,6 +170,10 @@ def _lead_agent_options(
     return LeadAgentOptions(
         agent_name=lead_agent.name,
         identity_profile=lead_identity_profile or None,
+        model_profile=lead_agent.model_profile,
+        model_primary=lead_agent.model_primary,
+        model_fallback_policy=lead_agent.model_fallback_policy,
+        model_fallbacks=lead_agent.model_fallbacks,
         action="provision",
     )
 
@@ -278,13 +282,17 @@ async def start_onboarding(
         '"communication_style":"direct, concise, practical","emoji":":gear:"},'
         '"autonomy_level":"balanced","verbosity":"concise",'
         '"output_format":"bullets","update_cadence":"daily",'
-        '"custom_instructions":"..."}}\'\n'
+        '"custom_instructions":"...",'
+        '"model_profile":"general","model_primary":"microsoft-foundry/gpt-5.4-mini",'
+        '"model_fallback_policy":"profile","model_fallbacks":[]}}\'\n'
         "ENUMS:\n"
         "- board_type: goal | general\n"
         "- lead_agent.autonomy_level: ask_first | balanced | autonomous\n"
         "- lead_agent.verbosity: concise | balanced | detailed\n"
         "- lead_agent.output_format: bullets | mixed | narrative\n"
         "- lead_agent.update_cadence: asap | hourly | daily | weekly\n"
+        "- lead_agent.model_profile: general | coder | budget\n"
+        "- lead_agent.model_fallback_policy: profile | explicit-only | none\n"
         "QUESTION FORMAT (one question per response, no arrays, no markdown, "
         "no extra text):\n"
         '{"question":"...","options":[{"id":"1","label":"..."},{"id":"2","label":"..."}]}\n'
@@ -294,6 +302,9 @@ async def start_onboarding(
         "include objective + success_metrics.\n"
         "Also include user_profile + lead_agent to configure the board lead's "
         "working style.\n"
+        "Only include lead_agent model_* fields if the operator asked for a specific "
+        "runtime preference; otherwise omit them so Mission Control inherits the "
+        "node defaults.\n"
     )
 
     session_key = await dispatcher.dispatch_start_prompt(

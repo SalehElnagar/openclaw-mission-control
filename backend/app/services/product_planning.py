@@ -27,6 +27,7 @@ from app.schemas.products import (
     ProductBudgetPolicy,
     ProductEpicProposal,
     ProductExecutionPolicy,
+    ProductLeadRuntimeDefaults,
     ProductMessageRead,
     ProductModelRecommendation,
     ProductPlannerMode,
@@ -205,6 +206,13 @@ def product_planner_policy(product: Product) -> ProductPlannerPolicy:
     )
 
 
+def product_lead_runtime_defaults(product: Product) -> ProductLeadRuntimeDefaults | None:
+    raw = product.lead_runtime_defaults
+    if raw in (None, {}):
+        return None
+    return ProductLeadRuntimeDefaults.model_validate(raw)
+
+
 def product_to_read(product: Product) -> ProductRead:
     return ProductRead(
         id=product.id,
@@ -219,6 +227,7 @@ def product_to_read(product: Product) -> ProductRead:
         execution_policy=product_execution_policy(product),
         budget_policy=product_budget_policy(product),
         planner_policy=product_planner_policy(product),
+        lead_runtime_defaults=product_lead_runtime_defaults(product),
         created_at=product.created_at,
         updated_at=product.updated_at,
     )
@@ -1719,6 +1728,7 @@ class ProductPlanningService:
 
         created_groups: list[BoardGroup] = []
         created_leads: list[Agent] = []
+        lead_runtime_defaults = product_lead_runtime_defaults(product)
         requirements_by_service_slug: dict[str, Board] = {}
         for service in service_proposals:
             existing_group = await BoardGroup.objects.filter_by(
@@ -1784,8 +1794,26 @@ class ProductPlanningService:
                                     "communication_style": "direct, concise, practical",
                                     "emoji": ":gear:",
                                 },
-                                model_profile="general",
-                                model_fallback_policy="profile",
+                                model_profile=(
+                                    lead_runtime_defaults.model_profile
+                                    if lead_runtime_defaults is not None
+                                    else None
+                                ),
+                                model_primary=(
+                                    lead_runtime_defaults.model_primary
+                                    if lead_runtime_defaults is not None
+                                    else None
+                                ),
+                                model_fallback_policy=(
+                                    lead_runtime_defaults.model_fallback_policy
+                                    if lead_runtime_defaults is not None
+                                    else "profile"
+                                ),
+                                model_fallbacks=(
+                                    lead_runtime_defaults.model_fallbacks
+                                    if lead_runtime_defaults is not None
+                                    else None
+                                ),
                             ),
                         )
                     )

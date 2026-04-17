@@ -31,6 +31,13 @@ export type ProductPlannerPolicy = {
   model_override: string | null;
 };
 
+export type ProductLeadRuntimeDefaults = {
+  model_profile: "general" | "coder" | "budget" | null;
+  model_primary: string | null;
+  model_fallback_policy: "profile" | "explicit-only" | "none";
+  model_fallbacks: string[] | null;
+};
+
 export type ProductRead = {
   id: string;
   organization_id: string;
@@ -44,6 +51,7 @@ export type ProductRead = {
   execution_policy: ProductExecutionPolicy;
   budget_policy: ProductBudgetPolicy;
   planner_policy: ProductPlannerPolicy;
+  lead_runtime_defaults: ProductLeadRuntimeDefaults | null;
   created_at: string;
   updated_at: string;
 };
@@ -132,6 +140,7 @@ export type ProductCreatePayload = {
   execution_policy?: Partial<ProductExecutionPolicy>;
   budget_policy?: Partial<ProductBudgetPolicy>;
   planner_policy?: Partial<ProductPlannerPolicy>;
+  lead_runtime_defaults?: ProductLeadRuntimeDefaults | null;
 };
 
 export type ProductUpdatePayload = Partial<ProductCreatePayload>;
@@ -178,6 +187,20 @@ const ensurePlannerPolicy = (
   model_override: policy?.model_override ?? null,
 });
 
+const ensureLeadRuntimeDefaults = (
+  defaults?: ProductLeadRuntimeDefaults | null,
+): ProductLeadRuntimeDefaults | null => {
+  if (defaults == null) {
+    return null;
+  }
+  return {
+    model_profile: defaults.model_profile ?? null,
+    model_primary: defaults.model_primary ?? null,
+    model_fallback_policy: defaults.model_fallback_policy ?? "profile",
+    model_fallbacks: defaults.model_fallbacks ?? null,
+  };
+};
+
 export const listProducts = async (): Promise<ProductSummaryRead[]> => {
   const response = await customFetch<ApiEnvelope<ProductSummaryRead[]>>("/api/v1/products", {
     method: "GET",
@@ -201,6 +224,7 @@ export const createProduct = async (
       execution_policy: ensureExecutionPolicy(payload.execution_policy),
       budget_policy: ensureBudgetPolicy(payload.budget_policy),
       planner_policy: ensurePlannerPolicy(payload.planner_policy),
+      lead_runtime_defaults: ensureLeadRuntimeDefaults(payload.lead_runtime_defaults),
     }),
   });
   return response.data;
@@ -239,6 +263,9 @@ export const updateProduct = async (
   }
   if (payload.planner_policy !== undefined) {
     body.planner_policy = ensurePlannerPolicy(payload.planner_policy);
+  }
+  if (payload.lead_runtime_defaults !== undefined) {
+    body.lead_runtime_defaults = ensureLeadRuntimeDefaults(payload.lead_runtime_defaults);
   }
   const response = await customFetch<ApiEnvelope<ProductRead>>(
     `/api/v1/products/${productId}`,

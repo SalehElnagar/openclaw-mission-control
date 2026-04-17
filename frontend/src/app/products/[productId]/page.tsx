@@ -30,6 +30,7 @@ import {
   listProductServices,
   postProductChat,
   updateProduct,
+  type ProductLeadRuntimeDefaults,
   type ProductMessageRead,
   type ProductPlannerMode,
   type ProductPlanRead,
@@ -111,6 +112,30 @@ const plannerModelLabel = (
   const match = catalog?.find((entry) => entry.ref === modelRef);
   return match?.label ?? FALLBACK_PLANNER_MODEL_LABELS[modelRef] ?? modelRef;
 };
+
+type LeadRuntimeMode = "inherit" | "custom";
+type LeadRuntimeDraft = {
+  model_profile: "general" | "coder" | "budget";
+  model_primary: string;
+  model_fallback_policy: "profile" | "explicit-only" | "none";
+  model_fallbacks: string[];
+};
+
+const DEFAULT_LEAD_RUNTIME_DRAFT: LeadRuntimeDraft = {
+  model_profile: "general",
+  model_primary: "",
+  model_fallback_policy: "profile",
+  model_fallbacks: [],
+};
+
+const toLeadRuntimeDraft = (
+  value: ProductLeadRuntimeDefaults | null | undefined,
+): LeadRuntimeDraft => ({
+  model_profile: value?.model_profile ?? "general",
+  model_primary: value?.model_primary ?? "",
+  model_fallback_policy: value?.model_fallback_policy ?? "profile",
+  model_fallbacks: value?.model_fallbacks ?? [],
+});
 
 function ChatMessage({
   message,
@@ -384,6 +409,10 @@ export default function ProductDetailPage() {
   const [plannerModelOverride, setPlannerModelOverride] = useState("auto");
   const [chatPlannerMode, setChatPlannerMode] = useState<ProductPlannerMode>("auto");
   const [chatPlannerModelOverride, setChatPlannerModelOverride] = useState("auto");
+  const [leadRuntimeMode, setLeadRuntimeMode] = useState<LeadRuntimeMode>("inherit");
+  const [leadRuntimeDraft, setLeadRuntimeDraft] = useState<LeadRuntimeDraft>(
+    DEFAULT_LEAD_RUNTIME_DRAFT,
+  );
   const [settingsError, setSettingsError] = useState<string | null>(null);
 
   const productQuery = useQuery<ProductRead, ApiError>({
@@ -418,6 +447,10 @@ export default function ProductDetailPage() {
       runtimeQuery.data?.data.catalog?.filter((entry) => entry.selectable) ?? [],
     [runtimeQuery.data],
   );
+  const availableRuntimeModelRefs = useMemo(
+    () => new Set(plannerModelOptions.map((entry) => entry.ref)),
+    [plannerModelOptions],
+  );
   const latestAssistantMessage = useMemo(
     () => [...(chatQuery.data ?? [])].reverse().find((message) => message.role === "assistant") ?? null,
     [chatQuery.data],
@@ -428,6 +461,11 @@ export default function ProductDetailPage() {
       : planQuery.data?.planner_model_ref ?? null;
   const lastActualPlannerModelDisplay = plannerModelLabel(
     lastActualPlannerModelRef,
+    runtimeQuery.data?.data.catalog,
+  );
+  const nodeDefaultProfile = runtimeQuery.data?.data.default_model_profile ?? "general";
+  const nodeDefaultModelLabel = plannerModelLabel(
+    runtimeQuery.data?.data.default_model_ref,
     runtimeQuery.data?.data.catalog,
   );
   const lacksLocationAnchor = !(
@@ -446,6 +484,8 @@ export default function ProductDetailPage() {
     setPlannerModelOverride(productQuery.data.planner_policy.model_override ?? "auto");
     setChatPlannerMode(productQuery.data.planner_policy.mode);
     setChatPlannerModelOverride(productQuery.data.planner_policy.model_override ?? "auto");
+    setLeadRuntimeMode(productQuery.data.lead_runtime_defaults ? "custom" : "inherit");
+    setLeadRuntimeDraft(toLeadRuntimeDraft(productQuery.data.lead_runtime_defaults));
   }, [productQuery.data]);
 
   const sendMessageMutation = useMutation({
@@ -485,8 +525,26 @@ export default function ProductDetailPage() {
     },
   });
   const updateProductMutation = useMutation({
-    mutationFn: () =>
-      updateProduct(productId as string, {
+    mutationFn: () => {
+      const trimmedLeadPrimary = leadRuntimeDraft.model_primary.trim();
+      if (
+        leadRuntimeMode === "custom" &&
+        trimmedLeadPrimary &&
+        !availableRuntimeModelRefs.has(trimmedLeadPrimary)
+      ) {
+        throw new ApiError(
+          422,
+          "Pick a node-enabled primary model or switch the lead back to inherited node defaults.",
+          null,
+        );
+      }
+      const normalizedLeadFallbacks =
+        leadRuntimeDraft.model_fallback_policy === "none"
+          ? []
+          : leadRuntimeDraft.model_fallbacks.filter(
+              (value) => value !== trimmedLeadPrimary && availableRuntimeModelRefs.has(value),
+            );
+      return updateProduct(productId as string, {
         local_working_directory: localWorkingDirectory || null,
         remote_repository_url: remoteRepositoryUrl || null,
         planner_policy: {
@@ -494,7 +552,18 @@ export default function ProductDetailPage() {
           model_override:
             plannerMode === "custom" && plannerModelOverride !== "auto" ? plannerModelOverride : null,
         },
-      }),
+        lead_runtime_defaults:
+          leadRuntimeMode === "custom"
+            ? {
+                model_profile: leadRuntimeDraft.model_profile,
+                model_primary: trimmedLeadPrimary || null,
+                model_fallback_policy: leadRuntimeDraft.model_fallback_policy,
+                model_fallbacks:
+                  normalizedLeadFallbacks.length > 0 ? normalizedLeadFallbacks : null,
+              }
+            : null,
+      });
+    },
     onSuccess: async () => {
       setSettingsError(null);
       await Promise.all([
@@ -504,6 +573,18 @@ export default function ProductDetailPage() {
     },
     onError: (error: ApiError) => setSettingsError(error.message),
   });
+
+  const toggleLeadFallbackModel = (modelRef: string) => {
+    setLeadRuntimeDraft((current) => {
+      const nextValues = current.model_fallbacks.includes(modelRef)
+        ? current.model_fallbacks.filter((value) => value !== modelRef)
+        : [...current.model_fallbacks, modelRef];
+      return {
+        ...current,
+        model_fallbacks: nextValues.filter((value) => value !== current.model_primary),
+      };
+    });
+  };
 
   return (
     <DashboardShell>
@@ -768,13 +849,13 @@ export default function ProductDetailPage() {
         ) : null}
 
 	                <div className="rounded-[26px] border border-[color:var(--border)] bg-[color:var(--surface)] p-6 shadow-sm">
-	                  <div className="flex items-center gap-2">
-	                    <Settings2 className="h-5 w-5 text-cyan-200" />
-	                    <h2 className="text-2xl font-semibold text-strong">Planner settings</h2>
-	                  </div>
-	                  <p className="mt-2 text-sm leading-6 text-muted">
-	                    Choose how the product planner should think, and tell Mission Control where the work should live.
-	                  </p>
+		                  <div className="flex items-center gap-2">
+		                    <Settings2 className="h-5 w-5 text-cyan-200" />
+		                    <h2 className="text-2xl font-semibold text-strong">Planner & lead settings</h2>
+		                  </div>
+		                  <p className="mt-2 text-sm leading-6 text-muted">
+		                    Choose how the product planner should think, tell Mission Control where the work should live, and decide whether new board leads should inherit the node toolchain or use a product-specific runtime policy.
+		                  </p>
 	                  <div className="mt-6 grid gap-4">
 	                    <div className="grid gap-2">
 	                      <label className="text-sm font-medium text-strong" htmlFor="product-local-workdir">
@@ -798,7 +879,7 @@ export default function ProductDetailPage() {
 	                        placeholder="https://github.com/your-org/fleetops"
 	                      />
 	                    </div>
-	                    <div className="grid gap-4 md:grid-cols-[minmax(0,0.9fr)_minmax(0,1.1fr)]">
+		                    <div className="grid gap-4 md:grid-cols-[minmax(0,0.9fr)_minmax(0,1.1fr)]">
 	                      <div className="grid gap-2">
 	                        <label className="text-sm font-medium text-strong">Planner style</label>
 	                        <Select
@@ -852,20 +933,176 @@ export default function ProductDetailPage() {
 	                            ))}
 	                          </SelectContent>
 	                        </Select>
-	                        <p className="text-xs leading-5 text-muted">
-	                          {productQuery.data?.default_gateway_id
-	                            ? plannerMode === "custom"
-	                              ? "Only verified gateway models are selectable here."
-	                              : "Mission Control only uses this when Planner style is set to Custom model."
-	                            : "Pick a default gateway on the product if you want to pin the planner to a specific verified model."}
-	                        </p>
-	                      </div>
-	                    </div>
-	                    {settingsError ? (
-	                      <div className="rounded-2xl border border-rose-500/30 bg-rose-500/10 px-4 py-3 text-sm text-rose-100">
-	                        {settingsError}
-	                      </div>
-	                    ) : null}
+		                        <p className="text-xs leading-5 text-muted">
+		                          {productQuery.data?.default_gateway_id
+		                            ? plannerMode === "custom"
+		                              ? "Only verified gateway models are selectable here."
+		                              : "Mission Control only uses this when Planner style is set to Custom model."
+		                            : "Pick a default gateway on the product if you want to pin the planner to a specific verified model."}
+		                        </p>
+		                      </div>
+		                    </div>
+                        <div className="rounded-2xl border border-[color:var(--border)] bg-[color:var(--surface-muted)] p-4">
+                          <div className="flex flex-col gap-2 md:flex-row md:items-start md:justify-between">
+                            <div className="space-y-1">
+                              <p className="text-sm font-medium text-strong">Lead runtime defaults</p>
+                              <p className="text-xs leading-5 text-muted">
+                                New board leads inherit the selected node by default. Switch to custom only when this product needs a different verified model profile or fallback chain.
+                              </p>
+                            </div>
+                            <div className="flex flex-wrap gap-2">
+                              <Button
+                                type="button"
+                                variant={leadRuntimeMode === "inherit" ? "primary" : "outline"}
+                                size="sm"
+                                onClick={() => setLeadRuntimeMode("inherit")}
+                              >
+                                Inherit node default
+                              </Button>
+                              <Button
+                                type="button"
+                                variant={leadRuntimeMode === "custom" ? "primary" : "outline"}
+                                size="sm"
+                                onClick={() => setLeadRuntimeMode("custom")}
+                                disabled={!productQuery.data?.default_gateway_id}
+                              >
+                                Custom lead policy
+                              </Button>
+                            </div>
+                          </div>
+                          {leadRuntimeMode === "inherit" ? (
+                            <div className="mt-4 rounded-xl border border-[color:var(--border)] bg-[color:var(--surface)] p-4 text-sm text-muted">
+                              Lead provisioning will inherit the node default profile{" "}
+                              <span className="font-semibold text-strong">{nodeDefaultProfile}</span>
+                              {" "}and resolve to{" "}
+                              <span className="font-semibold text-strong">{nodeDefaultModelLabel}</span>.
+                            </div>
+                          ) : (
+                            <div className="mt-4 grid gap-4 md:grid-cols-2">
+                              <div className="grid gap-2">
+                                <label className="text-sm font-medium text-strong">Lead model profile</label>
+                                <Select
+                                  value={leadRuntimeDraft.model_profile}
+                                  onValueChange={(value) =>
+                                    setLeadRuntimeDraft((current) => ({
+                                      ...current,
+                                      model_profile: value as LeadRuntimeDraft["model_profile"],
+                                    }))
+                                  }
+                                  disabled={!productQuery.data?.default_gateway_id}
+                                >
+                                  <SelectTrigger>
+                                    <SelectValue placeholder="Select lead profile" />
+                                  </SelectTrigger>
+                                  <SelectContent>
+                                    <SelectItem value="general">general</SelectItem>
+                                    <SelectItem value="coder">coder</SelectItem>
+                                    <SelectItem value="budget">budget</SelectItem>
+                                  </SelectContent>
+                                </Select>
+                                <p className="text-xs leading-5 text-muted">
+                                  This stays inside the node’s verified model pool and uses that profile’s fallback chain unless you override it below.
+                                </p>
+                              </div>
+                              <div className="grid gap-2">
+                                <label className="text-sm font-medium text-strong">Lead primary model</label>
+                                <Select
+                                  value={leadRuntimeDraft.model_primary || "auto"}
+                                  onValueChange={(value) =>
+                                    setLeadRuntimeDraft((current) => ({
+                                      ...current,
+                                      model_primary: value === "auto" ? "" : value,
+                                      model_fallbacks: current.model_fallbacks.filter(
+                                        (candidate) => candidate !== value,
+                                      ),
+                                    }))
+                                  }
+                                  disabled={!productQuery.data?.default_gateway_id}
+                                >
+                                  <SelectTrigger>
+                                    <SelectValue placeholder="Choose a verified model" />
+                                  </SelectTrigger>
+                                  <SelectContent>
+                                    <SelectItem value="auto">Use profile default</SelectItem>
+                                    {plannerModelOptions.map((entry) => (
+                                      <SelectItem key={entry.ref} value={entry.ref}>
+                                        {entry.label}
+                                      </SelectItem>
+                                    ))}
+                                  </SelectContent>
+                                </Select>
+                                <p className="text-xs leading-5 text-muted">
+                                  Only verified models from the product’s default node are allowed here.
+                                </p>
+                              </div>
+                              <div className="grid gap-2">
+                                <label className="text-sm font-medium text-strong">Lead fallback models</label>
+                                <div className="max-h-40 space-y-2 overflow-y-auto rounded-xl border border-[color:var(--border)] bg-[color:var(--surface)] p-3">
+                                  {plannerModelOptions.length > 0 ? (
+                                    plannerModelOptions.map((entry) => {
+                                      const checked = leadRuntimeDraft.model_fallbacks.includes(entry.ref);
+                                      const disabled = entry.ref === leadRuntimeDraft.model_primary;
+                                      return (
+                                        <label
+                                          key={entry.ref}
+                                          className="flex items-center justify-between gap-3 rounded-lg px-2 py-1.5 text-sm text-muted"
+                                        >
+                                          <span className="min-w-0 truncate">{entry.label}</span>
+                                          <input
+                                            type="checkbox"
+                                            className="h-4 w-4 rounded border-[color:var(--border)] text-[color:var(--accent)] focus:ring-[color:var(--accent-soft)]"
+                                            checked={checked}
+                                            disabled={disabled}
+                                            onChange={() => toggleLeadFallbackModel(entry.ref)}
+                                          />
+                                        </label>
+                                      );
+                                    })
+                                  ) : (
+                                    <p className="text-xs text-muted">
+                                      No verified fallback models are available for this node yet.
+                                    </p>
+                                  )}
+                                </div>
+                              </div>
+                              <div className="grid gap-2">
+                                <label className="text-sm font-medium text-strong">Lead fallback policy</label>
+                                <Select
+                                  value={leadRuntimeDraft.model_fallback_policy}
+                                  onValueChange={(value) =>
+                                    setLeadRuntimeDraft((current) => ({
+                                      ...current,
+                                      model_fallback_policy: value as LeadRuntimeDraft["model_fallback_policy"],
+                                    }))
+                                  }
+                                  disabled={!productQuery.data?.default_gateway_id}
+                                >
+                                  <SelectTrigger>
+                                    <SelectValue placeholder="Select fallback policy" />
+                                  </SelectTrigger>
+                                  <SelectContent>
+                                    <SelectItem value="profile">profile</SelectItem>
+                                    <SelectItem value="explicit-only">explicit-only</SelectItem>
+                                    <SelectItem value="none">none</SelectItem>
+                                  </SelectContent>
+                                </Select>
+                                <p className="text-xs leading-5 text-muted">
+                                  Use profile to inherit node fallbacks, explicit-only to stick to the list above, or none to disable fallback models.
+                                </p>
+                              </div>
+                            </div>
+                          )}
+                          {!productQuery.data?.default_gateway_id ? (
+                            <p className="mt-3 text-xs leading-5 text-muted">
+                              Pick a default node on this product to unlock custom lead runtime choices. Until then, Mission Control can only inherit the node policy.
+                            </p>
+                          ) : null}
+                        </div>
+		                    {settingsError ? (
+		                      <div className="rounded-2xl border border-rose-500/30 bg-rose-500/10 px-4 py-3 text-sm text-rose-100">
+		                        {settingsError}
+		                      </div>
+		                    ) : null}
 	                    <div className="flex flex-col gap-4 rounded-2xl border border-[color:var(--border)] bg-[color:var(--surface-muted)] p-4 md:flex-row md:items-start md:justify-between">
 	                      <div className="flex min-w-0 flex-1 items-start gap-3">
 	                        <FolderRoot className="mt-0.5 h-4 w-4 text-cyan-200" />
@@ -875,18 +1112,19 @@ export default function ProductDetailPage() {
 	                      </div>
 	                      <Button
 	                        className="w-full shrink-0 whitespace-nowrap md:w-auto"
-	                        onClick={() => updateProductMutation.mutate()}
-	                        disabled={
-	                          (!localWorkingDirectory.trim() && !remoteRepositoryUrl.trim()) ||
-	                          (plannerMode === "custom" && plannerModelOverride === "auto") ||
-	                          updateProductMutation.isPending
-	                        }
-	                      >
-	                        {updateProductMutation.isPending ? "Saving..." : "Save planner settings"}
-	                      </Button>
-	                    </div>
-	                  </div>
-	                </div>
+		                        onClick={() => updateProductMutation.mutate()}
+		                        disabled={
+		                          (!localWorkingDirectory.trim() && !remoteRepositoryUrl.trim()) ||
+		                          (plannerMode === "custom" && plannerModelOverride === "auto") ||
+                              (leadRuntimeMode === "custom" && !productQuery.data?.default_gateway_id) ||
+		                          updateProductMutation.isPending
+		                        }
+		                      >
+		                        {updateProductMutation.isPending ? "Saving..." : "Save planner & lead settings"}
+		                      </Button>
+		                    </div>
+		                  </div>
+		                </div>
 
 	                <div className="rounded-[26px] border border-[color:var(--border)] bg-[color:var(--surface)] p-6 shadow-sm">
                   <div className="flex items-center gap-2">

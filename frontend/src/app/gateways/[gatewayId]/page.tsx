@@ -30,7 +30,19 @@ import {
   useDeleteAgentApiV1AgentsAgentIdDelete,
   useListAgentsApiV1AgentsGet,
 } from "@/api/generated/agents/agents";
-import { type AgentRead } from "@/api/generated/model";
+import {
+  type AgentRead,
+  type MarketplaceSkillCardRead,
+  type SkillPackRead,
+} from "@/api/generated/model";
+import {
+  type listMarketplaceSkillsApiV1SkillsMarketplaceGetResponse,
+  type listSkillPacksApiV1SkillsPacksGetResponse,
+  useInstallMarketplaceSkillApiV1SkillsMarketplaceSkillIdInstallPost,
+  useListMarketplaceSkillsApiV1SkillsMarketplaceGet,
+  useListSkillPacksApiV1SkillsPacksGet,
+  useUninstallMarketplaceSkillApiV1SkillsMarketplaceSkillIdUninstallPost,
+} from "@/api/generated/skills/skills";
 import {
   aggregateUsage,
   getGatewayRuntime,
@@ -186,6 +198,28 @@ export default function GatewayDetailPage() {
     refetchInterval: 45_000,
     queryFn: () => listGatewayAudit(gatewayId ?? "", { limit: 6 }),
   });
+  const marketplaceSkillsQuery =
+    useListMarketplaceSkillsApiV1SkillsMarketplaceGet<
+      listMarketplaceSkillsApiV1SkillsMarketplaceGetResponse,
+      ApiError
+    >(
+      { gateway_id: gatewayId ?? "" },
+      {
+        query: {
+          enabled: Boolean(isSignedIn && isAdmin && gatewayId),
+          refetchInterval: 30_000,
+        },
+      },
+    );
+  const skillPacksQuery = useListSkillPacksApiV1SkillsPacksGet<
+    listSkillPacksApiV1SkillsPacksGetResponse,
+    ApiError
+  >({
+    query: {
+      enabled: Boolean(isSignedIn && isAdmin),
+      refetchOnMount: "always",
+    },
+  });
   const syncTemplatesMutation =
     useSyncGatewayTemplatesApiV1GatewaysGatewayIdTemplatesSyncPost<ApiError>(
       {
@@ -254,6 +288,34 @@ export default function GatewayDetailPage() {
       });
     },
   });
+  const installSkillMutation =
+    useInstallMarketplaceSkillApiV1SkillsMarketplaceSkillIdInstallPost<ApiError>(
+      {
+        mutation: {
+          onSuccess: async () => {
+            setControlMessage("Installed marketplace skill on this node.");
+            await queryClient.invalidateQueries({
+              queryKey: ["/api/v1/skills/marketplace"],
+            });
+          },
+        },
+      },
+      queryClient,
+    );
+  const uninstallSkillMutation =
+    useUninstallMarketplaceSkillApiV1SkillsMarketplaceSkillIdUninstallPost<ApiError>(
+      {
+        mutation: {
+          onSuccess: async () => {
+            setControlMessage("Removed marketplace skill from this node.");
+            await queryClient.invalidateQueries({
+              queryKey: ["/api/v1/skills/marketplace"],
+            });
+          },
+        },
+      },
+      queryClient,
+    );
 
   const agents = useMemo(
     () =>
@@ -277,6 +339,25 @@ export default function GatewayDetailPage() {
   const usage = usageQuery.data?.status === 200 ? usageQuery.data.data : null;
   const auditRecords =
     auditQuery.data?.status === 200 ? (auditQuery.data.data.items ?? []) : [];
+  const marketplaceSkills = useMemo<MarketplaceSkillCardRead[]>(
+    () =>
+      marketplaceSkillsQuery.data?.status === 200
+        ? marketplaceSkillsQuery.data.data
+        : [],
+    [marketplaceSkillsQuery.data],
+  );
+  const installedSkills = useMemo(
+    () => marketplaceSkills.filter((skill) => skill.installed),
+    [marketplaceSkills],
+  );
+  const availableSkills = useMemo(
+    () => marketplaceSkills.filter((skill) => !skill.installed),
+    [marketplaceSkills],
+  );
+  const skillPacks = useMemo<SkillPackRead[]>(
+    () => (skillPacksQuery.data?.status === 200 ? skillPacksQuery.data.data : []),
+    [skillPacksQuery.data],
+  );
   const isConnected = status?.connected ?? false;
 
   const title = useMemo(
@@ -601,9 +682,115 @@ export default function GatewayDetailPage() {
                   </div>
                   <div>
                     <p className="text-xs uppercase text-quiet">Modules</p>
-                    <p className="mt-1 text-sm font-medium text-strong">
-                      Skills and packs are still managed through the Skills views, but they now inherit the active node scope.
-                    </p>
+                    <div className="mt-2 space-y-3">
+                      <div className="rounded-lg border border-[color:var(--border)] bg-[color:var(--surface-muted)] p-3">
+                        <div className="flex items-center justify-between gap-3">
+                          <p className="text-xs uppercase text-quiet">Installed marketplace skills</p>
+                          <span className="text-xs text-muted">
+                            {marketplaceSkillsQuery.isFetching ? "Refreshing…" : `${installedSkills.length} installed`}
+                          </span>
+                        </div>
+                        <div className="mt-2 space-y-2">
+                          {installedSkills.length > 0 ? (
+                            installedSkills.map((skill) => (
+                              <div
+                                key={skill.id}
+                                className="flex items-center justify-between gap-3 rounded-md border border-[color:var(--border)] bg-[color:var(--surface)] px-3 py-2"
+                              >
+                                <div className="min-w-0">
+                                  <p className="text-sm font-medium text-strong">{skill.name}</p>
+                                  <p className="mt-1 text-xs text-muted">
+                                    {skill.category ?? "General"} · {skill.source ?? "Marketplace"}
+                                  </p>
+                                </div>
+                                <Button
+                                  type="button"
+                                  variant="outline"
+                                  size="sm"
+                                  disabled={uninstallSkillMutation.isPending}
+                                  onClick={() =>
+                                    uninstallSkillMutation.mutate({
+                                      skillId: skill.id,
+                                      params: { gateway_id: gateway.id },
+                                    })
+                                  }
+                                >
+                                  Remove
+                                </Button>
+                              </div>
+                            ))
+                          ) : (
+                            <p className="text-xs text-muted">
+                              No marketplace skills are installed on this node yet.
+                            </p>
+                          )}
+                        </div>
+                      </div>
+                      <div className="rounded-lg border border-[color:var(--border)] bg-[color:var(--surface-muted)] p-3">
+                        <div className="flex items-center justify-between gap-3">
+                          <p className="text-xs uppercase text-quiet">Available to install</p>
+                          <span className="text-xs text-muted">
+                            {availableSkills.length} ready
+                          </span>
+                        </div>
+                        <div className="mt-2 space-y-2">
+                          {availableSkills.slice(0, 4).map((skill) => (
+                            <div
+                              key={skill.id}
+                              className="flex items-center justify-between gap-3 rounded-md border border-[color:var(--border)] bg-[color:var(--surface)] px-3 py-2"
+                            >
+                              <div className="min-w-0">
+                                <p className="text-sm font-medium text-strong">{skill.name}</p>
+                                <p className="mt-1 text-xs text-muted">
+                                  {skill.category ?? "General"} · {skill.source ?? "Marketplace"}
+                                </p>
+                              </div>
+                              <Button
+                                type="button"
+                                variant="outline"
+                                size="sm"
+                                disabled={installSkillMutation.isPending}
+                                onClick={() =>
+                                  installSkillMutation.mutate({
+                                    skillId: skill.id,
+                                    params: { gateway_id: gateway.id },
+                                  })
+                                }
+                              >
+                                Install
+                              </Button>
+                            </div>
+                          ))}
+                          {availableSkills.length === 0 ? (
+                            <p className="text-xs text-muted">
+                              Everything in the marketplace for this node is already installed.
+                            </p>
+                          ) : null}
+                        </div>
+                      </div>
+                      <div className="rounded-lg border border-[color:var(--border)] bg-[color:var(--surface-muted)] p-3">
+                        <p className="text-xs uppercase text-quiet">Skill packs in the org</p>
+                        <div className="mt-2 flex flex-wrap gap-2">
+                          {skillPacks.length > 0 ? (
+                            skillPacks.map((pack) => (
+                              <span
+                                key={pack.id}
+                                className="rounded-full border border-[color:var(--border)] bg-[color:var(--surface)] px-3 py-1 text-xs font-medium text-strong"
+                              >
+                                {pack.name}
+                                {typeof pack.skill_count === "number"
+                                  ? ` · ${pack.skill_count} skills`
+                                  : ""}
+                              </span>
+                            ))
+                          ) : (
+                            <span className="text-xs text-muted">
+                              No shared skill packs have been configured yet.
+                            </span>
+                          )}
+                        </div>
+                      </div>
+                    </div>
                   </div>
                 </div>
               </div>

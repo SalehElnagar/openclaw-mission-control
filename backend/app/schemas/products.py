@@ -10,12 +10,15 @@ from pydantic import model_validator
 from sqlmodel import Field, SQLModel
 
 from app.schemas.common import NonEmptyStr
+from app.schemas.gateway_runtime import _normalize_model_list, _normalize_model_ref
 
 RUNTIME_ANNOTATION_TYPES = (datetime, UUID)
 ProductStatus = Literal["draft", "active", "archived"]
 ProductOptimizeFor = Literal["balanced", "cheapest-acceptable", "highest-quality-within-budget"]
 ProductMessageRole = Literal["user", "assistant", "system"]
 ProductPlanStatus = Literal["draft", "approved"]
+ProductModelProfile = Literal["general", "coder", "budget"]
+ProductFallbackPolicy = Literal["profile", "explicit-only", "none"]
 ProductPlannerMode = Literal[
     "auto", "fast-thinking", "deep-thinking", "security-planning", "custom"
 ]
@@ -44,6 +47,54 @@ class ProductPlannerPolicy(SQLModel):
     model_override: str | None = None
 
 
+class ProductLeadRuntimeDefaults(SQLModel):
+    """Runtime defaults used when provisioning a product's board lead."""
+
+    model_profile: ProductModelProfile | None = None
+    model_primary: str | None = None
+    model_fallback_policy: ProductFallbackPolicy = "profile"
+    model_fallbacks: list[str] | None = None
+
+    @model_validator(mode="after")
+    def validate_runtime_defaults(self) -> "ProductLeadRuntimeDefaults":
+        if self.model_fallback_policy == "none" and self.model_fallbacks:
+            raise ValueError("model_fallbacks must be empty when fallback policy is none.")
+        if self.model_fallback_policy == "explicit-only" and not (
+            self.model_primary or self.model_fallbacks
+        ):
+            raise ValueError(
+                "explicit-only fallback policy requires a primary model or fallback models.",
+            )
+        return self
+
+    @classmethod
+    def _normalize_model_profile(
+        cls,
+        value: object,
+    ) -> ProductModelProfile | None | object:
+        normalized = _normalize_model_ref(value)
+        if normalized is None:
+            return None
+        if not isinstance(normalized, str):
+            return normalized
+        if normalized not in {"general", "coder", "budget"}:
+            raise ValueError("model_profile must be one of: general, coder, budget")
+        return normalized
+
+    @model_validator(mode="before")
+    @classmethod
+    def normalize_runtime_defaults(cls, value: object) -> object:
+        if not isinstance(value, dict):
+            return value
+        normalized = dict(value)
+        normalized["model_profile"] = cls._normalize_model_profile(
+            normalized.get("model_profile")
+        )
+        normalized["model_primary"] = _normalize_model_ref(normalized.get("model_primary"))
+        normalized["model_fallbacks"] = _normalize_model_list(normalized.get("model_fallbacks"))
+        return normalized
+
+
 class ProductBase(SQLModel):
     """Shared product fields."""
 
@@ -57,6 +108,7 @@ class ProductBase(SQLModel):
     execution_policy: ProductExecutionPolicy = Field(default_factory=ProductExecutionPolicy)
     budget_policy: ProductBudgetPolicy = Field(default_factory=ProductBudgetPolicy)
     planner_policy: ProductPlannerPolicy = Field(default_factory=ProductPlannerPolicy)
+    lead_runtime_defaults: ProductLeadRuntimeDefaults | None = None
 
     @model_validator(mode="after")
     def _require_workspace_or_repo(self) -> "ProductBase":
@@ -84,6 +136,7 @@ class ProductUpdate(SQLModel):
     execution_policy: ProductExecutionPolicy | None = None
     budget_policy: ProductBudgetPolicy | None = None
     planner_policy: ProductPlannerPolicy | None = None
+    lead_runtime_defaults: ProductLeadRuntimeDefaults | None = None
 
 
 class ProductRead(SQLModel):
@@ -101,6 +154,7 @@ class ProductRead(SQLModel):
     execution_policy: ProductExecutionPolicy = Field(default_factory=ProductExecutionPolicy)
     budget_policy: ProductBudgetPolicy = Field(default_factory=ProductBudgetPolicy)
     planner_policy: ProductPlannerPolicy = Field(default_factory=ProductPlannerPolicy)
+    lead_runtime_defaults: ProductLeadRuntimeDefaults | None = None
     created_at: datetime
     updated_at: datetime
 
