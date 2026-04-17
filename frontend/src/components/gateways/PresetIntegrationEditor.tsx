@@ -15,7 +15,6 @@ import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import {
   Dialog,
-  DialogClose,
   DialogContent,
   DialogDescription,
   DialogFooter,
@@ -67,17 +66,37 @@ type PresetIntegrationEditorProps = {
 
 type SecretEntryMode = "existing" | "paste-once";
 
+type PresetIntegrationDraft = {
+  mode: "new" | "existing";
+  preset: ToolchainCatalogProviderPreset;
+  providerConfig: GatewayProviderConfig;
+  authConfig: GatewayProviderAuthConfig;
+  modelDefinitions: GatewayModelDefinition[];
+  enabledModelRefs: string[];
+  providerSecretRefs: GatewayProviderSecretRef[];
+  providerSecretInputs: GatewayProviderSecretInput[];
+};
+
 type PresetIntegrationState = {
   preset: ToolchainCatalogProviderPreset;
   providerConfig: GatewayProviderConfig;
   allowedModes: ProviderAuthMode[];
+  authConfig: GatewayProviderAuthConfig;
   authMode: ProviderAuthMode;
   runtime?: GatewayRuntimeProviderSummary;
+  providerSecretRefs: GatewayProviderSecretRef[];
+  providerSecretInputs: GatewayProviderSecretInput[];
+  modelDefinitions: GatewayModelDefinition[];
+  enabledModelRefs: string[];
   hasServiceSecret: boolean;
   selectedModelRefs: Set<string>;
+  availableModelCount: number;
   selectedModelCount: number;
   enabledModelCount: number;
-  status: { label: string; variant: "outline" | "warning" | "danger" | "success" };
+  status: {
+    label: string;
+    variant: "outline" | "warning" | "danger" | "success";
+  };
 };
 
 const servicePurposeForMode = (
@@ -99,6 +118,57 @@ const secretScopeKey = (providerId: string, purpose: string) =>
   `${providerId}::${purpose}`;
 
 const dedupeModelRefs = (values: string[]) => Array.from(new Set(values));
+
+const defaultModelDefinitionsForPreset = (
+  preset: ToolchainCatalogProviderPreset,
+): GatewayModelDefinition[] =>
+  preset.models
+    .map((model) => buildModelDefinition(preset, model.model_id))
+    .filter((model): model is GatewayModelDefinition => Boolean(model));
+
+const defaultEnabledModelRefsForPreset = (
+  preset: ToolchainCatalogProviderPreset,
+): string[] => {
+  const selected = defaultModelDefinitionsForPreset(preset);
+  const preferred = preset.models
+    .filter((model) => model.enabled_by_default !== false)
+    .map((model) => providerRef(preset.provider_id, model.model_id));
+  if (preferred.length > 0) {
+    return preferred;
+  }
+  return selected.length > 0
+    ? [providerRef(selected[0].provider_id, selected[0].model_id)]
+    : [];
+};
+
+const ensurePresetDefinitionsForEnabledRefs = (
+  preset: ToolchainCatalogProviderPreset,
+  existingDefinitions: GatewayModelDefinition[],
+  enabledRefs: string[],
+): GatewayModelDefinition[] => {
+  const nextDefinitions = [...existingDefinitions];
+  const existingRefs = new Set(
+    existingDefinitions.map((definition) =>
+      providerRef(definition.provider_id, definition.model_id),
+    ),
+  );
+  for (const enabledRef of enabledRefs) {
+    if (
+      !enabledRef.startsWith(`${preset.provider_id}/`) ||
+      existingRefs.has(enabledRef)
+    ) {
+      continue;
+    }
+    const modelId = enabledRef.slice(`${preset.provider_id}/`.length);
+    const definition = buildModelDefinition(preset, modelId);
+    if (!definition) {
+      continue;
+    }
+    nextDefinitions.push(definition);
+    existingRefs.add(enabledRef);
+  }
+  return nextDefinitions;
+};
 
 function buildProviderConfig(
   preset: ToolchainCatalogProviderPreset,
@@ -128,21 +198,21 @@ function buildProviderAuthConfig(
     auth_mode: authMode,
     profile_id:
       authMode === "oauth" || authMode === "login"
-        ? existing?.profile_id ?? `${preset.provider_id}:managed`
+        ? (existing?.profile_id ?? `${preset.provider_id}:managed`)
         : null,
     display_label: existing?.display_label ?? preset.display_label,
     secret_refs: existing?.secret_refs ?? [],
     token_header_name:
       authMode === "token"
-        ? existing?.token_header_name ??
+        ? (existing?.token_header_name ??
           preset.default_token_header_name ??
-          "Authorization"
+          "Authorization")
         : null,
     token_header_prefix:
       authMode === "token"
-        ? existing?.token_header_prefix ??
+        ? (existing?.token_header_prefix ??
           preset.default_token_header_prefix ??
-          "Bearer"
+          "Bearer")
         : null,
   };
 }
@@ -183,10 +253,16 @@ function integrationStatus(
     if (runtime?.requires_login || runtime?.auth_state === "requires-login") {
       return { label: "Needs login", variant: "warning" };
     }
-  } else if ((authMode === "api-key" || authMode === "token") && !hasServiceSecret) {
+  } else if (
+    (authMode === "api-key" || authMode === "token") &&
+    !hasServiceSecret
+  ) {
     return { label: "Needs secret", variant: "warning" };
   }
-  if (runtime?.auth_state === "verified" || runtime?.verification_state === "runtime") {
+  if (
+    runtime?.auth_state === "verified" ||
+    runtime?.verification_state === "runtime"
+  ) {
     return { label: "Verified", variant: "success" };
   }
   if (hasSelectedModels || authMode) {
@@ -214,23 +290,30 @@ export function PresetIntegrationEditor({
   onEnabledModelRefsChange,
 }: PresetIntegrationEditorProps) {
   const [pendingPresetId, setPendingPresetId] = useState<string>("");
-  const [editorProviderId, setEditorProviderId] = useState<string | null>(null);
-  const [secretModes, setSecretModes] = useState<Record<string, SecretEntryMode>>(
-    {},
+  const [editorDraft, setEditorDraft] = useState<PresetIntegrationDraft | null>(
+    null,
   );
+  const [secretModes, setSecretModes] = useState<
+    Record<string, SecretEntryMode>
+  >({});
 
   const compatiblePresets = useMemo(
     () =>
-      toolchainCatalog.filter((preset) => preset.node_classes.includes(nodeClass)),
+      toolchainCatalog.filter((preset) =>
+        preset.node_classes.includes(nodeClass),
+      ),
     [nodeClass, toolchainCatalog],
   );
   const presetByProviderId = useMemo(
-    () => new Map(compatiblePresets.map((preset) => [preset.provider_id, preset])),
+    () =>
+      new Map(compatiblePresets.map((preset) => [preset.provider_id, preset])),
     [compatiblePresets],
   );
   const runtimeByProviderId = useMemo(
     () =>
-      new Map(runtimeProviderSummaries.map((provider) => [provider.id, provider])),
+      new Map(
+        runtimeProviderSummaries.map((provider) => [provider.id, provider]),
+      ),
     [runtimeProviderSummaries],
   );
   const providerConfigById = useMemo(
@@ -239,47 +322,28 @@ export function PresetIntegrationEditor({
   );
   const providerAuthById = useMemo(
     () =>
-      new Map(providerAuthConfigs.map((config) => [config.provider_id, config])),
+      new Map(
+        providerAuthConfigs.map((config) => [config.provider_id, config]),
+      ),
     [providerAuthConfigs],
   );
-  const secretRefByScope = useMemo(
-    () =>
-      new Map(
-        providerSecretRefs.map((secretRef) => [
-          secretScopeKey(secretRef.provider_id, secretRef.purpose),
-          secretRef,
-        ]),
-      ),
-    [providerSecretRefs],
-  );
-  const secretInputByScope = useMemo(
-    () =>
-      new Map(
-        providerSecretInputs.map((secretInput) => [
-          secretScopeKey(secretInput.provider_id, secretInput.purpose),
-          secretInput,
-        ]),
-      ),
-    [providerSecretInputs],
-  );
-  const modelRefsByProvider = useMemo(() => {
-    const next = new Map<string, Set<string>>();
-    for (const definition of modelDefinitions) {
-      const current = next.get(definition.provider_id) ?? new Set<string>();
-      current.add(providerRef(definition.provider_id, definition.model_id));
-      next.set(definition.provider_id, current);
-    }
-    return next;
-  }, [modelDefinitions]);
   const activeProviderIds = useMemo(() => {
     const ids = new Set<string>();
     for (const provider of compatiblePresets) {
       if (
         providerConfigs.some((item) => item.id === provider.provider_id) ||
-        providerAuthConfigs.some((item) => item.provider_id === provider.provider_id) ||
-        modelDefinitions.some((item) => item.provider_id === provider.provider_id) ||
-        providerSecretRefs.some((item) => item.provider_id === provider.provider_id) ||
-        providerSecretInputs.some((item) => item.provider_id === provider.provider_id)
+        providerAuthConfigs.some(
+          (item) => item.provider_id === provider.provider_id,
+        ) ||
+        modelDefinitions.some(
+          (item) => item.provider_id === provider.provider_id,
+        ) ||
+        providerSecretRefs.some(
+          (item) => item.provider_id === provider.provider_id,
+        ) ||
+        providerSecretInputs.some(
+          (item) => item.provider_id === provider.provider_id,
+        )
       ) {
         ids.add(provider.provider_id);
       }
@@ -309,7 +373,9 @@ export function PresetIntegrationEditor({
     if (!availablePresetOptions.length) {
       return "";
     }
-    return availablePresetOptions.some((option) => option.value === pendingPresetId)
+    return availablePresetOptions.some(
+      (option) => option.value === pendingPresetId,
+    )
       ? pendingPresetId
       : (availablePresetOptions[0]?.value ?? "");
   }, [availablePresetOptions, pendingPresetId]);
@@ -319,89 +385,93 @@ export function PresetIntegrationEditor({
   );
   const pendingPreset = useMemo(
     () =>
-      compatiblePresets.find((preset) => preset.provider_id === resolvedPendingPresetId) ??
-      null,
+      compatiblePresets.find(
+        (preset) => preset.provider_id === resolvedPendingPresetId,
+      ) ?? null,
     [compatiblePresets, resolvedPendingPresetId],
   );
-  const activeProviderIdSet = useMemo(
-    () => new Set(activeProviderIds),
-    [activeProviderIds],
-  );
-  const resolvedEditorProviderId = useMemo(() => {
-    if (!editorProviderId || !activeProviderIdSet.has(editorProviderId)) {
-      return null;
-    }
-    return editorProviderId;
-  }, [activeProviderIdSet, editorProviderId]);
-
-  const replaceProviderSecretsForPurpose = (
-    providerId: string,
-    purpose: string,
-    nextSecretRef: GatewayProviderSecretRef | null,
-  ) => {
-    if (!onProviderSecretRefsChange) {
-      return;
-    }
-    const filtered = providerSecretRefs.filter(
-      (item) => !(item.provider_id === providerId && item.purpose === purpose),
-    );
-    onProviderSecretRefsChange(nextSecretRef ? [...filtered, nextSecretRef] : filtered);
-  };
-
-  const replaceProviderSecretInput = (
-    providerId: string,
-    purpose: string,
-    nextSecretInput: GatewayProviderSecretInput | null,
-  ) => {
-    if (!onProviderSecretInputsChange) {
-      return;
-    }
-    const filtered = providerSecretInputs.filter(
-      (item) => !(item.provider_id === providerId && item.purpose === purpose),
-    );
-    onProviderSecretInputsChange(
-      nextSecretInput ? [...filtered, nextSecretInput] : filtered,
-    );
-  };
-
-  const getPresetIntegrationState = (
-    providerId: string,
-  ): PresetIntegrationState | null => {
-    const preset = presetByProviderId.get(providerId);
-    if (!preset) {
-      return null;
-    }
-    const providerConfig =
-      providerConfigById.get(providerId) ?? buildProviderConfig(preset);
+  const buildPresetIntegrationState = (
+    preset: ToolchainCatalogProviderPreset,
+    {
+      providerConfig,
+      authConfig,
+      providerModelDefinitions,
+      providerEnabledModelRefs,
+      providerScopedSecretRefs,
+      providerScopedSecretInputs,
+    }: {
+      providerConfig: GatewayProviderConfig;
+      authConfig: GatewayProviderAuthConfig;
+      providerModelDefinitions: GatewayModelDefinition[];
+      providerEnabledModelRefs: string[];
+      providerScopedSecretRefs: GatewayProviderSecretRef[];
+      providerScopedSecretInputs: GatewayProviderSecretInput[];
+    },
+  ): PresetIntegrationState => {
     const allowedModes = getPresetAllowedAuthModes(preset, nodeClass);
-    const authConfig = providerAuthById.get(providerId);
     const authMode =
-      allowedModes.find((mode) => mode === authConfig?.auth_mode) ??
+      allowedModes.find((mode) => mode === authConfig.auth_mode) ??
       allowedModes[0] ??
-      "api-key";
-    const runtime = runtimeByProviderId.get(providerId);
+      authConfig.auth_mode;
+    const runtime = runtimeByProviderId.get(preset.provider_id);
+    const secretRefByScope = new Map(
+      providerScopedSecretRefs.map((secretRef) => [
+        secretScopeKey(secretRef.provider_id, secretRef.purpose),
+        secretRef,
+      ]),
+    );
+    const secretInputByScope = new Map(
+      providerScopedSecretInputs.map((secretInput) => [
+        secretScopeKey(secretInput.provider_id, secretInput.purpose),
+        secretInput,
+      ]),
+    );
+    const selectedModelRefs = new Set(
+      providerModelDefinitions.map((definition) =>
+        providerRef(definition.provider_id, definition.model_id),
+      ),
+    );
     const servicePurpose = servicePurposeForMode(authMode);
     const hasServiceSecret = servicePurpose
       ? Boolean(
-          secretRefByScope.get(secretScopeKey(providerId, servicePurpose)) ||
-            secretInputByScope.get(secretScopeKey(providerId, servicePurpose))?.value,
+          secretRefByScope.get(
+            secretScopeKey(preset.provider_id, servicePurpose),
+          ) ||
+          secretInputByScope.get(
+            secretScopeKey(preset.provider_id, servicePurpose),
+          )?.value,
         )
       : true;
-    const selectedModelRefs = modelRefsByProvider.get(providerId) ?? new Set<string>();
+    const scopedEnabledModelRefs = dedupeModelRefs(
+      providerEnabledModelRefs.filter((ref) =>
+        ref.startsWith(`${preset.provider_id}/`),
+      ),
+    );
     const selectedModelCount = preset.models.filter((model) =>
-      selectedModelRefs.has(providerRef(providerId, model.model_id)),
+      selectedModelRefs.has(providerRef(preset.provider_id, model.model_id)),
     ).length;
     const enabledModelCount = preset.models.filter((model) =>
-      enabledModelRefs.includes(providerRef(providerId, model.model_id)),
+      scopedEnabledModelRefs.includes(
+        providerRef(preset.provider_id, model.model_id),
+      ),
     ).length;
     return {
       preset,
       providerConfig,
       allowedModes,
+      authConfig: {
+        ...authConfig,
+        auth_mode: authMode,
+      },
       authMode,
       runtime,
+      providerSecretRefs: providerScopedSecretRefs,
+      providerSecretInputs: providerScopedSecretInputs,
+      modelDefinitions: providerModelDefinitions,
+      enabledModelRefs: scopedEnabledModelRefs,
       hasServiceSecret,
       selectedModelRefs,
+      availableModelCount: preset.models.length,
       selectedModelCount,
       enabledModelCount,
       status: integrationStatus(
@@ -413,53 +483,139 @@ export function PresetIntegrationEditor({
     };
   };
 
-  const editorIntegration = resolvedEditorProviderId
-    ? getPresetIntegrationState(resolvedEditorProviderId)
-    : null;
+  const buildDraftForPreset = (
+    preset: ToolchainCatalogProviderPreset,
+    mode: "new" | "existing",
+  ): PresetIntegrationDraft => {
+    const providerId = preset.provider_id;
+    const allowedModes = getPresetAllowedAuthModes(preset, nodeClass);
+    const existingAuthConfig = providerAuthById.get(providerId) ?? null;
+    const nextAuthMode =
+      allowedModes.find(
+        (modeValue) => modeValue === existingAuthConfig?.auth_mode,
+      ) ??
+      allowedModes[0] ??
+      "api-key";
+    const providerScopedDefinitions = modelDefinitions.filter(
+      (definition) => definition.provider_id === providerId,
+    );
+    const providerScopedEnabledModelRefs = enabledModelRefs.filter((ref) =>
+      ref.startsWith(`${providerId}/`),
+    );
+    return {
+      mode,
+      preset,
+      providerConfig:
+        providerConfigById.get(providerId) ?? buildProviderConfig(preset),
+      authConfig: buildProviderAuthConfig(
+        preset,
+        nextAuthMode,
+        existingAuthConfig,
+      ),
+      modelDefinitions:
+        mode === "new"
+          ? defaultModelDefinitionsForPreset(preset)
+          : ensurePresetDefinitionsForEnabledRefs(
+              preset,
+              providerScopedDefinitions,
+              providerScopedEnabledModelRefs,
+            ),
+      enabledModelRefs:
+        mode === "new"
+          ? defaultEnabledModelRefsForPreset(preset)
+          : dedupeModelRefs(providerScopedEnabledModelRefs),
+      providerSecretRefs: providerSecretRefs.filter(
+        (secretRef) => secretRef.provider_id === providerId,
+      ),
+      providerSecretInputs: providerSecretInputs.filter(
+        (secretInput) => secretInput.provider_id === providerId,
+      ),
+    };
+  };
 
-  const ensurePresetIntegration = (presetId: string) => {
+  const openPresetIntegrationDraft = (
+    presetId: string,
+    modeOverride?: "new" | "existing",
+  ) => {
     const preset = presetByProviderId.get(presetId);
     if (!preset) {
       return;
     }
-    const allowedModes = getPresetAllowedAuthModes(preset, nodeClass);
-    const nextAuthMode = allowedModes[0] ?? "api-key";
-    const selectedModels = preset.models
-      .filter((model) => model.enabled_by_default !== false)
-      .map((model) => buildModelDefinition(preset, model.model_id))
-      .filter((model): model is GatewayModelDefinition => Boolean(model));
-
-    onProviderConfigsChange?.([
-      ...providerConfigs.filter((provider) => provider.id !== preset.provider_id),
-      buildProviderConfig(preset),
-    ]);
-    onProviderAuthConfigsChange?.([
-      ...providerAuthConfigs.filter(
-        (config) => config.provider_id !== preset.provider_id,
+    setEditorDraft(
+      buildDraftForPreset(
+        preset,
+        modeOverride ??
+          (activeProviderIds.includes(preset.provider_id) ? "existing" : "new"),
       ),
-      buildProviderAuthConfig(preset, nextAuthMode),
-    ]);
-    onModelDefinitionsChange?.([
-      ...modelDefinitions.filter(
-        (definition) => definition.provider_id !== preset.provider_id,
-      ),
-      ...selectedModels,
-    ]);
-    onEnabledModelRefsChange?.(
-      dedupeModelRefs([
-        ...enabledModelRefs.filter(
-          (ref) => !ref.startsWith(`${preset.provider_id}/`),
-        ),
-        ...selectedModels.map((model) =>
-          providerRef(model.provider_id, model.model_id),
-        ),
-      ]),
     );
-    setEditorProviderId(preset.provider_id);
+  };
+
+  const getPresetIntegrationState = (
+    providerId: string,
+  ): PresetIntegrationState | null => {
+    const preset = presetByProviderId.get(providerId);
+    if (!preset) {
+      return null;
+    }
+    return buildPresetIntegrationState(preset, {
+      providerConfig:
+        providerConfigById.get(providerId) ?? buildProviderConfig(preset),
+      authConfig:
+        providerAuthById.get(providerId) ??
+        buildProviderAuthConfig(
+          preset,
+          getPresetAllowedAuthModes(preset, nodeClass)[0] ?? "api-key",
+        ),
+      providerModelDefinitions: modelDefinitions.filter(
+        (definition) => definition.provider_id === providerId,
+      ),
+      providerEnabledModelRefs: enabledModelRefs.filter((ref) =>
+        ref.startsWith(`${providerId}/`),
+      ),
+      providerScopedSecretRefs: providerSecretRefs.filter(
+        (secretRef) => secretRef.provider_id === providerId,
+      ),
+      providerScopedSecretInputs: providerSecretInputs.filter(
+        (secretInput) => secretInput.provider_id === providerId,
+      ),
+    });
+  };
+
+  const editorIntegration = editorDraft
+    ? buildPresetIntegrationState(editorDraft.preset, {
+        providerConfig: editorDraft.providerConfig,
+        authConfig: editorDraft.authConfig,
+        providerModelDefinitions: editorDraft.modelDefinitions,
+        providerEnabledModelRefs: editorDraft.enabledModelRefs,
+        providerScopedSecretRefs: editorDraft.providerSecretRefs,
+        providerScopedSecretInputs: editorDraft.providerSecretInputs,
+      })
+    : null;
+
+  const replaceDraftProviderSecretInput = (
+    purpose: string,
+    nextSecretInput: GatewayProviderSecretInput | null,
+  ) => {
+    setEditorDraft((current) => {
+      if (!current) {
+        return current;
+      }
+      const filtered = current.providerSecretInputs.filter(
+        (item) => item.purpose !== purpose,
+      );
+      return {
+        ...current,
+        providerSecretInputs: nextSecretInput
+          ? [...filtered, nextSecretInput]
+          : filtered,
+      };
+    });
   };
 
   const removePresetIntegration = (providerId: string) => {
-    setEditorProviderId((current) => (current === providerId ? null : current));
+    setEditorDraft((current) =>
+      current?.preset.provider_id === providerId ? null : current,
+    );
     onProviderConfigsChange?.(
       providerConfigs.filter((provider) => provider.id !== providerId),
     );
@@ -467,128 +623,216 @@ export function PresetIntegrationEditor({
       providerAuthConfigs.filter((config) => config.provider_id !== providerId),
     );
     onModelDefinitionsChange?.(
-      modelDefinitions.filter((definition) => definition.provider_id !== providerId),
+      modelDefinitions.filter(
+        (definition) => definition.provider_id !== providerId,
+      ),
     );
     onProviderSecretRefsChange?.(
-      providerSecretRefs.filter((secretRef) => secretRef.provider_id !== providerId),
+      providerSecretRefs.filter(
+        (secretRef) => secretRef.provider_id !== providerId,
+      ),
     );
     onProviderSecretInputsChange?.(
-      providerSecretInputs.filter((secretInput) => secretInput.provider_id !== providerId),
+      providerSecretInputs.filter(
+        (secretInput) => secretInput.provider_id !== providerId,
+      ),
     );
     onEnabledModelRefsChange?.(
       enabledModelRefs.filter((ref) => !ref.startsWith(`${providerId}/`)),
     );
   };
 
-  const updateProviderAuthMode = (
-    preset: ToolchainCatalogProviderPreset,
-    nextAuthMode: ProviderAuthMode,
-  ) => {
-    const existing = providerAuthById.get(preset.provider_id) ?? null;
-    const nextPurpose = servicePurposeForMode(nextAuthMode);
-    const previousPurpose = servicePurposeForMode(existing?.auth_mode);
+  const updateDraftProviderAuthMode = (nextAuthMode: ProviderAuthMode) => {
+    setEditorDraft((current) => {
+      if (!current) {
+        return current;
+      }
+      const nextPurpose = servicePurposeForMode(nextAuthMode);
+      const previousPurpose = servicePurposeForMode(
+        current.authConfig.auth_mode,
+      );
+      let nextSecretRefs = current.providerSecretRefs;
+      let nextSecretInputs = current.providerSecretInputs;
 
+      if (previousPurpose && nextPurpose && previousPurpose !== nextPurpose) {
+        const existingRef =
+          current.providerSecretRefs.find(
+            (item) => item.purpose === previousPurpose,
+          ) ?? null;
+        const existingInput =
+          current.providerSecretInputs.find(
+            (item) => item.purpose === previousPurpose,
+          ) ?? null;
+        nextSecretRefs = current.providerSecretRefs.filter(
+          (item) =>
+            item.purpose !== previousPurpose && item.purpose !== nextPurpose,
+        );
+        nextSecretInputs = current.providerSecretInputs.filter(
+          (item) =>
+            item.purpose !== previousPurpose && item.purpose !== nextPurpose,
+        );
+        if (existingRef) {
+          nextSecretRefs = [
+            ...nextSecretRefs,
+            { ...existingRef, purpose: nextPurpose },
+          ];
+        }
+        if (existingInput) {
+          nextSecretInputs = [
+            ...nextSecretInputs,
+            { ...existingInput, purpose: nextPurpose },
+          ];
+        }
+      } else if (!nextPurpose) {
+        nextSecretRefs = current.providerSecretRefs.filter(
+          (item) => item.purpose !== "apiKey" && item.purpose !== "token",
+        );
+        nextSecretInputs = current.providerSecretInputs.filter(
+          (item) => item.purpose !== "apiKey" && item.purpose !== "token",
+        );
+      }
+
+      return {
+        ...current,
+        authConfig: buildProviderAuthConfig(
+          current.preset,
+          nextAuthMode,
+          current.authConfig,
+        ),
+        providerSecretRefs: nextSecretRefs,
+        providerSecretInputs: nextSecretInputs,
+      };
+    });
+  };
+
+  const toggleDraftPresetModel = (modelId: string, checked: boolean) => {
+    setEditorDraft((current) => {
+      if (!current) {
+        return current;
+      }
+      const definition = buildModelDefinition(current.preset, modelId);
+      if (!definition) {
+        return current;
+      }
+      const modelRefValue = providerRef(current.preset.provider_id, modelId);
+      const filteredDefinitions = current.modelDefinitions.filter(
+        (item) =>
+          !(
+            item.provider_id === current.preset.provider_id &&
+            item.model_id === modelId
+          ),
+      );
+      return {
+        ...current,
+        modelDefinitions: checked
+          ? [...filteredDefinitions, definition]
+          : filteredDefinitions,
+        enabledModelRefs: checked
+          ? current.enabledModelRefs
+          : current.enabledModelRefs.filter((ref) => ref !== modelRefValue),
+      };
+    });
+  };
+
+  const toggleDraftEnabledModel = (modelId: string, checked: boolean) => {
+    setEditorDraft((current) => {
+      if (!current) {
+        return current;
+      }
+      const modelRefValue = providerRef(current.preset.provider_id, modelId);
+      const selectedModels = new Set(
+        current.modelDefinitions.map((definition) =>
+          providerRef(definition.provider_id, definition.model_id),
+        ),
+      );
+      const ensuredDefinitions =
+        checked && !selectedModels.has(modelRefValue)
+          ? (() => {
+              const definition = buildModelDefinition(current.preset, modelId);
+              return definition
+                ? [...current.modelDefinitions, definition]
+                : current.modelDefinitions;
+            })()
+          : current.modelDefinitions;
+      return {
+        ...current,
+        modelDefinitions: ensuredDefinitions,
+        enabledModelRefs: checked
+          ? dedupeModelRefs([...current.enabledModelRefs, modelRefValue])
+          : current.enabledModelRefs.filter((ref) => ref !== modelRefValue),
+      };
+    });
+  };
+
+  const saveEditorDraft = () => {
+    if (!editorDraft) {
+      return;
+    }
+    const providerId = editorDraft.preset.provider_id;
+    onProviderConfigsChange?.([
+      ...providerConfigs.filter((provider) => provider.id !== providerId),
+      editorDraft.providerConfig,
+    ]);
     onProviderAuthConfigsChange?.([
       ...providerAuthConfigs.filter(
-        (config) => config.provider_id !== preset.provider_id,
+        (config) => config.provider_id !== providerId,
       ),
-      buildProviderAuthConfig(preset, nextAuthMode, existing),
+      editorDraft.authConfig,
     ]);
-
-    if (previousPurpose && nextPurpose && previousPurpose !== nextPurpose) {
-      const existingRef = secretRefByScope.get(
-        secretScopeKey(preset.provider_id, previousPurpose),
-      );
-      const existingInput = secretInputByScope.get(
-        secretScopeKey(preset.provider_id, previousPurpose),
-      );
-      replaceProviderSecretsForPurpose(
-        preset.provider_id,
-        previousPurpose,
-        null,
-      );
-      replaceProviderSecretInput(
-        preset.provider_id,
-        previousPurpose,
-        null,
-      );
-      if (existingRef) {
-        replaceProviderSecretsForPurpose(preset.provider_id, nextPurpose, {
-          ...existingRef,
-          purpose: nextPurpose,
-        });
-      }
-      if (existingInput) {
-        replaceProviderSecretInput(preset.provider_id, nextPurpose, {
-          ...existingInput,
-          purpose: nextPurpose,
-        });
-      }
-    }
+    onModelDefinitionsChange?.([
+      ...modelDefinitions.filter(
+        (definition) => definition.provider_id !== providerId,
+      ),
+      ...editorDraft.modelDefinitions,
+    ]);
+    onProviderSecretRefsChange?.([
+      ...providerSecretRefs.filter(
+        (secretRef) => secretRef.provider_id !== providerId,
+      ),
+      ...editorDraft.providerSecretRefs,
+    ]);
+    onProviderSecretInputsChange?.([
+      ...providerSecretInputs.filter(
+        (secretInput) => secretInput.provider_id !== providerId,
+      ),
+      ...editorDraft.providerSecretInputs,
+    ]);
+    onEnabledModelRefsChange?.(
+      dedupeModelRefs([
+        ...enabledModelRefs.filter((ref) => !ref.startsWith(`${providerId}/`)),
+        ...editorDraft.enabledModelRefs,
+      ]),
+    );
+    setEditorDraft(null);
   };
 
-  const togglePresetModel = (
-    preset: ToolchainCatalogProviderPreset,
-    modelId: string,
-    checked: boolean,
-  ) => {
-    const definition = buildModelDefinition(preset, modelId);
-    if (!definition || !onModelDefinitionsChange) {
-      return;
-    }
-    const modelRefValue = providerRef(preset.provider_id, modelId);
-    const filtered = modelDefinitions.filter(
-      (item) =>
-        !(item.provider_id === preset.provider_id && item.model_id === modelId),
-    );
-    onModelDefinitionsChange(
-      checked ? [...filtered, definition] : filtered,
-    );
-    if (!checked) {
-      onEnabledModelRefsChange?.(
-        enabledModelRefs.filter((ref) => ref !== modelRefValue),
-      );
-    }
-  };
-
-  const toggleEnabledModel = (
-    preset: ToolchainCatalogProviderPreset,
-    modelId: string,
-    checked: boolean,
-  ) => {
-    if (!onEnabledModelRefsChange) {
-      return;
-    }
-    const modelRefValue = providerRef(preset.provider_id, modelId);
-    const selectedModels = modelRefsByProvider.get(preset.provider_id) ?? new Set<string>();
-    if (!selectedModels.has(modelRefValue) && checked) {
-      togglePresetModel(preset, modelId, true);
-    }
-    onEnabledModelRefsChange(
-      checked
-        ? dedupeModelRefs([...enabledModelRefs, modelRefValue])
-        : enabledModelRefs.filter((ref) => ref !== modelRefValue),
-    );
-  };
-
-  const renderSecretEditor = (
-    preset: ToolchainCatalogProviderPreset,
-    authMode: ProviderAuthMode,
-  ) => {
+  const renderSecretEditor = (integration: PresetIntegrationState) => {
+    const { preset, authMode, providerSecretRefs, providerSecretInputs } =
+      integration;
     const purpose = servicePurposeForMode(authMode);
     if (!purpose) {
       return (
         <div className="rounded-lg border border-[color:var(--border)] bg-[color:var(--surface)] px-4 py-3 text-sm text-muted">
-          Interactive auth is configured on this node. Save first, then use the
-          node detail page to connect, refresh, or disconnect the provider
-          session.
+          Interactive auth runs on the{" "}
+          {nodeClass === "cloud" ? "remote cloud" : "selected"} node session.
+          Save this integration, then save the node and continue from the node
+          detail page to connect, refresh, or disconnect the provider session.
         </div>
       );
     }
 
     const scope = secretScopeKey(preset.provider_id, purpose);
-    const existingSecret = secretRefByScope.get(scope);
-    const pendingSecret = secretInputByScope.get(scope);
+    const existingSecret =
+      providerSecretRefs.find(
+        (secretRef) =>
+          secretScopeKey(secretRef.provider_id, secretRef.purpose) === scope,
+      ) ?? null;
+    const pendingSecret =
+      providerSecretInputs.find(
+        (secretInput) =>
+          secretScopeKey(secretInput.provider_id, secretInput.purpose) ===
+          scope,
+      ) ?? null;
     const selectedMode =
       secretModes[scope] ?? (existingSecret ? "existing" : "paste-once");
 
@@ -605,20 +849,28 @@ export function PresetIntegrationEditor({
           </div>
           <Select
             value={selectedMode}
-            onValueChange={(value) =>
+            onValueChange={(value) => {
+              const nextMode = value as SecretEntryMode;
               setSecretModes((current) => ({
                 ...current,
-                [scope]: value as SecretEntryMode,
-              }))
+                [scope]: nextMode,
+              }));
+              if (nextMode === "existing") {
+                replaceDraftProviderSecretInput(purpose, null);
+              }
+            }}
+            disabled={
+              isLoading || (selectedMode === "existing" && !existingSecret)
             }
-            disabled={isLoading || (selectedMode === "existing" && !existingSecret)}
           >
             <SelectTrigger className="w-full max-w-[16rem]">
               <SelectValue placeholder="Choose secret flow" />
             </SelectTrigger>
             <SelectContent>
               {existingSecret ? (
-                <SelectItem value="existing">Use existing secret alias</SelectItem>
+                <SelectItem value="existing">
+                  Use existing secret alias
+                </SelectItem>
               ) : null}
               <SelectItem value="paste-once">Paste once</SelectItem>
             </SelectContent>
@@ -637,7 +889,8 @@ export function PresetIntegrationEditor({
                 : ""}
             </p>
             <p className="mt-2 text-xs text-muted">
-              Mission Control will keep using this stored secret and will not show the value again.
+              Mission Control will keep using this stored secret and will not
+              show the value again.
             </p>
           </div>
         ) : (
@@ -650,7 +903,7 @@ export function PresetIntegrationEditor({
                 type="password"
                 value={pendingSecret?.value ?? ""}
                 onChange={(event) =>
-                  replaceProviderSecretInput(preset.provider_id, purpose, {
+                  replaceDraftProviderSecretInput(purpose, {
                     provider_id: preset.provider_id,
                     purpose,
                     mode: "paste-once",
@@ -667,7 +920,9 @@ export function PresetIntegrationEditor({
                 disabled={isLoading}
               />
               <p className="text-[11px] leading-5 text-muted">
-                The pasted value is write-only. Mission Control stores it in the configured secret backend and will only show alias metadata after save.
+                The pasted value is write-only. Mission Control stores it in the
+                configured secret backend and will only show alias metadata
+                after save.
               </p>
             </div>
             <div className="space-y-2">
@@ -679,10 +934,10 @@ export function PresetIntegrationEditor({
                 onChange={(event) => {
                   const nextValue = pendingSecret?.value ?? "";
                   if (!nextValue.trim() && !event.target.value.trim()) {
-                    replaceProviderSecretInput(preset.provider_id, purpose, null);
+                    replaceDraftProviderSecretInput(purpose, null);
                     return;
                   }
-                  replaceProviderSecretInput(preset.provider_id, purpose, {
+                  replaceDraftProviderSecretInput(purpose, {
                     provider_id: preset.provider_id,
                     purpose,
                     mode: "paste-once",
@@ -711,6 +966,10 @@ export function PresetIntegrationEditor({
       authMode,
       runtime,
       selectedModelRefs,
+      enabledModelRefs: integrationEnabledModelRefs,
+      availableModelCount,
+      selectedModelCount,
+      enabledModelCount,
     } = integration;
     return (
       <>
@@ -749,7 +1008,7 @@ export function PresetIntegrationEditor({
                     key={`${preset.provider_id}-${mode}`}
                     type="button"
                     disabled={isLoading || isSelected}
-                    onClick={() => updateProviderAuthMode(preset, mode)}
+                    onClick={() => updateDraftProviderAuthMode(mode)}
                     className={`rounded-xl border px-4 py-3 text-left transition ${
                       isSelected
                         ? "border-[color:var(--accent)] bg-[color:var(--accent-soft)]/35"
@@ -774,22 +1033,27 @@ export function PresetIntegrationEditor({
           </div>
         </div>
 
-        <div className="mt-4">{renderSecretEditor(preset, authMode)}</div>
+        <div className="mt-4">{renderSecretEditor(integration)}</div>
 
         <div className="mt-4 rounded-lg border border-[color:var(--border)] bg-[color:var(--surface)] p-4">
           <div className="space-y-1">
             <p className="text-sm font-medium text-strong">Models</p>
             <p className="text-xs text-muted">
-              Choose the models this node should manage for {preset.display_label},
-              then decide which of the selected models are available to agents and
-              product leads.
+              Choose the models this node should manage for{" "}
+              {preset.display_label}, then decide which of the selected models
+              are available to agents and product leads.
             </p>
+          </div>
+          <div className="mt-4 flex flex-wrap gap-2">
+            <Badge variant="outline">{availableModelCount} available</Badge>
+            <Badge variant="outline">{selectedModelCount} selected</Badge>
+            <Badge variant="outline">{enabledModelCount} enabled</Badge>
           </div>
           <div className="mt-4 space-y-3">
             {preset.models.map((model) => {
               const ref = providerRef(preset.provider_id, model.model_id);
               const selected = selectedModelRefs.has(ref);
-              const enabled = enabledModelRefs.includes(ref);
+              const enabled = integrationEnabledModelRefs.includes(ref);
               return (
                 <div
                   key={ref}
@@ -803,8 +1067,7 @@ export function PresetIntegrationEditor({
                         checked={selected}
                         disabled={isLoading}
                         onChange={(event) =>
-                          togglePresetModel(
-                            preset,
+                          toggleDraftPresetModel(
                             model.model_id,
                             event.target.checked,
                           )
@@ -817,8 +1080,8 @@ export function PresetIntegrationEditor({
                         </p>
                         {model.enabled_by_default === false ? (
                           <p className="mt-2 text-[11px] text-muted">
-                            Available on demand. Mission Control keeps it out of the
-                            initial managed set until you opt in.
+                            Available on demand. Mission Control keeps it out of
+                            the initial managed set until you opt in.
                           </p>
                         ) : null}
                       </div>
@@ -828,10 +1091,9 @@ export function PresetIntegrationEditor({
                         type="checkbox"
                         className="h-4 w-4 rounded border-[color:var(--border)] text-[color:var(--accent)] focus:ring-[color:var(--accent)]"
                         checked={enabled}
-                        disabled={isLoading || !onEnabledModelRefsChange}
+                        disabled={isLoading}
                         onChange={(event) =>
-                          toggleEnabledModel(
-                            preset,
+                          toggleDraftEnabledModel(
                             model.model_id,
                             event.target.checked,
                           )
@@ -885,7 +1147,8 @@ export function PresetIntegrationEditor({
   if (!compatiblePresets.length) {
     return (
       <div className="rounded-xl border border-dashed border-[color:var(--border)] bg-[color:var(--surface)] px-4 py-5 text-sm text-muted">
-        No guided provider presets are available for this node class yet. Use the Advanced / Custom integration tab for raw provider setup.
+        No guided provider presets are available for this node class yet. Use
+        the Advanced runtime surface for raw provider setup.
       </div>
     );
   }
@@ -916,7 +1179,9 @@ export function PresetIntegrationEditor({
               !resolvedPendingPresetId ||
               !presetByProviderId.has(resolvedPendingPresetId)
             }
-            onClick={() => ensurePresetIntegration(resolvedPendingPresetId)}
+            onClick={() =>
+              openPresetIntegrationDraft(resolvedPendingPresetId, "new")
+            }
           >
             Add and configure
           </Button>
@@ -924,15 +1189,26 @@ export function PresetIntegrationEditor({
         {pendingPreset ? (
           <div className="mt-4 rounded-xl border border-[color:var(--border)] bg-[color:var(--surface)] p-4">
             <div className="flex flex-wrap gap-2">
-              <Badge variant="outline">{getPresetProductLine(pendingPreset)}</Badge>
-              <Badge variant="outline">{getPresetScopeLabel(pendingPreset)}</Badge>
-              {getPresetAllowedAuthModes(pendingPreset, nodeClass).map((mode) => (
-                <Badge key={`${pendingPreset.provider_id}-${mode}`} variant="outline">
-                  {providerAuthModeLabel(mode)}
-                </Badge>
-              ))}
+              <Badge variant="outline">
+                {getPresetProductLine(pendingPreset)}
+              </Badge>
+              <Badge variant="outline">
+                {getPresetScopeLabel(pendingPreset)}
+              </Badge>
+              {getPresetAllowedAuthModes(pendingPreset, nodeClass).map(
+                (mode) => (
+                  <Badge
+                    key={`${pendingPreset.provider_id}-${mode}`}
+                    variant="outline"
+                  >
+                    {providerAuthModeLabel(mode)}
+                  </Badge>
+                ),
+              )}
             </div>
-            <p className="mt-3 text-sm text-strong">{getPresetSummary(pendingPreset)}</p>
+            <p className="mt-3 text-sm text-strong">
+              {getPresetSummary(pendingPreset)}
+            </p>
             <p className="mt-2 text-xs text-muted">
               {pendingPreset.models.length} model
               {pendingPreset.models.length === 1 ? "" : "s"} ready:{" "}
@@ -969,13 +1245,16 @@ export function PresetIntegrationEditor({
         <p className="mt-3 text-xs text-muted">
           Choose a supported provider preset first. Mission Control fills in the
           provider id, endpoint, and model catalog automatically, then keeps the
-          guided flow focused on the auth path that actually fits this node.
+          guided flow focused on the auth path that actually fits this node. Raw
+          runtime-only providers stay under Advanced runtime.
         </p>
       </div>
 
       {activeProviderIds.length === 0 ? (
         <div className="rounded-xl border border-dashed border-[color:var(--border)] bg-[color:var(--surface)] px-4 py-5 text-sm text-muted">
-          No preset integrations configured yet. Add one above to get a guided provider, auth, and model flow instead of typing raw node runtime metadata.
+          No preset integrations configured yet. Add one above to get a guided
+          provider, auth, and model flow instead of typing raw node runtime
+          metadata.
         </div>
       ) : null}
 
@@ -1029,7 +1308,9 @@ export function PresetIntegrationEditor({
                       variant="outline"
                       size="sm"
                       disabled={isLoading}
-                      onClick={() => setEditorProviderId(providerId)}
+                      onClick={() =>
+                        openPresetIntegrationDraft(providerId, "existing")
+                      }
                     >
                       Configure
                     </Button>
@@ -1045,7 +1326,9 @@ export function PresetIntegrationEditor({
                   </div>
                 </div>
                 <div className="mt-4 flex flex-wrap gap-2">
-                  <Badge variant="outline">{getPresetProductLine(preset)}</Badge>
+                  <Badge variant="outline">
+                    {getPresetProductLine(preset)}
+                  </Badge>
                   <Badge variant="outline">{getPresetScopeLabel(preset)}</Badge>
                   <Badge variant="outline">{selectedModelCount} selected</Badge>
                   <Badge variant="outline">{enabledModelCount} enabled</Badge>
@@ -1057,7 +1340,9 @@ export function PresetIntegrationEditor({
                 </div>
                 <p className="mt-3 text-xs text-muted">
                   {interactiveAuth
-                    ? "Interactive auth continues from the node detail page after you save this node."
+                    ? nodeClass === "cloud"
+                      ? "Interactive auth continues from the node detail page after you save this cloud node. The sign-in session is stored on the remote node."
+                      : "Interactive auth continues from the node detail page after you save this local node."
                     : hasServiceSecret
                       ? "Service-auth details are staged in this form and will be stored when you save the node."
                       : "Open Configure to attach the service secret before you save this node."}
@@ -1072,7 +1357,7 @@ export function PresetIntegrationEditor({
         open={Boolean(editorIntegration)}
         onOpenChange={(open) => {
           if (!open) {
-            setEditorProviderId(null);
+            setEditorDraft(null);
           }
         }}
       >
@@ -1091,12 +1376,21 @@ export function PresetIntegrationEditor({
             </div>
             <DialogFooter className="mt-6">
               <p className="mr-auto text-xs text-muted">
-                Save the node when you are done to persist the provider auth and
-                model changes.
+                Save this integration first, then save the node to persist the
+                provider auth and model changes.
               </p>
-              <DialogClose asChild>
-                <Button type="button">Done</Button>
-              </DialogClose>
+              <Button
+                type="button"
+                variant="outline"
+                onClick={() => setEditorDraft(null)}
+              >
+                Cancel
+              </Button>
+              <Button type="button" onClick={saveEditorDraft}>
+                {editorDraft?.mode === "new"
+                  ? "Add integration"
+                  : "Save changes"}
+              </Button>
             </DialogFooter>
           </DialogContent>
         ) : null}

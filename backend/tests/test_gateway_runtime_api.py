@@ -196,6 +196,15 @@ def test_toolchain_catalog_exposes_guided_presets() -> None:
     assert claude_code is not None
     assert claude_code.display_label == "Claude Code"
     assert claude_code.supported_auth_modes == ["login"]
+    assert claude_code.node_classes == ["cloud", "local"]
+    copilot = provider_preset_by_id("github-copilot")
+    assert copilot is not None
+    assert copilot.supported_auth_modes == ["oauth", "login"]
+    assert copilot.node_classes == ["cloud", "local"]
+    gemini_cli = provider_preset_by_id("google-gemini-cli")
+    assert gemini_cli is not None
+    assert gemini_cli.supported_auth_modes == ["login"]
+    assert gemini_cli.node_classes == ["cloud", "local"]
 
 
 @pytest.mark.asyncio

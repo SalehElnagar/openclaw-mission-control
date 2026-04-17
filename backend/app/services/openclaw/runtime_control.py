@@ -1937,25 +1937,6 @@ class GatewayRuntimeControlService(OpenClawDBService):
                 message="Interactive provider actions are only supported for oauth/login modes.",
                 warnings=["Interactive provider actions are only supported for oauth/login modes."],
             )
-        if gateway.node_class == "cloud":
-            runtime = await self.runtime_summary(gateway=gateway)
-            return GatewayProviderAuthActionResponse(
-                gateway_id=gateway.id,
-                provider_id=provider_id,
-                auth_mode=auth_config.auth_mode,
-                auth_state=next(
-                    (item.auth_state for item in runtime.providers if item.id == provider_id),
-                    "configured",
-                ),
-                connected_profile=next(
-                    (item.connected_profile for item in runtime.providers if item.id == provider_id),
-                    None,
-                ),
-                requires_login=False,
-                message="Shared cloud nodes only support service-auth providers.",
-                warnings=["Shared cloud nodes only support service-auth providers."],
-            )
-
         params: dict[str, Any] = {"providerId": provider_id}
         if auth_config.profile_id:
             params["profileId"] = auth_config.profile_id

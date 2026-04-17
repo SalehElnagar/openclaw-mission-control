@@ -93,10 +93,11 @@ def toolchain_catalog() -> ToolchainCatalogResponse:
                 provider_type="claude-cli",
                 product_line="CLI sign-in",
                 summary=(
-                    "Uses a locally signed-in Claude Code session on a local node. "
-                    "Choose login after save; this is separate from the Anthropic Claude API key flow."
+                    "Uses a signed-in Claude Code session on the selected node. "
+                    "Choose login after save; on cloud this signs into the remote node session. "
+                    "This is separate from the Anthropic Claude API key flow."
                 ),
-                node_classes=["local"],
+                node_classes=["cloud", "local"],
                 supported_auth_modes=["login"],
                 kind="local-interactive",
                 models=[
@@ -188,10 +189,11 @@ def toolchain_catalog() -> ToolchainCatalogResponse:
                 provider_type="github-copilot",
                 product_line="Developer seat",
                 summary=(
-                    "Uses a signed-in GitHub Copilot seat on a local node. "
-                    "Connect with OAuth or login after saving the node; this is not the GitHub Models token API."
+                    "Uses a signed-in GitHub Copilot seat on the selected node. "
+                    "Connect with OAuth or login after saving the node; on cloud this signs into the remote node session. "
+                    "This is not the GitHub Models token API."
                 ),
-                node_classes=["local"],
+                node_classes=["cloud", "local"],
                 supported_auth_modes=["oauth", "login"],
                 kind="local-interactive",
                 models=[
@@ -214,10 +216,11 @@ def toolchain_catalog() -> ToolchainCatalogResponse:
                 provider_type="google-gemini-cli",
                 product_line="CLI sign-in",
                 summary=(
-                    "Uses a locally signed-in Gemini CLI session on a local node. "
-                    "Choose login after save; this is separate from the hosted Gemini API key flow."
+                    "Uses a signed-in Gemini CLI session on the selected node. "
+                    "Choose login after save; on cloud this signs into the remote node session. "
+                    "This is separate from the hosted Gemini API key flow."
                 ),
-                node_classes=["local"],
+                node_classes=["cloud", "local"],
                 supported_auth_modes=["login"],
                 kind="local-interactive",
                 models=[

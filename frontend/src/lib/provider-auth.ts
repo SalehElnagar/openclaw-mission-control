@@ -14,8 +14,7 @@ export type ProviderAuthModeOption = {
   description: string;
 };
 
-const CLOUD_AUTH_MODES: ProviderAuthMode[] = ["api-key", "token"];
-const LOCAL_AUTH_MODES: ProviderAuthMode[] = [
+const ALL_PROVIDER_AUTH_MODES: ProviderAuthMode[] = [
   "api-key",
   "token",
   "oauth",
@@ -23,9 +22,8 @@ const LOCAL_AUTH_MODES: ProviderAuthMode[] = [
 ];
 
 export const providerAuthModesForNodeClass = (
-  nodeClass: NodeClass,
-): ProviderAuthMode[] =>
-  nodeClass === "local" ? LOCAL_AUTH_MODES : CLOUD_AUTH_MODES;
+  _nodeClass: NodeClass,
+): ProviderAuthMode[] => ALL_PROVIDER_AUTH_MODES;
 
 export const providerAuthModeOptionsForNodeClass = (
   nodeClass: NodeClass,
@@ -64,12 +62,12 @@ export const providerAuthModeDescription = (
         : "Write-only bearer token stored for this node.";
     case "oauth":
       return nodeClass === "cloud"
-        ? "Unavailable on cloud nodes because cloud nodes stay service-auth only."
-        : "Browser-based sign-in on the node with a managed interactive profile.";
+        ? "Browser-based sign-in against the remote cloud node session with a managed interactive profile."
+        : "Browser-based sign-in on this node with a managed interactive profile.";
     case "login":
       return nodeClass === "cloud"
-        ? "Unavailable on cloud nodes because cloud nodes stay service-auth only."
-        : "CLI or device-style sign-in on the node with a managed interactive profile.";
+        ? "CLI or device-style sign-in against the remote cloud node session with a managed interactive profile."
+        : "CLI or device-style sign-in on this node with a managed interactive profile.";
   }
 };
 
@@ -112,7 +110,6 @@ export const providerAuthStateTone = (
 };
 
 export const providerAuthAllowsInteractiveActions = (
-  nodeClass: NodeClass,
+  _nodeClass: NodeClass,
   mode?: ProviderAuthMode | null,
-): boolean =>
-  nodeClass === "local" && (mode === "oauth" || mode === "login");
+): boolean => mode === "oauth" || mode === "login";

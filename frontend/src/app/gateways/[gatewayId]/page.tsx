@@ -96,7 +96,9 @@ const catalogEntryProviderLabel = (entry: GatewayRuntimeCatalogEntry): string =>
 const catalogEntryStatusLabel = (entry: GatewayRuntimeCatalogEntry): string =>
   entry.selectable !== false ? "Verified live" : "Configured only";
 
-const catalogEntryStatusClassName = (entry: GatewayRuntimeCatalogEntry): string =>
+const catalogEntryStatusClassName = (
+  entry: GatewayRuntimeCatalogEntry,
+): string =>
   entry.selectable !== false
     ? "border-emerald-500/30 bg-emerald-500/10 text-emerald-300"
     : "border-amber-500/30 bg-amber-500/10 text-amber-300";
@@ -118,7 +120,13 @@ const toolProfileLabel = (
 };
 
 const providerAuthStateVariant = (
-  state?: "verified" | "configured" | "requires-login" | "expired" | "disconnected" | null,
+  state?:
+    | "verified"
+    | "configured"
+    | "requires-login"
+    | "expired"
+    | "disconnected"
+    | null,
   requiresLogin?: boolean | null,
 ): "success" | "warning" | "danger" | "outline" => {
   if (requiresLogin || state === "requires-login") {
@@ -431,7 +439,8 @@ export default function GatewayDetailPage() {
     [marketplaceSkills],
   );
   const skillPacks = useMemo<SkillPackRead[]>(
-    () => (skillPacksQuery.data?.status === 200 ? skillPacksQuery.data.data : []),
+    () =>
+      skillPacksQuery.data?.status === 200 ? skillPacksQuery.data.data : [],
     [skillPacksQuery.data],
   );
   const isConnected = status?.connected ?? false;
@@ -442,21 +451,26 @@ export default function GatewayDetailPage() {
   );
   const roleLabels = useMemo(
     () =>
-      [...new Set(
-        agents
-          .map((agent) =>
-            typeof agent.identity_profile?.role === "string"
-              ? agent.identity_profile.role
-              : agent.is_gateway_main
-                ? "Gateway Agent"
-                : null,
-          )
-          .filter(Boolean),
-      )] as string[],
+      [
+        ...new Set(
+          agents
+            .map((agent) =>
+              typeof agent.identity_profile?.role === "string"
+                ? agent.identity_profile.role
+                : agent.is_gateway_main
+                  ? "Gateway Agent"
+                  : null,
+            )
+            .filter(Boolean),
+        ),
+      ] as string[],
     [agents],
   );
   const runtimeCatalog = useMemo(
-    () => (runtime?.catalog ?? []).filter((entry) => (entry.kind ?? "model") === "model"),
+    () =>
+      (runtime?.catalog ?? []).filter(
+        (entry) => (entry.kind ?? "model") === "model",
+      ),
     [runtime?.catalog],
   );
   const enabledModelRefSet = useMemo(
@@ -473,7 +487,9 @@ export default function GatewayDetailPage() {
   );
   const configuredProviderAuthConfigs = useMemo(
     () =>
-      runtime?.configured_provider_auth_configs ?? gateway?.provider_auth_configs ?? [],
+      runtime?.configured_provider_auth_configs ??
+      gateway?.provider_auth_configs ??
+      [],
     [gateway?.provider_auth_configs, runtime?.configured_provider_auth_configs],
   );
   const configuredModelDefinitions = useMemo(
@@ -504,34 +520,37 @@ export default function GatewayDetailPage() {
       runtimeProviders,
     ],
   );
-  const providerAuthRecords = useMemo<ProviderAuthRecord[]>(
-    () => {
-      const runtimeById = new Map(runtimeProviders.map((provider) => [provider.id, provider]));
-      const configById = new Map(
-        configuredProviderAuthConfigs.map((config) => [config.provider_id, config]),
-      );
-      const ids = new Set([
-        ...runtimeById.keys(),
-        ...configById.keys(),
-        ...configuredProviderConfigs.map((provider) => provider.id),
-      ]);
-      return Array.from(ids).map((providerId) => ({
-        providerId,
-        authConfig: configById.get(providerId) ?? null,
-        runtime: runtimeById.get(providerId) ?? null,
-      }));
-    },
-    [configuredProviderAuthConfigs, configuredProviderConfigs, runtimeProviders],
-  );
-  const managedProviderAuthRecords = useMemo(
-    () => {
-      const managedProviderIds = new Set(runtimeView.managedProviderIds);
-      return providerAuthRecords.filter((record) =>
-        managedProviderIds.has(record.providerId),
-      );
-    },
-    [providerAuthRecords, runtimeView.managedProviderIds],
-  );
+  const providerAuthRecords = useMemo<ProviderAuthRecord[]>(() => {
+    const runtimeById = new Map(
+      runtimeProviders.map((provider) => [provider.id, provider]),
+    );
+    const configById = new Map(
+      configuredProviderAuthConfigs.map((config) => [
+        config.provider_id,
+        config,
+      ]),
+    );
+    const ids = new Set([
+      ...runtimeById.keys(),
+      ...configById.keys(),
+      ...configuredProviderConfigs.map((provider) => provider.id),
+    ]);
+    return Array.from(ids).map((providerId) => ({
+      providerId,
+      authConfig: configById.get(providerId) ?? null,
+      runtime: runtimeById.get(providerId) ?? null,
+    }));
+  }, [
+    configuredProviderAuthConfigs,
+    configuredProviderConfigs,
+    runtimeProviders,
+  ]);
+  const managedProviderAuthRecords = useMemo(() => {
+    const managedProviderIds = new Set(runtimeView.managedProviderIds);
+    return providerAuthRecords.filter((record) =>
+      managedProviderIds.has(record.providerId),
+    );
+  }, [providerAuthRecords, runtimeView.managedProviderIds]);
   const handleDelete = () => {
     if (!deleteTarget) return;
     deleteMutation.mutate({ agentId: deleteTarget.id });
@@ -600,9 +619,7 @@ export default function GatewayDetailPage() {
                 </div>
                 <div className="mt-4 space-y-3 text-sm text-muted">
                   <div>
-                    <p className="text-xs uppercase text-quiet">
-                      Gateway URL
-                    </p>
+                    <p className="text-xs uppercase text-quiet">Gateway URL</p>
                     <p className="mt-1 text-sm font-medium text-strong">
                       {gateway.url}
                     </p>
@@ -628,11 +645,11 @@ export default function GatewayDetailPage() {
                     </p>
                   </div>
                   <div>
-                    <p className="text-xs uppercase text-quiet">
-                      TLS policy
-                    </p>
+                    <p className="text-xs uppercase text-quiet">TLS policy</p>
                     <p className="mt-1 text-sm font-medium text-strong">
-                      {gateway.allow_insecure_tls ? "Allow self-signed certificates" : "Strict certificate validation"}
+                      {gateway.allow_insecure_tls
+                        ? "Allow self-signed certificates"
+                        : "Strict certificate validation"}
                     </p>
                   </div>
                   <div>
@@ -793,13 +810,20 @@ export default function GatewayDetailPage() {
                       {(usage?.total_tokens ?? 0).toLocaleString("en-US")}
                     </p>
                     <p className="mt-1 text-xs text-muted">
-                      Prompt {(usage?.total_prompt_tokens ?? 0).toLocaleString("en-US")} ·
-                      Completion{" "}
-                      {(usage?.total_completion_tokens ?? 0).toLocaleString("en-US")}
+                      Prompt{" "}
+                      {(usage?.total_prompt_tokens ?? 0).toLocaleString(
+                        "en-US",
+                      )}{" "}
+                      · Completion{" "}
+                      {(usage?.total_completion_tokens ?? 0).toLocaleString(
+                        "en-US",
+                      )}
                     </p>
                   </div>
                   <div>
-                    <p className="text-xs uppercase text-quiet">Top model usage</p>
+                    <p className="text-xs uppercase text-quiet">
+                      Top model usage
+                    </p>
                     <div className="mt-2 space-y-1.5">
                       {Object.entries(usage?.models ?? {})
                         .sort(([, left], [, right]) => right - left)
@@ -817,7 +841,8 @@ export default function GatewayDetailPage() {
                         ))}
                       {Object.keys(usage?.models ?? {}).length === 0 ? (
                         <p className="text-xs text-muted">
-                          No telemetry samples yet. Use pull telemetry to ingest.
+                          No telemetry samples yet. Use pull telemetry to
+                          ingest.
                         </p>
                       ) : null}
                     </div>
@@ -831,37 +856,48 @@ export default function GatewayDetailPage() {
                     Capabilities
                   </p>
                   <span className="text-xs text-muted">
-                    {roleLabels.length} role{roleLabels.length === 1 ? "" : "s"} enabled
+                    {roleLabels.length} role{roleLabels.length === 1 ? "" : "s"}{" "}
+                    enabled
                   </span>
                 </div>
                 <div className="mt-4 space-y-4 text-sm text-muted">
                   <div>
-                    <p className="text-xs uppercase text-quiet">Starter pack roles</p>
+                    <p className="text-xs uppercase text-quiet">
+                      Starter pack roles
+                    </p>
                     <div className="mt-2 flex flex-wrap gap-2">
-                      {roleLabels.length > 0 ? roleLabels.map((role) => (
-                        <span
-                          key={role}
-                          className="rounded-full border border-[color:var(--border)] bg-[color:var(--surface-muted)] px-3 py-1 text-xs font-medium text-strong"
-                        >
-                          {role}
+                      {roleLabels.length > 0 ? (
+                        roleLabels.map((role) => (
+                          <span
+                            key={role}
+                            className="rounded-full border border-[color:var(--border)] bg-[color:var(--surface-muted)] px-3 py-1 text-xs font-medium text-strong"
+                          >
+                            {role}
+                          </span>
+                        ))
+                      ) : (
+                        <span className="text-sm text-muted">
+                          No node inventory roles provisioned yet.
                         </span>
-                      )) : (
-                        <span className="text-sm text-muted">No node inventory roles provisioned yet.</span>
                       )}
                     </div>
                   </div>
                   <div>
-                    <p className="text-xs uppercase text-quiet">Supported verified models</p>
+                    <p className="text-xs uppercase text-quiet">
+                      Supported verified models
+                    </p>
                     <p className="mt-1 text-sm font-medium text-strong">
                       {runtimeView.managedLiveCatalogEntries.length}
                     </p>
                     <p className="mt-1 text-xs leading-5 text-muted">
                       Mission Control currently manages{" "}
-                      {runtimeView.managedLiveCatalogEntries.length} verified runtime
-                      model
-                      {runtimeView.managedLiveCatalogEntries.length === 1 ? "" : "s"}{" "}
-                      on this node and {runtime?.enabled_model_refs.length ?? 0} enabled
-                      for agents.
+                      {runtimeView.managedLiveCatalogEntries.length} verified
+                      runtime model
+                      {runtimeView.managedLiveCatalogEntries.length === 1
+                        ? ""
+                        : "s"}{" "}
+                      on this node and {runtime?.enabled_model_refs.length ?? 0}{" "}
+                      enabled for agents.
                       {runtimeView.unmanagedLiveCatalogEntries.length
                         ? ` ${runtimeView.unmanagedLiveCatalogEntries.length} other runtime-discovered model${
                             runtimeView.unmanagedLiveCatalogEntries.length === 1
@@ -876,7 +912,9 @@ export default function GatewayDetailPage() {
                     <div className="mt-2 space-y-3">
                       <div className="rounded-lg border border-[color:var(--border)] bg-[color:var(--surface-muted)] p-3">
                         <div className="flex items-center justify-between gap-3">
-                          <p className="text-xs uppercase text-quiet">Provider auth</p>
+                          <p className="text-xs uppercase text-quiet">
+                            Provider auth
+                          </p>
                           <span className="text-xs text-muted">
                             {managedProviderAuthRecords.length} managed
                           </span>
@@ -885,16 +923,22 @@ export default function GatewayDetailPage() {
                           {managedProviderAuthRecords.length > 0 ? (
                             managedProviderAuthRecords.map((record) => {
                               const authMode =
-                                record.authConfig?.auth_mode ?? record.runtime?.auth_mode ?? null;
+                                record.authConfig?.auth_mode ??
+                                record.runtime?.auth_mode ??
+                                null;
                               const authState =
                                 record.runtime?.auth_state ??
                                 (record.runtime?.requires_login
                                   ? "requires-login"
-                                  : record.runtime?.verification_state === "runtime"
+                                  : record.runtime?.verification_state ===
+                                      "runtime"
                                     ? "verified"
                                     : "configured");
                               const interactiveAllowed =
-                                providerAuthAllowsInteractiveActions(gatewayNodeClass, authMode);
+                                providerAuthAllowsInteractiveActions(
+                                  gatewayNodeClass,
+                                  authMode,
+                                );
 
                               return (
                                 <div
@@ -921,8 +965,16 @@ export default function GatewayDetailPage() {
                                           {providerAuthModeLabel(authMode)}
                                         </Badge>
                                       ) : null}
-                                      <Badge variant={providerAuthStateVariant(authState, record.runtime?.requires_login)}>
-                                        {providerAuthStateLabel(authState, record.runtime?.requires_login)}
+                                      <Badge
+                                        variant={providerAuthStateVariant(
+                                          authState,
+                                          record.runtime?.requires_login,
+                                        )}
+                                      >
+                                        {providerAuthStateLabel(
+                                          authState,
+                                          record.runtime?.requires_login,
+                                        )}
                                       </Badge>
                                       {record.runtime?.connected_profile ? (
                                         <Badge variant="accent">
@@ -932,14 +984,18 @@ export default function GatewayDetailPage() {
                                     </div>
                                   </div>
                                   <p className="mt-2 text-xs text-muted">
-                                    {record.runtime?.verification_state === "runtime"
+                                    {record.runtime?.verification_state ===
+                                    "runtime"
                                       ? "Runtime verified auth is available for agent selection."
                                       : "Auth is configured but still needs runtime verification."}
                                   </p>
-                                  {record.runtime?.unresolved_secret_refs?.length ? (
+                                  {record.runtime?.unresolved_secret_refs
+                                    ?.length ? (
                                     <p className="mt-2 text-xs text-amber-200">
                                       Unresolved secret refs:{" "}
-                                      {record.runtime.unresolved_secret_refs.join(", ")}
+                                      {record.runtime.unresolved_secret_refs.join(
+                                        ", ",
+                                      )}
                                     </p>
                                   ) : null}
                                   {interactiveAllowed ? (
@@ -948,7 +1004,9 @@ export default function GatewayDetailPage() {
                                         type="button"
                                         variant="outline"
                                         size="sm"
-                                        disabled={providerAuthMutation.isPending}
+                                        disabled={
+                                          providerAuthMutation.isPending
+                                        }
                                         onClick={() =>
                                           providerAuthMutation.mutate({
                                             providerId: record.providerId,
@@ -962,7 +1020,9 @@ export default function GatewayDetailPage() {
                                         type="button"
                                         variant="outline"
                                         size="sm"
-                                        disabled={providerAuthMutation.isPending}
+                                        disabled={
+                                          providerAuthMutation.isPending
+                                        }
                                         onClick={() =>
                                           providerAuthMutation.mutate({
                                             providerId: record.providerId,
@@ -976,7 +1036,9 @@ export default function GatewayDetailPage() {
                                         type="button"
                                         variant="outline"
                                         size="sm"
-                                        disabled={providerAuthMutation.isPending}
+                                        disabled={
+                                          providerAuthMutation.isPending
+                                        }
                                         onClick={() =>
                                           providerAuthMutation.mutate({
                                             providerId: record.providerId,
@@ -987,9 +1049,12 @@ export default function GatewayDetailPage() {
                                         Disconnect
                                       </Button>
                                     </div>
-                                  ) : authMode === "oauth" || authMode === "login" ? (
+                                  ) : authMode === "oauth" ||
+                                    authMode === "login" ? (
                                     <p className="mt-3 text-xs text-muted">
-                                      Cloud nodes stay secret-ref backed and do not expose interactive auth actions.
+                                      Interactive auth runs on the node session.
+                                      Use Connect, Refresh, or Disconnect here
+                                      to manage the saved provider profile.
                                     </p>
                                   ) : null}
                                 </div>
@@ -997,8 +1062,9 @@ export default function GatewayDetailPage() {
                             })
                           ) : (
                             <p className="text-xs text-muted">
-                              No managed integrations observed yet. Save the guided
-                              toolchain from Edit node to make one show up here.
+                              No managed integrations observed yet. Save the
+                              guided toolchain from Edit node to make one show
+                              up here.
                             </p>
                           )}
                         </div>
@@ -1041,17 +1107,19 @@ export default function GatewayDetailPage() {
                                   </span>
                                 </div>
                                 <p className="mt-2 text-xs text-muted">
-                                  Detected directly on the node runtime. Add it from Edit
-                                  node before expecting it in the guided Mission Control
-                                  flow.
+                                  Detected directly on the node runtime. Add it
+                                  from Edit node before expecting it in the
+                                  guided Mission Control flow.
                                 </p>
                                 <p className="mt-2 text-xs text-muted">
-                                  {provider.verified_model_count ?? 0} verified /{" "}
-                                  {provider.configured_model_count ?? 0} configured
-                                  models
+                                  {provider.verified_model_count ?? 0} verified
+                                  / {provider.configured_model_count ?? 0}{" "}
+                                  configured models
                                   {provider.secret_ref_count
                                     ? ` · ${provider.secret_ref_count} secret ref${
-                                        provider.secret_ref_count === 1 ? "" : "s"
+                                        provider.secret_ref_count === 1
+                                          ? ""
+                                          : "s"
                                       }`
                                     : ""}
                                 </p>
@@ -1065,17 +1133,21 @@ export default function GatewayDetailPage() {
                             ))
                           ) : (
                             <p className="text-xs text-muted">
-                              No extra runtime providers observed beyond the managed
-                              Mission Control toolchain.
+                              No extra runtime providers observed beyond the
+                              managed Mission Control toolchain.
                             </p>
                           )}
                         </div>
                       </div>
                       <div className="rounded-lg border border-[color:var(--border)] bg-[color:var(--surface-muted)] p-3">
                         <div className="flex items-center justify-between gap-3">
-                          <p className="text-xs uppercase text-quiet">Installed marketplace skills</p>
+                          <p className="text-xs uppercase text-quiet">
+                            Installed marketplace skills
+                          </p>
                           <span className="text-xs text-muted">
-                            {marketplaceSkillsQuery.isFetching ? "Refreshing…" : `${installedSkills.length} installed`}
+                            {marketplaceSkillsQuery.isFetching
+                              ? "Refreshing…"
+                              : `${installedSkills.length} installed`}
                           </span>
                         </div>
                         <div className="mt-2 space-y-2">
@@ -1086,9 +1158,12 @@ export default function GatewayDetailPage() {
                                 className="flex items-center justify-between gap-3 rounded-md border border-[color:var(--border)] bg-[color:var(--surface)] px-3 py-2"
                               >
                                 <div className="min-w-0">
-                                  <p className="text-sm font-medium text-strong">{skill.name}</p>
+                                  <p className="text-sm font-medium text-strong">
+                                    {skill.name}
+                                  </p>
                                   <p className="mt-1 text-xs text-muted">
-                                    {skill.category ?? "General"} · {skill.source ?? "Marketplace"}
+                                    {skill.category ?? "General"} ·{" "}
+                                    {skill.source ?? "Marketplace"}
                                   </p>
                                 </div>
                                 <Button
@@ -1109,14 +1184,17 @@ export default function GatewayDetailPage() {
                             ))
                           ) : (
                             <p className="text-xs text-muted">
-                              No marketplace skills are installed on this node yet.
+                              No marketplace skills are installed on this node
+                              yet.
                             </p>
                           )}
                         </div>
                       </div>
                       <div className="rounded-lg border border-[color:var(--border)] bg-[color:var(--surface-muted)] p-3">
                         <div className="flex items-center justify-between gap-3">
-                          <p className="text-xs uppercase text-quiet">Available to install</p>
+                          <p className="text-xs uppercase text-quiet">
+                            Available to install
+                          </p>
                           <span className="text-xs text-muted">
                             {availableSkills.length} ready
                           </span>
@@ -1128,9 +1206,12 @@ export default function GatewayDetailPage() {
                               className="flex items-center justify-between gap-3 rounded-md border border-[color:var(--border)] bg-[color:var(--surface)] px-3 py-2"
                             >
                               <div className="min-w-0">
-                                <p className="text-sm font-medium text-strong">{skill.name}</p>
+                                <p className="text-sm font-medium text-strong">
+                                  {skill.name}
+                                </p>
                                 <p className="mt-1 text-xs text-muted">
-                                  {skill.category ?? "General"} · {skill.source ?? "Marketplace"}
+                                  {skill.category ?? "General"} ·{" "}
+                                  {skill.source ?? "Marketplace"}
                                 </p>
                               </div>
                               <Button
@@ -1151,13 +1232,16 @@ export default function GatewayDetailPage() {
                           ))}
                           {availableSkills.length === 0 ? (
                             <p className="text-xs text-muted">
-                              Everything in the marketplace for this node is already installed.
+                              Everything in the marketplace for this node is
+                              already installed.
                             </p>
                           ) : null}
                         </div>
                       </div>
                       <div className="rounded-lg border border-[color:var(--border)] bg-[color:var(--surface-muted)] p-3">
-                        <p className="text-xs uppercase text-quiet">Skill packs in the org</p>
+                        <p className="text-xs uppercase text-quiet">
+                          Skill packs in the org
+                        </p>
                         <div className="mt-2 flex flex-wrap gap-2">
                           {skillPacks.length > 0 ? (
                             skillPacks.map((pack) => (
@@ -1211,7 +1295,9 @@ export default function GatewayDetailPage() {
                         {profile}
                       </p>
                       <p className="mt-1 text-sm font-medium text-strong">
-                        {modelSelectionLabel(runtime?.model_profiles?.[profile])}
+                        {modelSelectionLabel(
+                          runtime?.model_profiles?.[profile],
+                        )}
                       </p>
                     </div>
                   ))}
@@ -1317,35 +1403,38 @@ export default function GatewayDetailPage() {
                           No configured-only placeholders right now.
                         </p>
                       ) : (
-                        runtimeView.configuredOnlyCatalogEntries.map((entry) => (
-                          <div
-                            key={entry.ref}
-                            className="rounded-md border border-[color:var(--border)] bg-[color:var(--surface)] px-3 py-2"
-                          >
-                            <div className="flex items-start justify-between gap-3">
-                              <div className="min-w-0">
-                                <p className="text-sm font-medium text-strong">
-                                  {entry.label}
-                                </p>
-                                <p className="mt-1 text-xs text-muted">
-                                  {catalogEntryProviderLabel(entry)}
-                                </p>
+                        runtimeView.configuredOnlyCatalogEntries.map(
+                          (entry) => (
+                            <div
+                              key={entry.ref}
+                              className="rounded-md border border-[color:var(--border)] bg-[color:var(--surface)] px-3 py-2"
+                            >
+                              <div className="flex items-start justify-between gap-3">
+                                <div className="min-w-0">
+                                  <p className="text-sm font-medium text-strong">
+                                    {entry.label}
+                                  </p>
+                                  <p className="mt-1 text-xs text-muted">
+                                    {catalogEntryProviderLabel(entry)}
+                                  </p>
+                                </div>
+                                <span
+                                  className={`shrink-0 rounded-full border px-2 py-0.5 text-[11px] font-semibold ${catalogEntryStatusClassName(entry)}`}
+                                >
+                                  {catalogEntryStatusLabel(entry)}
+                                </span>
                               </div>
-                              <span
-                                className={`shrink-0 rounded-full border px-2 py-0.5 text-[11px] font-semibold ${catalogEntryStatusClassName(entry)}`}
-                              >
-                                {catalogEntryStatusLabel(entry)}
-                              </span>
+                              <p className="mt-2 truncate font-mono text-[11px] text-quiet">
+                                {entry.ref}
+                              </p>
+                              <p className="mt-2 text-xs text-muted">
+                                Provider details or runtime validation are still
+                                missing, so this entry stays hidden from agent
+                                model selection.
+                              </p>
                             </div>
-                            <p className="mt-2 truncate font-mono text-[11px] text-quiet">
-                              {entry.ref}
-                            </p>
-                            <p className="mt-2 text-xs text-muted">
-                              Provider details or runtime validation are still missing, so this
-                              entry stays hidden from agent model selection.
-                            </p>
-                          </div>
-                        ))
+                          ),
+                        )
                       )}
                     </div>
                   </div>
@@ -1358,8 +1447,9 @@ export default function GatewayDetailPage() {
                           Other runtime-detected models
                         </p>
                         <p className="mt-1 text-xs text-muted">
-                          These were observed directly on the node runtime and are
-                          not currently part of the managed Mission Control toolchain.
+                          These were observed directly on the node runtime and
+                          are not currently part of the managed Mission Control
+                          toolchain.
                         </p>
                       </div>
                       <span className="rounded-full border border-[color:var(--border)] px-2 py-0.5 text-[11px] font-semibold text-muted">
@@ -1404,7 +1494,9 @@ export default function GatewayDetailPage() {
                   Runtime audit
                 </p>
                 <span className="text-xs text-muted">
-                  {auditQuery.isLoading ? "Loading…" : `${auditRecords.length} events`}
+                  {auditQuery.isLoading
+                    ? "Loading…"
+                    : `${auditRecords.length} events`}
                 </span>
               </div>
               <div className="mt-3 space-y-2">
@@ -1441,7 +1533,9 @@ export default function GatewayDetailPage() {
                 {agentsQuery.isLoading ? (
                   <span className="text-xs text-muted">Loading…</span>
                 ) : (
-                  <span className="text-xs text-muted">{agents.length} total</span>
+                  <span className="text-xs text-muted">
+                    {agents.length} total
+                  </span>
                 )}
               </div>
               <div className="mt-4">

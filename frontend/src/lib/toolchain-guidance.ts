@@ -7,7 +7,12 @@ import {
   type ProviderAuthMode,
 } from "@/lib/provider-auth";
 
-const AUTH_MODE_ORDER: ProviderAuthMode[] = ["api-key", "token", "oauth", "login"];
+const AUTH_MODE_ORDER: ProviderAuthMode[] = [
+  "api-key",
+  "token",
+  "oauth",
+  "login",
+];
 
 export type ToolchainAuthGuideItem = {
   mode: ProviderAuthMode;
@@ -30,11 +35,8 @@ export const getToolchainAuthGuide = (
 
 export const getPresetAllowedAuthModes = (
   preset: ToolchainCatalogProviderPreset,
-  nodeClass: NodeClass,
-): ProviderAuthMode[] => {
-  const availableModes = new Set(providerAuthModesForNodeClass(nodeClass));
-  return preset.supported_auth_modes.filter((mode) => availableModes.has(mode));
-};
+  _nodeClass: NodeClass,
+): ProviderAuthMode[] => preset.supported_auth_modes;
 
 export const getPresetProductLine = (
   preset: ToolchainCatalogProviderPreset,

@@ -1017,7 +1017,7 @@ async def test_reconcile_gateway_runtime_repairs_stuck_agents(
 
 
 @pytest.mark.asyncio
-async def test_connect_provider_auth_rejects_cloud_login(
+async def test_connect_provider_auth_uses_gateway_rpc_for_cloud_login(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     class _SessionStub:
@@ -1042,6 +1042,7 @@ async def test_connect_provider_auth_rejects_cloud_login(
         ],
     )
     service = GatewayRuntimeControlService(session=_SessionStub())  # type: ignore[arg-type]
+    captured: dict[str, object] = {}
 
     async def _fake_load_gateway_config_with_retry(
         _gateway: Gateway,
@@ -1055,8 +1056,32 @@ async def test_connect_provider_auth_rejects_cloud_login(
         return runtime_control.GatewayRuntimeSummary(
             gateway_id=gateway.id,
             node_class=gateway.node_class,
-            runtime_sync_generation=0,
+            runtime_sync_generation=1,
+            providers=[
+                runtime_control.GatewayRuntimeProviderSummary(
+                    id="google-gemini-cli",
+                    provider_type="google-gemini-cli",
+                    label="Google Gemini CLI",
+                    auth_mode="login",
+                    auth_state="verified",
+                    connected_profile="google-gemini-cli:managed",
+                    verification_state="runtime",
+                    configured_model_count=1,
+                    verified_model_count=1,
+                )
+            ],
         )
+
+    async def _fake_openclaw_call(
+        method: str,
+        params: dict[str, object] | None = None,
+        *,
+        config: object,
+    ) -> object:
+        captured["method"] = method
+        captured["params"] = params
+        assert config is not None
+        return {}
 
     monkeypatch.setattr(
         service,
@@ -1064,6 +1089,7 @@ async def test_connect_provider_auth_rejects_cloud_login(
         _fake_load_gateway_config_with_retry,
     )
     monkeypatch.setattr(service, "runtime_summary", _fake_runtime_summary)
+    monkeypatch.setattr(runtime_control, "openclaw_call", _fake_openclaw_call)
 
     response = await service.connect_provider_auth(
         gateway=gateway,
@@ -1074,8 +1100,12 @@ async def test_connect_provider_auth_rejects_cloud_login(
         ),
     )
 
-    assert response.auth_state == "configured"
-    assert "Shared cloud nodes only support service-auth providers." in response.warnings
+    assert captured["method"] == "providers.connect"
+    assert captured["params"] == {
+        "providerId": "google-gemini-cli",
+        "profileId": "google-gemini-cli:managed",
+    }
+    assert response.auth_state == "verified"
 
 
 @pytest.mark.asyncio

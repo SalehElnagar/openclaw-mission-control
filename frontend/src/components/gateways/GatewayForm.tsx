@@ -187,7 +187,9 @@ export function GatewayForm({
     ).values(),
   );
   const availableModelEntries =
-    configuredModelEntries.length > 0 ? configuredModelEntries : verifiedModelRefs;
+    configuredModelEntries.length > 0
+      ? configuredModelEntries
+      : verifiedModelRefs;
   const verifiedModelMap = new Map(
     availableModelEntries.map((entry) => [entry.ref, entry]),
   );
@@ -204,7 +206,8 @@ export function GatewayForm({
       label: provider.label?.trim() || provider.id,
     }))
     .filter((provider) => provider.value.trim().length > 0);
-  const providerAuthModeOptions = providerAuthModeOptionsForNodeClass(nodeClass);
+  const providerAuthModeOptions =
+    providerAuthModeOptionsForNodeClass(nodeClass);
   const providerAuthModeSet = new Set(
     providerAuthModeOptions.map((option) => option.value),
   );
@@ -330,16 +333,22 @@ export function GatewayForm({
             }
           />
           {gatewayUrlError ? (
-            <p className="text-xs text-[color:var(--danger)]">{gatewayUrlError}</p>
+            <p className="text-xs text-[color:var(--danger)]">
+              {gatewayUrlError}
+            </p>
           ) : gatewayCheckStatus === "error" && gatewayCheckMessage ? (
-            <p className="text-xs text-[color:var(--danger)]">{gatewayCheckMessage}</p>
+            <p className="text-xs text-[color:var(--danger)]">
+              {gatewayCheckMessage}
+            </p>
           ) : null}
         </div>
       </div>
 
       <div className="grid gap-6 md:grid-cols-2">
         <div className="space-y-2">
-          <label className="text-sm font-medium text-strong">Gateway token</label>
+          <label className="text-sm font-medium text-strong">
+            Gateway token
+          </label>
           <div className="flex gap-2">
             <Input
               type={showGatewayToken ? "text" : "password"}
@@ -387,7 +396,9 @@ export function GatewayForm({
               role="switch"
               aria-checked={disableDevicePairing}
               aria-label="Disable device pairing"
-              onClick={() => onDisableDevicePairingChange(!disableDevicePairing)}
+              onClick={() =>
+                onDisableDevicePairingChange(!disableDevicePairing)
+              }
               disabled={isLoading}
               className={boolSwitchClass(disableDevicePairing, isLoading)}
             >
@@ -432,12 +443,16 @@ export function GatewayForm({
                 Node integrations
               </h2>
               <p className="text-xs text-muted">
-                The guided flow is the default path: choose a provider preset, choose the auth method allowed on this node, attach the secret once or connect later for local interactive providers, then choose models from a checklist. Raw provider fields stay available under Advanced / Custom integration.
+                The guided flow is the default path: choose a provider preset,
+                choose the auth method for this node, attach the secret once or
+                connect later for interactive providers, then choose models from
+                a checklist. Raw provider fields stay available under Advanced
+                runtime.
               </p>
             </div>
             <TabsList>
               <TabsTrigger value="guided">Guided</TabsTrigger>
-              <TabsTrigger value="advanced">Advanced / Custom</TabsTrigger>
+              <TabsTrigger value="advanced">Advanced runtime</TabsTrigger>
             </TabsList>
           </div>
         </div>
@@ -464,744 +479,845 @@ export function GatewayForm({
         </TabsContent>
 
         <TabsContent value="advanced" className="mt-0 space-y-6">
-      <div className="rounded-xl border border-[color:var(--border)] bg-[color:var(--surface-muted)] p-4">
-        <div className="space-y-1">
-          <h2 className="text-sm font-semibold text-strong">Providers</h2>
-          <p className="text-xs text-muted">
-            Define the node-owned provider connections here. Secret refs stay as references only and are never stored as plaintext in Mission Control.
-          </p>
-        </div>
-        <div className="mt-4 space-y-3">
-          {providerConfigs.length > 0 ? (
-            providerConfigs.map((provider, index) => (
-              <div
-                key={`${provider.id || "provider"}-${index}`}
-                className="rounded-lg border border-[color:var(--border)] bg-[color:var(--surface)] p-4"
-              >
-                <div className="flex items-start justify-between gap-3">
-                  <div>
-                    <p className="text-sm font-medium text-strong">
-                      {provider.label?.trim() || provider.id || `Provider ${index + 1}`}
-                    </p>
-                    <p className="mt-1 text-xs text-muted">
-                      Connection and provider metadata only. Secrets are attached in the secret-ref section below.
-                    </p>
-                  </div>
-                  {onProviderConfigsChange ? (
-                    <Button
-                      type="button"
-                      variant="outline"
-                      size="sm"
-                      disabled={isLoading}
-                      onClick={() =>
-                        onProviderConfigsChange(
-                          providerConfigs.filter((_, providerIndex) => providerIndex !== index),
-                        )
-                      }
-                    >
-                      Remove
-                    </Button>
-                  ) : null}
-                </div>
-                <div className="mt-4 grid gap-4 md:grid-cols-2">
-                  <div className="space-y-2">
-                    <label className="text-xs font-medium uppercase tracking-wide text-quiet">
-                      Provider id
-                    </label>
-                    <Input
-                      value={provider.id}
-                      onChange={(event) =>
-                        updateProviderConfig(index, { id: event.target.value })
-                      }
-                      placeholder="microsoft-foundry"
-                      disabled={isLoading}
-                    />
-                  </div>
-                  <div className="space-y-2">
-                    <label className="text-xs font-medium uppercase tracking-wide text-quiet">
-                      Provider type
-                    </label>
-                    <Input
-                      value={provider.provider_type ?? ""}
-                      onChange={(event) =>
-                        updateProviderConfig(index, { provider_type: event.target.value || null })
-                      }
-                      placeholder="microsoft-foundry"
-                      disabled={isLoading}
-                    />
-                  </div>
-                  <div className="space-y-2">
-                    <label className="text-xs font-medium uppercase tracking-wide text-quiet">
-                      Display label
-                    </label>
-                    <Input
-                      value={provider.label ?? ""}
-                      onChange={(event) =>
-                        updateProviderConfig(index, { label: event.target.value || null })
-                      }
-                      placeholder="Azure Foundry"
-                      disabled={isLoading}
-                    />
-                  </div>
-                  <div className="space-y-2">
-                    <label className="text-xs font-medium uppercase tracking-wide text-quiet">
-                      Base URL
-                    </label>
-                    <Input
-                      value={provider.base_url ?? ""}
-                      onChange={(event) =>
-                        updateProviderConfig(index, { base_url: event.target.value || null })
-                      }
-                      placeholder="https://example.openai.azure.com/openai/v1"
-                      disabled={isLoading}
-                    />
-                  </div>
-                  <div className="space-y-2">
-                    <label className="text-xs font-medium uppercase tracking-wide text-quiet">
-                      API mode
-                    </label>
-                    <Input
-                      value={provider.api_mode ?? ""}
-                      onChange={(event) =>
-                        updateProviderConfig(index, { api_mode: event.target.value || null })
-                      }
-                      placeholder="openai-completions"
-                      disabled={isLoading}
-                    />
-                  </div>
-                  <div className="space-y-2">
-                    <label className="text-xs font-medium uppercase tracking-wide text-quiet">
-                      Use auth header
-                    </label>
-                    <label className="flex h-10 items-center gap-3 px-1 text-sm text-strong">
-                      <button
-                        type="button"
-                        role="switch"
-                        aria-checked={provider.auth_header ?? false}
-                        aria-label={`Use auth header for ${provider.id || `provider ${index + 1}`}`}
-                        onClick={() =>
-                          updateProviderConfig(index, {
-                            auth_header: !(provider.auth_header ?? false),
-                          })
-                        }
-                        disabled={isLoading}
-                        className={boolSwitchClass(provider.auth_header ?? false, isLoading)}
-                      >
-                        <span
-                          className={`inline-block h-5 w-5 rounded-full bg-white shadow-sm transition ${
-                            provider.auth_header ? "translate-x-5" : "translate-x-0.5"
-                          }`}
+          <div className="rounded-xl border border-[color:var(--border)] bg-[color:var(--surface-muted)] p-4">
+            <div className="space-y-1">
+              <h2 className="text-sm font-semibold text-strong">Providers</h2>
+              <p className="text-xs text-muted">
+                Define the node-owned provider connections here. Secret refs
+                stay as references only and are never stored as plaintext in
+                Mission Control.
+              </p>
+            </div>
+            <div className="mt-4 space-y-3">
+              {providerConfigs.length > 0 ? (
+                providerConfigs.map((provider, index) => (
+                  <div
+                    key={`${provider.id || "provider"}-${index}`}
+                    className="rounded-lg border border-[color:var(--border)] bg-[color:var(--surface)] p-4"
+                  >
+                    <div className="flex items-start justify-between gap-3">
+                      <div>
+                        <p className="text-sm font-medium text-strong">
+                          {provider.label?.trim() ||
+                            provider.id ||
+                            `Provider ${index + 1}`}
+                        </p>
+                        <p className="mt-1 text-xs text-muted">
+                          Connection and provider metadata only. Secrets are
+                          attached in the secret-ref section below.
+                        </p>
+                      </div>
+                      {onProviderConfigsChange ? (
+                        <Button
+                          type="button"
+                          variant="outline"
+                          size="sm"
+                          disabled={isLoading}
+                          onClick={() =>
+                            onProviderConfigsChange(
+                              providerConfigs.filter(
+                                (_, providerIndex) => providerIndex !== index,
+                              ),
+                            )
+                          }
+                        >
+                          Remove
+                        </Button>
+                      ) : null}
+                    </div>
+                    <div className="mt-4 grid gap-4 md:grid-cols-2">
+                      <div className="space-y-2">
+                        <label className="text-xs font-medium uppercase tracking-wide text-quiet">
+                          Provider id
+                        </label>
+                        <Input
+                          value={provider.id}
+                          onChange={(event) =>
+                            updateProviderConfig(index, {
+                              id: event.target.value,
+                            })
+                          }
+                          placeholder="microsoft-foundry"
+                          disabled={isLoading}
                         />
-                      </button>
-                    </label>
+                      </div>
+                      <div className="space-y-2">
+                        <label className="text-xs font-medium uppercase tracking-wide text-quiet">
+                          Provider type
+                        </label>
+                        <Input
+                          value={provider.provider_type ?? ""}
+                          onChange={(event) =>
+                            updateProviderConfig(index, {
+                              provider_type: event.target.value || null,
+                            })
+                          }
+                          placeholder="microsoft-foundry"
+                          disabled={isLoading}
+                        />
+                      </div>
+                      <div className="space-y-2">
+                        <label className="text-xs font-medium uppercase tracking-wide text-quiet">
+                          Display label
+                        </label>
+                        <Input
+                          value={provider.label ?? ""}
+                          onChange={(event) =>
+                            updateProviderConfig(index, {
+                              label: event.target.value || null,
+                            })
+                          }
+                          placeholder="Azure Foundry"
+                          disabled={isLoading}
+                        />
+                      </div>
+                      <div className="space-y-2">
+                        <label className="text-xs font-medium uppercase tracking-wide text-quiet">
+                          Base URL
+                        </label>
+                        <Input
+                          value={provider.base_url ?? ""}
+                          onChange={(event) =>
+                            updateProviderConfig(index, {
+                              base_url: event.target.value || null,
+                            })
+                          }
+                          placeholder="https://example.openai.azure.com/openai/v1"
+                          disabled={isLoading}
+                        />
+                      </div>
+                      <div className="space-y-2">
+                        <label className="text-xs font-medium uppercase tracking-wide text-quiet">
+                          API mode
+                        </label>
+                        <Input
+                          value={provider.api_mode ?? ""}
+                          onChange={(event) =>
+                            updateProviderConfig(index, {
+                              api_mode: event.target.value || null,
+                            })
+                          }
+                          placeholder="openai-completions"
+                          disabled={isLoading}
+                        />
+                      </div>
+                      <div className="space-y-2">
+                        <label className="text-xs font-medium uppercase tracking-wide text-quiet">
+                          Use auth header
+                        </label>
+                        <label className="flex h-10 items-center gap-3 px-1 text-sm text-strong">
+                          <button
+                            type="button"
+                            role="switch"
+                            aria-checked={provider.auth_header ?? false}
+                            aria-label={`Use auth header for ${provider.id || `provider ${index + 1}`}`}
+                            onClick={() =>
+                              updateProviderConfig(index, {
+                                auth_header: !(provider.auth_header ?? false),
+                              })
+                            }
+                            disabled={isLoading}
+                            className={boolSwitchClass(
+                              provider.auth_header ?? false,
+                              isLoading,
+                            )}
+                          >
+                            <span
+                              className={`inline-block h-5 w-5 rounded-full bg-white shadow-sm transition ${
+                                provider.auth_header
+                                  ? "translate-x-5"
+                                  : "translate-x-0.5"
+                              }`}
+                            />
+                          </button>
+                        </label>
+                      </div>
+                    </div>
                   </div>
-                </div>
-              </div>
-            ))
-          ) : (
-            <p className="rounded-lg border border-dashed border-[color:var(--border)] bg-[color:var(--surface)] px-4 py-3 text-sm text-muted">
-              No managed providers saved yet. Existing nodes can be seeded from their live runtime config when you save this form.
-            </p>
-          )}
-          {onProviderConfigsChange ? (
-            <Button
-              type="button"
-              variant="outline"
-              disabled={isLoading}
-              onClick={() =>
-                onProviderConfigsChange([
-                  ...providerConfigs,
-                  {
-                    id: "",
-                    provider_type: null,
-                    label: null,
-                    base_url: null,
-                    api_mode: null,
-                    auth_header: false,
-                  },
-                ])
-              }
-            >
-              Add provider
-            </Button>
-          ) : null}
-        </div>
-      </div>
-
-      <div className="rounded-xl border border-[color:var(--border)] bg-[color:var(--surface-muted)] p-4">
-        <div className="space-y-1">
-          <h2 className="text-sm font-semibold text-strong">Provider auth</h2>
-          <p className="text-xs text-muted">
-            Choose the auth mode Mission Control should manage for each provider. Cloud nodes only allow secret-ref backed `api-key` and `token` auth. Local nodes can also use `oauth` and `login`, with connect/refresh/disconnect actions on the node detail page.
-          </p>
-        </div>
-        <div className="mt-4 space-y-3">
-          {providerAuthConfigs.length > 0 ? (
-            providerAuthConfigs.map((authConfig, index) => {
-              const allowedModes = providerAuthModeOptions;
-              const currentMode =
-                providerAuthModeSet.has(authConfig.auth_mode)
-                  ? authConfig.auth_mode
-                  : allowedModes[0]?.value ?? "api-key";
-              const providerLabel =
-                (providerOptions.find(
-                  (provider) => provider.value === authConfig.provider_id,
-                )?.label ?? authConfig.provider_id) ||
-                `Provider auth ${index + 1}`;
-
-              return (
-                <div
-                  key={`${authConfig.provider_id || "provider"}-${index}`}
-                  className="rounded-lg border border-[color:var(--border)] bg-[color:var(--surface)] p-4"
+                ))
+              ) : (
+                <p className="rounded-lg border border-dashed border-[color:var(--border)] bg-[color:var(--surface)] px-4 py-3 text-sm text-muted">
+                  No managed providers saved yet. Existing nodes can be seeded
+                  from their live runtime config when you save this form.
+                </p>
+              )}
+              {onProviderConfigsChange ? (
+                <Button
+                  type="button"
+                  variant="outline"
+                  disabled={isLoading}
+                  onClick={() =>
+                    onProviderConfigsChange([
+                      ...providerConfigs,
+                      {
+                        id: "",
+                        provider_type: null,
+                        label: null,
+                        base_url: null,
+                        api_mode: null,
+                        auth_header: false,
+                      },
+                    ])
+                  }
                 >
-                  <div className="flex items-start justify-between gap-3">
-                    <div>
-                      <p className="text-sm font-medium text-strong">
-                        {authConfig.display_label?.trim() || providerLabel}
-                      </p>
-                      <p className="mt-1 text-xs text-muted">
-                        {providerAuthModeLabel(currentMode)} auth for {authConfig.provider_id || "this provider"}.
-                      </p>
-                    </div>
-                    {onProviderAuthConfigsChange ? (
-                      <Button
-                        type="button"
-                        variant="outline"
-                        size="sm"
-                        disabled={isLoading}
-                        onClick={() =>
-                          onProviderAuthConfigsChange(
-                            providerAuthConfigs.filter((_, authIndex) => authIndex !== index),
-                          )
-                        }
-                      >
-                        Remove
-                      </Button>
-                    ) : null}
-                  </div>
+                  Add provider
+                </Button>
+              ) : null}
+            </div>
+          </div>
 
-                  <div className="mt-4 grid gap-4 md:grid-cols-2">
-                    <div className="space-y-2">
-                      <label className="text-xs font-medium uppercase tracking-wide text-quiet">
-                        Provider id
-                      </label>
-                      <Input
-                        value={authConfig.provider_id}
-                        onChange={(event) =>
-                          updateProviderAuthConfig(index, {
-                            provider_id: event.target.value,
-                          })
-                        }
-                        placeholder={providerOptions[0]?.value ?? "microsoft-foundry"}
-                        disabled={isLoading}
-                      />
-                    </div>
-                    <div className="space-y-2">
-                      <label className="text-xs font-medium uppercase tracking-wide text-quiet">
-                        Auth mode
-                      </label>
-                      <Select
-                        value={currentMode}
-                        onValueChange={(value) =>
-                          updateProviderAuthConfig(index, {
-                            auth_mode: value as GatewayProviderAuthConfig["auth_mode"],
-                          })
-                        }
-                        disabled={isLoading || allowedModes.length === 0}
-                      >
-                        <SelectTrigger>
-                          <SelectValue placeholder="Choose an auth mode" />
-                        </SelectTrigger>
-                        <SelectContent>
-                          {allowedModes.map((option) => (
-                            <SelectItem key={option.value} value={option.value}>
-                              {option.label}
-                            </SelectItem>
-                          ))}
-                        </SelectContent>
-                      </Select>
-                      <p className="text-[11px] leading-5 text-muted">
-                        {providerAuthModeDescription(currentMode, nodeClass)}
-                      </p>
-                    </div>
-                    <div className="space-y-2">
-                      <label className="text-xs font-medium uppercase tracking-wide text-quiet">
-                        Display label
-                      </label>
-                      <Input
-                        value={authConfig.display_label ?? ""}
-                        onChange={(event) =>
-                          updateProviderAuthConfig(index, {
-                            display_label: event.target.value || null,
-                          })
-                        }
-                        placeholder={providerLabel}
-                        disabled={isLoading}
-                      />
-                    </div>
-                    <div className="space-y-2">
-                      <label className="text-xs font-medium uppercase tracking-wide text-quiet">
-                        Profile id
-                      </label>
-                      <Input
-                        value={authConfig.profile_id ?? ""}
-                        onChange={(event) =>
-                          updateProviderAuthConfig(index, {
-                            profile_id: event.target.value || null,
-                          })
-                        }
-                        placeholder="default"
-                        disabled={isLoading}
-                      />
-                    </div>
-                  </div>
+          <div className="rounded-xl border border-[color:var(--border)] bg-[color:var(--surface-muted)] p-4">
+            <div className="space-y-1">
+              <h2 className="text-sm font-semibold text-strong">
+                Provider auth
+              </h2>
+              <p className="text-xs text-muted">
+                Choose the auth mode Mission Control should manage for each
+                provider. Service-auth uses stored secrets, while `oauth` and
+                `login` run on the node session and continue with
+                connect/refresh/disconnect actions on the node detail page.
+              </p>
+            </div>
+            <div className="mt-4 space-y-3">
+              {providerAuthConfigs.length > 0 ? (
+                providerAuthConfigs.map((authConfig, index) => {
+                  const allowedModes = providerAuthModeOptions;
+                  const currentMode = providerAuthModeSet.has(
+                    authConfig.auth_mode,
+                  )
+                    ? authConfig.auth_mode
+                    : (allowedModes[0]?.value ?? "api-key");
+                  const providerLabel =
+                    (providerOptions.find(
+                      (provider) => provider.value === authConfig.provider_id,
+                    )?.label ??
+                      authConfig.provider_id) ||
+                    `Provider auth ${index + 1}`;
 
-                  <div className="mt-4 flex flex-wrap gap-2">
-                    <Badge variant="outline">{providerAuthModeLabel(currentMode)}</Badge>
-                    <Badge
-                      variant={nodeClass === "cloud" ? "warning" : "success"}
+                  return (
+                    <div
+                      key={`${authConfig.provider_id || "provider"}-${index}`}
+                      className="rounded-lg border border-[color:var(--border)] bg-[color:var(--surface)] p-4"
                     >
-                      {nodeClass === "cloud"
-                        ? "Cloud: secret refs only"
-                        : "Local: interactive auth available"}
-                    </Badge>
-                    {providerAuthModeSet.has(authConfig.auth_mode) ? null : (
-                      <Badge variant="warning">Unsupported auth mode reset to default</Badge>
-                    )}
-                  </div>
+                      <div className="flex items-start justify-between gap-3">
+                        <div>
+                          <p className="text-sm font-medium text-strong">
+                            {authConfig.display_label?.trim() || providerLabel}
+                          </p>
+                          <p className="mt-1 text-xs text-muted">
+                            {providerAuthModeLabel(currentMode)} auth for{" "}
+                            {authConfig.provider_id || "this provider"}.
+                          </p>
+                        </div>
+                        {onProviderAuthConfigsChange ? (
+                          <Button
+                            type="button"
+                            variant="outline"
+                            size="sm"
+                            disabled={isLoading}
+                            onClick={() =>
+                              onProviderAuthConfigsChange(
+                                providerAuthConfigs.filter(
+                                  (_, authIndex) => authIndex !== index,
+                                ),
+                              )
+                            }
+                          >
+                            Remove
+                          </Button>
+                        ) : null}
+                      </div>
 
-                  {currentMode === "api-key" || currentMode === "token" ? (
-                    <p className="mt-3 text-xs text-muted">
-                      Secret refs for this provider are still edited in the secret-ref section below. Use `env:` or `keyvault:` refs for cloud nodes.
-                    </p>
-                  ) : (
-                    <p className="mt-3 text-xs text-muted">
-                      This provider uses interactive auth. Mission Control will show connect/refresh/disconnect controls on the node detail page after save. Cloud nodes do not offer these flows.
-                    </p>
-                  )}
-                </div>
-              );
-            })
-          ) : (
-            <p className="rounded-lg border border-dashed border-[color:var(--border)] bg-[color:var(--surface)] px-4 py-3 text-sm text-muted">
-              No provider auth configs saved yet. Add one per provider to choose whether the node uses `api-key`, `token`, `oauth`, or `login` auth.
-            </p>
-          )}
-          {onProviderAuthConfigsChange ? (
-            <Button
-              type="button"
-              variant="outline"
-              disabled={isLoading}
-              onClick={() =>
-                onProviderAuthConfigsChange([
-                  ...providerAuthConfigs,
-                  {
-                    provider_id: providerOptions[0]?.value ?? "",
-                    auth_mode:
-                      providerAuthModeOptions[0]?.value ?? "api-key",
-                    preset_id: null,
-                    managed_by_catalog: false,
-                    profile_id: null,
-                    display_label: null,
-                    secret_refs: null,
-                    token_header_name: null,
-                    token_header_prefix: null,
-                  },
-                ])
-              }
-            >
-              Add provider auth
-            </Button>
-          ) : null}
-        </div>
-      </div>
+                      <div className="mt-4 grid gap-4 md:grid-cols-2">
+                        <div className="space-y-2">
+                          <label className="text-xs font-medium uppercase tracking-wide text-quiet">
+                            Provider id
+                          </label>
+                          <Input
+                            value={authConfig.provider_id}
+                            onChange={(event) =>
+                              updateProviderAuthConfig(index, {
+                                provider_id: event.target.value,
+                              })
+                            }
+                            placeholder={
+                              providerOptions[0]?.value ?? "microsoft-foundry"
+                            }
+                            disabled={isLoading}
+                          />
+                        </div>
+                        <div className="space-y-2">
+                          <label className="text-xs font-medium uppercase tracking-wide text-quiet">
+                            Auth mode
+                          </label>
+                          <Select
+                            value={currentMode}
+                            onValueChange={(value) =>
+                              updateProviderAuthConfig(index, {
+                                auth_mode:
+                                  value as GatewayProviderAuthConfig["auth_mode"],
+                              })
+                            }
+                            disabled={isLoading || allowedModes.length === 0}
+                          >
+                            <SelectTrigger>
+                              <SelectValue placeholder="Choose an auth mode" />
+                            </SelectTrigger>
+                            <SelectContent>
+                              {allowedModes.map((option) => (
+                                <SelectItem
+                                  key={option.value}
+                                  value={option.value}
+                                >
+                                  {option.label}
+                                </SelectItem>
+                              ))}
+                            </SelectContent>
+                          </Select>
+                          <p className="text-[11px] leading-5 text-muted">
+                            {providerAuthModeDescription(
+                              currentMode,
+                              nodeClass,
+                            )}
+                          </p>
+                        </div>
+                        <div className="space-y-2">
+                          <label className="text-xs font-medium uppercase tracking-wide text-quiet">
+                            Display label
+                          </label>
+                          <Input
+                            value={authConfig.display_label ?? ""}
+                            onChange={(event) =>
+                              updateProviderAuthConfig(index, {
+                                display_label: event.target.value || null,
+                              })
+                            }
+                            placeholder={providerLabel}
+                            disabled={isLoading}
+                          />
+                        </div>
+                        <div className="space-y-2">
+                          <label className="text-xs font-medium uppercase tracking-wide text-quiet">
+                            Profile id
+                          </label>
+                          <Input
+                            value={authConfig.profile_id ?? ""}
+                            onChange={(event) =>
+                              updateProviderAuthConfig(index, {
+                                profile_id: event.target.value || null,
+                              })
+                            }
+                            placeholder="default"
+                            disabled={isLoading}
+                          />
+                        </div>
+                      </div>
 
-      <div className="rounded-xl border border-[color:var(--border)] bg-[color:var(--surface-muted)] p-4">
-        <div className="space-y-1">
-          <h2 className="text-sm font-semibold text-strong">Models</h2>
-          <p className="text-xs text-muted">
-            Define the provider-owned models this node should manage. Only verified live models become selectable for agents and product leads.
-          </p>
-        </div>
-        <div className="mt-4 space-y-3">
-          {modelDefinitions.length > 0 ? (
-            modelDefinitions.map((definition, index) => (
-              <div
-                key={`${definition.provider_id || "provider"}-${definition.model_id || index}`}
-                className="rounded-lg border border-[color:var(--border)] bg-[color:var(--surface)] p-4"
-              >
-                <div className="flex items-start justify-between gap-3">
-                  <div>
-                    <p className="text-sm font-medium text-strong">
-                      {definition.label?.trim() ||
-                        definition.model_id ||
-                        `Model ${index + 1}`}
-                    </p>
-                    <p className="mt-1 text-xs text-muted">
-                      Provider-owned runtime metadata. Costs and limits are optional but helpful for operator visibility.
-                    </p>
-                  </div>
-                  {onModelDefinitionsChange ? (
-                    <Button
-                      type="button"
-                      variant="outline"
-                      size="sm"
-                      disabled={isLoading}
-                      onClick={() =>
-                        onModelDefinitionsChange(
-                          modelDefinitions.filter((_, modelIndex) => modelIndex !== index),
-                        )
-                      }
-                    >
-                      Remove
-                    </Button>
-                  ) : null}
-                </div>
-                <div className="mt-4 grid gap-4 md:grid-cols-2">
-                  <div className="space-y-2">
-                    <label className="text-xs font-medium uppercase tracking-wide text-quiet">
-                      Provider id
-                    </label>
-                    <Input
-                      value={definition.provider_id}
-                      onChange={(event) =>
-                        updateModelDefinition(index, { provider_id: event.target.value })
-                      }
-                      placeholder={providerOptions[0]?.value ?? "microsoft-foundry"}
-                      disabled={isLoading}
-                    />
-                  </div>
-                  <div className="space-y-2">
-                    <label className="text-xs font-medium uppercase tracking-wide text-quiet">
-                      Model id
-                    </label>
-                    <Input
-                      value={definition.model_id}
-                      onChange={(event) =>
-                        updateModelDefinition(index, { model_id: event.target.value })
-                      }
-                      placeholder="gpt-5.4-mini"
-                      disabled={isLoading}
-                    />
-                  </div>
-                  <div className="space-y-2">
-                    <label className="text-xs font-medium uppercase tracking-wide text-quiet">
-                      Display label
-                    </label>
-                    <Input
-                      value={definition.label ?? ""}
-                      onChange={(event) =>
-                        updateModelDefinition(index, { label: event.target.value || null })
-                      }
-                      placeholder="GPT-5.4 Mini (Azure Foundry)"
-                      disabled={isLoading}
-                    />
-                  </div>
-                  <div className="space-y-2">
-                    <label className="text-xs font-medium uppercase tracking-wide text-quiet">
-                      API mode
-                    </label>
-                    <Input
-                      value={definition.api_mode ?? ""}
-                      onChange={(event) =>
-                        updateModelDefinition(index, { api_mode: event.target.value || null })
-                      }
-                      placeholder="openai-completions"
-                      disabled={isLoading}
-                    />
-                  </div>
-                  <div className="space-y-2">
-                    <label className="text-xs font-medium uppercase tracking-wide text-quiet">
-                      Input modalities
-                    </label>
-                    <Input
-                      value={(definition.input_modalities ?? []).join(", ")}
-                      onChange={(event) =>
-                        updateModelDefinition(index, {
-                          input_modalities: event.target.value
-                            .split(",")
-                            .map((value) => value.trim())
-                            .filter(Boolean),
-                        })
-                      }
-                      placeholder="text, image"
-                      disabled={isLoading}
-                    />
-                  </div>
-                  <div className="space-y-2">
-                    <label className="text-xs font-medium uppercase tracking-wide text-quiet">
-                      Reasoning enabled
-                    </label>
-                    <label className="flex h-10 items-center gap-3 px-1 text-sm text-strong">
-                      <button
-                        type="button"
-                        role="switch"
-                        aria-checked={definition.reasoning ?? false}
-                        aria-label={`Reasoning enabled for ${definition.model_id || `model ${index + 1}`}`}
-                        onClick={() =>
-                          updateModelDefinition(index, {
-                            reasoning: !(definition.reasoning ?? false),
-                          })
-                        }
-                        disabled={isLoading}
-                        className={boolSwitchClass(definition.reasoning ?? false, isLoading)}
-                      >
-                        <span
-                          className={`inline-block h-5 w-5 rounded-full bg-white shadow-sm transition ${
-                            definition.reasoning ? "translate-x-5" : "translate-x-0.5"
-                          }`}
+                      <div className="mt-4 flex flex-wrap gap-2">
+                        <Badge variant="outline">
+                          {providerAuthModeLabel(currentMode)}
+                        </Badge>
+                        <Badge
+                          variant={
+                            currentMode === "oauth" || currentMode === "login"
+                              ? "success"
+                              : "outline"
+                          }
+                        >
+                          {currentMode === "oauth" || currentMode === "login"
+                            ? nodeClass === "cloud"
+                              ? "Cloud: remote node session"
+                              : "Local: node session"
+                            : "Service auth"}
+                        </Badge>
+                        {providerAuthModeSet.has(
+                          authConfig.auth_mode,
+                        ) ? null : (
+                          <Badge variant="warning">
+                            Unsupported auth mode reset to default
+                          </Badge>
+                        )}
+                      </div>
+
+                      {currentMode === "api-key" || currentMode === "token" ? (
+                        <p className="mt-3 text-xs text-muted">
+                          Secret refs for this provider are still edited in the
+                          secret-ref section below. Use `env:` or `keyvault:`
+                          refs when you want Mission Control to resolve the
+                          stored service secret at runtime.
+                        </p>
+                      ) : (
+                        <p className="mt-3 text-xs text-muted">
+                          This provider uses interactive auth. Mission Control
+                          will show connect/refresh/disconnect controls on the
+                          node detail page after save, and cloud nodes run that
+                          sign-in against the remote node session.
+                        </p>
+                      )}
+                    </div>
+                  );
+                })
+              ) : (
+                <p className="rounded-lg border border-dashed border-[color:var(--border)] bg-[color:var(--surface)] px-4 py-3 text-sm text-muted">
+                  No provider auth configs saved yet. Add one per provider to
+                  choose whether the node uses `api-key`, `token`, `oauth`, or
+                  `login` auth.
+                </p>
+              )}
+              {onProviderAuthConfigsChange ? (
+                <Button
+                  type="button"
+                  variant="outline"
+                  disabled={isLoading}
+                  onClick={() =>
+                    onProviderAuthConfigsChange([
+                      ...providerAuthConfigs,
+                      {
+                        provider_id: providerOptions[0]?.value ?? "",
+                        auth_mode:
+                          providerAuthModeOptions[0]?.value ?? "api-key",
+                        preset_id: null,
+                        managed_by_catalog: false,
+                        profile_id: null,
+                        display_label: null,
+                        secret_refs: null,
+                        token_header_name: null,
+                        token_header_prefix: null,
+                      },
+                    ])
+                  }
+                >
+                  Add provider auth
+                </Button>
+              ) : null}
+            </div>
+          </div>
+
+          <div className="rounded-xl border border-[color:var(--border)] bg-[color:var(--surface-muted)] p-4">
+            <div className="space-y-1">
+              <h2 className="text-sm font-semibold text-strong">Models</h2>
+              <p className="text-xs text-muted">
+                Define the provider-owned models this node should manage. Only
+                verified live models become selectable for agents and product
+                leads.
+              </p>
+            </div>
+            <div className="mt-4 space-y-3">
+              {modelDefinitions.length > 0 ? (
+                modelDefinitions.map((definition, index) => (
+                  <div
+                    key={`${definition.provider_id || "provider"}-${definition.model_id || index}`}
+                    className="rounded-lg border border-[color:var(--border)] bg-[color:var(--surface)] p-4"
+                  >
+                    <div className="flex items-start justify-between gap-3">
+                      <div>
+                        <p className="text-sm font-medium text-strong">
+                          {definition.label?.trim() ||
+                            definition.model_id ||
+                            `Model ${index + 1}`}
+                        </p>
+                        <p className="mt-1 text-xs text-muted">
+                          Provider-owned runtime metadata. Costs and limits are
+                          optional but helpful for operator visibility.
+                        </p>
+                      </div>
+                      {onModelDefinitionsChange ? (
+                        <Button
+                          type="button"
+                          variant="outline"
+                          size="sm"
+                          disabled={isLoading}
+                          onClick={() =>
+                            onModelDefinitionsChange(
+                              modelDefinitions.filter(
+                                (_, modelIndex) => modelIndex !== index,
+                              ),
+                            )
+                          }
+                        >
+                          Remove
+                        </Button>
+                      ) : null}
+                    </div>
+                    <div className="mt-4 grid gap-4 md:grid-cols-2">
+                      <div className="space-y-2">
+                        <label className="text-xs font-medium uppercase tracking-wide text-quiet">
+                          Provider id
+                        </label>
+                        <Input
+                          value={definition.provider_id}
+                          onChange={(event) =>
+                            updateModelDefinition(index, {
+                              provider_id: event.target.value,
+                            })
+                          }
+                          placeholder={
+                            providerOptions[0]?.value ?? "microsoft-foundry"
+                          }
+                          disabled={isLoading}
                         />
-                      </button>
-                    </label>
+                      </div>
+                      <div className="space-y-2">
+                        <label className="text-xs font-medium uppercase tracking-wide text-quiet">
+                          Model id
+                        </label>
+                        <Input
+                          value={definition.model_id}
+                          onChange={(event) =>
+                            updateModelDefinition(index, {
+                              model_id: event.target.value,
+                            })
+                          }
+                          placeholder="gpt-5.4-mini"
+                          disabled={isLoading}
+                        />
+                      </div>
+                      <div className="space-y-2">
+                        <label className="text-xs font-medium uppercase tracking-wide text-quiet">
+                          Display label
+                        </label>
+                        <Input
+                          value={definition.label ?? ""}
+                          onChange={(event) =>
+                            updateModelDefinition(index, {
+                              label: event.target.value || null,
+                            })
+                          }
+                          placeholder="GPT-5.4 Mini (Azure Foundry)"
+                          disabled={isLoading}
+                        />
+                      </div>
+                      <div className="space-y-2">
+                        <label className="text-xs font-medium uppercase tracking-wide text-quiet">
+                          API mode
+                        </label>
+                        <Input
+                          value={definition.api_mode ?? ""}
+                          onChange={(event) =>
+                            updateModelDefinition(index, {
+                              api_mode: event.target.value || null,
+                            })
+                          }
+                          placeholder="openai-completions"
+                          disabled={isLoading}
+                        />
+                      </div>
+                      <div className="space-y-2">
+                        <label className="text-xs font-medium uppercase tracking-wide text-quiet">
+                          Input modalities
+                        </label>
+                        <Input
+                          value={(definition.input_modalities ?? []).join(", ")}
+                          onChange={(event) =>
+                            updateModelDefinition(index, {
+                              input_modalities: event.target.value
+                                .split(",")
+                                .map((value) => value.trim())
+                                .filter(Boolean),
+                            })
+                          }
+                          placeholder="text, image"
+                          disabled={isLoading}
+                        />
+                      </div>
+                      <div className="space-y-2">
+                        <label className="text-xs font-medium uppercase tracking-wide text-quiet">
+                          Reasoning enabled
+                        </label>
+                        <label className="flex h-10 items-center gap-3 px-1 text-sm text-strong">
+                          <button
+                            type="button"
+                            role="switch"
+                            aria-checked={definition.reasoning ?? false}
+                            aria-label={`Reasoning enabled for ${definition.model_id || `model ${index + 1}`}`}
+                            onClick={() =>
+                              updateModelDefinition(index, {
+                                reasoning: !(definition.reasoning ?? false),
+                              })
+                            }
+                            disabled={isLoading}
+                            className={boolSwitchClass(
+                              definition.reasoning ?? false,
+                              isLoading,
+                            )}
+                          >
+                            <span
+                              className={`inline-block h-5 w-5 rounded-full bg-white shadow-sm transition ${
+                                definition.reasoning
+                                  ? "translate-x-5"
+                                  : "translate-x-0.5"
+                              }`}
+                            />
+                          </button>
+                        </label>
+                      </div>
+                      <div className="space-y-2">
+                        <label className="text-xs font-medium uppercase tracking-wide text-quiet">
+                          Context window
+                        </label>
+                        <Input
+                          value={definition.context_window ?? ""}
+                          onChange={(event) =>
+                            updateModelDefinition(index, {
+                              context_window: toNumberOrNull(
+                                event.target.value,
+                              ),
+                            })
+                          }
+                          placeholder="128000"
+                          disabled={isLoading}
+                        />
+                      </div>
+                      <div className="space-y-2">
+                        <label className="text-xs font-medium uppercase tracking-wide text-quiet">
+                          Max tokens
+                        </label>
+                        <Input
+                          value={definition.max_tokens ?? ""}
+                          onChange={(event) =>
+                            updateModelDefinition(index, {
+                              max_tokens: toNumberOrNull(event.target.value),
+                            })
+                          }
+                          placeholder="16384"
+                          disabled={isLoading}
+                        />
+                      </div>
+                    </div>
+                    <div className="mt-4 grid gap-4 md:grid-cols-4">
+                      <div className="space-y-2">
+                        <label className="text-xs font-medium uppercase tracking-wide text-quiet">
+                          Cost input
+                        </label>
+                        <Input
+                          value={definition.cost?.input ?? ""}
+                          onChange={(event) =>
+                            updateModelDefinition(index, {
+                              cost: {
+                                ...(definition.cost ?? {}),
+                                input: toNumberOrNull(event.target.value),
+                              },
+                            })
+                          }
+                          placeholder="0.75"
+                          disabled={isLoading}
+                        />
+                      </div>
+                      <div className="space-y-2">
+                        <label className="text-xs font-medium uppercase tracking-wide text-quiet">
+                          Cost output
+                        </label>
+                        <Input
+                          value={definition.cost?.output ?? ""}
+                          onChange={(event) =>
+                            updateModelDefinition(index, {
+                              cost: {
+                                ...(definition.cost ?? {}),
+                                output: toNumberOrNull(event.target.value),
+                              },
+                            })
+                          }
+                          placeholder="4.50"
+                          disabled={isLoading}
+                        />
+                      </div>
+                      <div className="space-y-2">
+                        <label className="text-xs font-medium uppercase tracking-wide text-quiet">
+                          Cache read
+                        </label>
+                        <Input
+                          value={definition.cost?.cache_read ?? ""}
+                          onChange={(event) =>
+                            updateModelDefinition(index, {
+                              cost: {
+                                ...(definition.cost ?? {}),
+                                cache_read: toNumberOrNull(event.target.value),
+                              },
+                            })
+                          }
+                          placeholder="0.075"
+                          disabled={isLoading}
+                        />
+                      </div>
+                      <div className="space-y-2">
+                        <label className="text-xs font-medium uppercase tracking-wide text-quiet">
+                          Cache write
+                        </label>
+                        <Input
+                          value={definition.cost?.cache_write ?? ""}
+                          onChange={(event) =>
+                            updateModelDefinition(index, {
+                              cost: {
+                                ...(definition.cost ?? {}),
+                                cache_write: toNumberOrNull(event.target.value),
+                              },
+                            })
+                          }
+                          placeholder="0.75"
+                          disabled={isLoading}
+                        />
+                      </div>
+                    </div>
                   </div>
-                  <div className="space-y-2">
-                    <label className="text-xs font-medium uppercase tracking-wide text-quiet">
-                      Context window
-                    </label>
-                    <Input
-                      value={definition.context_window ?? ""}
-                      onChange={(event) =>
-                        updateModelDefinition(index, {
-                          context_window: toNumberOrNull(event.target.value),
-                        })
-                      }
-                      placeholder="128000"
-                      disabled={isLoading}
-                    />
-                  </div>
-                  <div className="space-y-2">
-                    <label className="text-xs font-medium uppercase tracking-wide text-quiet">
-                      Max tokens
-                    </label>
-                    <Input
-                      value={definition.max_tokens ?? ""}
-                      onChange={(event) =>
-                        updateModelDefinition(index, {
-                          max_tokens: toNumberOrNull(event.target.value),
-                        })
-                      }
-                      placeholder="16384"
-                      disabled={isLoading}
-                    />
-                  </div>
-                </div>
-                <div className="mt-4 grid gap-4 md:grid-cols-4">
-                  <div className="space-y-2">
-                    <label className="text-xs font-medium uppercase tracking-wide text-quiet">
-                      Cost input
-                    </label>
-                    <Input
-                      value={definition.cost?.input ?? ""}
-                      onChange={(event) =>
-                        updateModelDefinition(index, {
-                          cost: {
-                            ...(definition.cost ?? {}),
-                            input: toNumberOrNull(event.target.value),
-                          },
-                        })
-                      }
-                      placeholder="0.75"
-                      disabled={isLoading}
-                    />
-                  </div>
-                  <div className="space-y-2">
-                    <label className="text-xs font-medium uppercase tracking-wide text-quiet">
-                      Cost output
-                    </label>
-                    <Input
-                      value={definition.cost?.output ?? ""}
-                      onChange={(event) =>
-                        updateModelDefinition(index, {
-                          cost: {
-                            ...(definition.cost ?? {}),
-                            output: toNumberOrNull(event.target.value),
-                          },
-                        })
-                      }
-                      placeholder="4.50"
-                      disabled={isLoading}
-                    />
-                  </div>
-                  <div className="space-y-2">
-                    <label className="text-xs font-medium uppercase tracking-wide text-quiet">
-                      Cache read
-                    </label>
-                    <Input
-                      value={definition.cost?.cache_read ?? ""}
-                      onChange={(event) =>
-                        updateModelDefinition(index, {
-                          cost: {
-                            ...(definition.cost ?? {}),
-                            cache_read: toNumberOrNull(event.target.value),
-                          },
-                        })
-                      }
-                      placeholder="0.075"
-                      disabled={isLoading}
-                    />
-                  </div>
-                  <div className="space-y-2">
-                    <label className="text-xs font-medium uppercase tracking-wide text-quiet">
-                      Cache write
-                    </label>
-                    <Input
-                      value={definition.cost?.cache_write ?? ""}
-                      onChange={(event) =>
-                        updateModelDefinition(index, {
-                          cost: {
-                            ...(definition.cost ?? {}),
-                            cache_write: toNumberOrNull(event.target.value),
-                          },
-                        })
-                      }
-                      placeholder="0.75"
-                      disabled={isLoading}
-                    />
-                  </div>
-                </div>
-              </div>
-            ))
-          ) : (
-            <p className="rounded-lg border border-dashed border-[color:var(--border)] bg-[color:var(--surface)] px-4 py-3 text-sm text-muted">
-              No managed models saved yet. Runtime-verified models remain visible below and can still be enabled for agents after verification.
-            </p>
-          )}
-          {onModelDefinitionsChange ? (
-            <Button
-              type="button"
-              variant="outline"
-              disabled={isLoading}
-              onClick={() =>
-                onModelDefinitionsChange([
-                  ...modelDefinitions,
-                  {
-                    provider_id: providerOptions[0]?.value ?? "",
-                    model_id: "",
-                    label: null,
-                    api_mode: null,
-                    reasoning: false,
-                    input_modalities: ["text"],
-                    context_window: null,
-                    max_tokens: null,
-                    cost: null,
-                  },
-                ])
-              }
-            >
-              Add model
-            </Button>
-          ) : null}
-        </div>
-      </div>
+                ))
+              ) : (
+                <p className="rounded-lg border border-dashed border-[color:var(--border)] bg-[color:var(--surface)] px-4 py-3 text-sm text-muted">
+                  No managed models saved yet. Runtime-verified models remain
+                  visible below and can still be enabled for agents after
+                  verification.
+                </p>
+              )}
+              {onModelDefinitionsChange ? (
+                <Button
+                  type="button"
+                  variant="outline"
+                  disabled={isLoading}
+                  onClick={() =>
+                    onModelDefinitionsChange([
+                      ...modelDefinitions,
+                      {
+                        provider_id: providerOptions[0]?.value ?? "",
+                        model_id: "",
+                        label: null,
+                        api_mode: null,
+                        reasoning: false,
+                        input_modalities: ["text"],
+                        context_window: null,
+                        max_tokens: null,
+                        cost: null,
+                      },
+                    ])
+                  }
+                >
+                  Add model
+                </Button>
+              ) : null}
+            </div>
+          </div>
 
-      <div className="rounded-xl border border-[color:var(--border)] bg-[color:var(--surface-muted)] p-4">
-        <div className="space-y-1">
-          <h2 className="text-sm font-semibold text-strong">Secret refs</h2>
-          <p className="text-xs text-muted">
-            Store only secret references here. Use refs like <code>env:OPENCLAW_FOUNDRY_API_KEY</code> or <code>keyvault:foundry-key</code>, never plaintext secrets.
-          </p>
-        </div>
-        <div className="mt-4 space-y-3">
-          {providerSecretRefs.length > 0 ? (
-            providerSecretRefs.map((secretRef, index) => (
-              <div
-                key={`${secretRef.provider_id || "provider"}-${secretRef.purpose || index}`}
-                className="rounded-lg border border-[color:var(--border)] bg-[color:var(--surface)] p-4"
-              >
-                <div className="flex items-start justify-between gap-3">
-                  <div>
-                    <p className="text-sm font-medium text-strong">
-                      {secretRef.provider_id || `Provider ref ${index + 1}`}
-                    </p>
-                    <p className="mt-1 text-xs text-muted">
-                      Purposes typically look like <code>apiKey</code> or <code>header:api-key</code>.
-                    </p>
+          <div className="rounded-xl border border-[color:var(--border)] bg-[color:var(--surface-muted)] p-4">
+            <div className="space-y-1">
+              <h2 className="text-sm font-semibold text-strong">Secret refs</h2>
+              <p className="text-xs text-muted">
+                Store only secret references here. Use refs like{" "}
+                <code>env:OPENCLAW_FOUNDRY_API_KEY</code> or{" "}
+                <code>keyvault:foundry-key</code>, never plaintext secrets.
+              </p>
+            </div>
+            <div className="mt-4 space-y-3">
+              {providerSecretRefs.length > 0 ? (
+                providerSecretRefs.map((secretRef, index) => (
+                  <div
+                    key={`${secretRef.provider_id || "provider"}-${secretRef.purpose || index}`}
+                    className="rounded-lg border border-[color:var(--border)] bg-[color:var(--surface)] p-4"
+                  >
+                    <div className="flex items-start justify-between gap-3">
+                      <div>
+                        <p className="text-sm font-medium text-strong">
+                          {secretRef.provider_id || `Provider ref ${index + 1}`}
+                        </p>
+                        <p className="mt-1 text-xs text-muted">
+                          Purposes typically look like <code>apiKey</code> or{" "}
+                          <code>header:api-key</code>.
+                        </p>
+                      </div>
+                      {onProviderSecretRefsChange ? (
+                        <Button
+                          type="button"
+                          variant="outline"
+                          size="sm"
+                          disabled={isLoading}
+                          onClick={() =>
+                            onProviderSecretRefsChange(
+                              providerSecretRefs.filter(
+                                (_, refIndex) => refIndex !== index,
+                              ),
+                            )
+                          }
+                        >
+                          Remove
+                        </Button>
+                      ) : null}
+                    </div>
+                    <div className="mt-4 grid gap-4 md:grid-cols-3">
+                      <div className="space-y-2">
+                        <label className="text-xs font-medium uppercase tracking-wide text-quiet">
+                          Provider id
+                        </label>
+                        <Input
+                          value={secretRef.provider_id}
+                          onChange={(event) =>
+                            updateProviderSecretRef(index, {
+                              provider_id: event.target.value,
+                            })
+                          }
+                          placeholder={
+                            providerOptions[0]?.value ?? "microsoft-foundry"
+                          }
+                          disabled={isLoading}
+                        />
+                      </div>
+                      <div className="space-y-2">
+                        <label className="text-xs font-medium uppercase tracking-wide text-quiet">
+                          Purpose
+                        </label>
+                        <Input
+                          value={secretRef.purpose}
+                          onChange={(event) =>
+                            updateProviderSecretRef(index, {
+                              purpose: event.target.value,
+                            })
+                          }
+                          placeholder="apiKey"
+                          disabled={isLoading}
+                        />
+                      </div>
+                      <div className="space-y-2">
+                        <label className="text-xs font-medium uppercase tracking-wide text-quiet">
+                          Secret ref
+                        </label>
+                        <Input
+                          value={secretRef.ref}
+                          onChange={(event) =>
+                            updateProviderSecretRef(index, {
+                              ref: event.target.value,
+                            })
+                          }
+                          placeholder="env:OPENCLAW_FOUNDRY_API_KEY"
+                          disabled={isLoading}
+                        />
+                      </div>
+                    </div>
                   </div>
-                  {onProviderSecretRefsChange ? (
-                    <Button
-                      type="button"
-                      variant="outline"
-                      size="sm"
-                      disabled={isLoading}
-                      onClick={() =>
-                        onProviderSecretRefsChange(
-                          providerSecretRefs.filter((_, refIndex) => refIndex !== index),
-                        )
-                      }
-                    >
-                      Remove
-                    </Button>
-                  ) : null}
-                </div>
-                <div className="mt-4 grid gap-4 md:grid-cols-3">
-                  <div className="space-y-2">
-                    <label className="text-xs font-medium uppercase tracking-wide text-quiet">
-                      Provider id
-                    </label>
-                    <Input
-                      value={secretRef.provider_id}
-                      onChange={(event) =>
-                        updateProviderSecretRef(index, { provider_id: event.target.value })
-                      }
-                      placeholder={providerOptions[0]?.value ?? "microsoft-foundry"}
-                      disabled={isLoading}
-                    />
-                  </div>
-                  <div className="space-y-2">
-                    <label className="text-xs font-medium uppercase tracking-wide text-quiet">
-                      Purpose
-                    </label>
-                    <Input
-                      value={secretRef.purpose}
-                      onChange={(event) =>
-                        updateProviderSecretRef(index, { purpose: event.target.value })
-                      }
-                      placeholder="apiKey"
-                      disabled={isLoading}
-                    />
-                  </div>
-                  <div className="space-y-2">
-                    <label className="text-xs font-medium uppercase tracking-wide text-quiet">
-                      Secret ref
-                    </label>
-                    <Input
-                      value={secretRef.ref}
-                      onChange={(event) =>
-                        updateProviderSecretRef(index, { ref: event.target.value })
-                      }
-                      placeholder="env:OPENCLAW_FOUNDRY_API_KEY"
-                      disabled={isLoading}
-                    />
-                  </div>
-                </div>
-              </div>
-            ))
-          ) : (
-            <p className="rounded-lg border border-dashed border-[color:var(--border)] bg-[color:var(--surface)] px-4 py-3 text-sm text-muted">
-              No managed secret refs saved yet. Existing live secrets remain preserved until you explicitly replace them with ref-backed provider auth.
-            </p>
-          )}
-          {onProviderSecretRefsChange ? (
-            <Button
-              type="button"
-              variant="outline"
-              disabled={isLoading}
-              onClick={() =>
-                onProviderSecretRefsChange([
-                  ...providerSecretRefs,
-                  {
-                    provider_id: providerOptions[0]?.value ?? "",
-                    purpose: "apiKey",
-                    ref: "",
-                  },
-                ])
-              }
-            >
-              Add secret ref
-            </Button>
-          ) : null}
-        </div>
-      </div>
+                ))
+              ) : (
+                <p className="rounded-lg border border-dashed border-[color:var(--border)] bg-[color:var(--surface)] px-4 py-3 text-sm text-muted">
+                  No managed secret refs saved yet. Existing live secrets remain
+                  preserved until you explicitly replace them with ref-backed
+                  provider auth.
+                </p>
+              )}
+              {onProviderSecretRefsChange ? (
+                <Button
+                  type="button"
+                  variant="outline"
+                  disabled={isLoading}
+                  onClick={() =>
+                    onProviderSecretRefsChange([
+                      ...providerSecretRefs,
+                      {
+                        provider_id: providerOptions[0]?.value ?? "",
+                        purpose: "apiKey",
+                        ref: "",
+                      },
+                    ])
+                  }
+                >
+                  Add secret ref
+                </Button>
+              ) : null}
+            </div>
+          </div>
         </TabsContent>
       </Tabs>
 
@@ -1209,7 +1325,8 @@ export function GatewayForm({
         <div className="space-y-1">
           <h2 className="text-sm font-semibold text-strong">Model policy</h2>
           <p className="text-xs text-muted">
-            Keep one shared operator surface, but only pin profiles to models this node can actually verify at runtime.
+            Keep one shared operator surface, but only pin profiles to models
+            this node can actually verify at runtime.
           </p>
         </div>
 
@@ -1246,9 +1363,9 @@ export function GatewayForm({
                 ? `${configuredModelEntries.length} managed model${configuredModelEntries.length === 1 ? "" : "s"} configured for this node`
                 : verifiedModelRefs.length > 0
                   ? `${verifiedModelRefs.length} verified runtime model${verifiedModelRefs.length === 1 ? "" : "s"} available`
-                : availableModelEntries.length > 0
-                  ? `${availableModelEntries.length} configured model${availableModelEntries.length === 1 ? "" : "s"} pending runtime verification`
-                  : "Add a guided integration or save this node and reconcile runtime to unlock model choices."}
+                  : availableModelEntries.length > 0
+                    ? `${availableModelEntries.length} configured model${availableModelEntries.length === 1 ? "" : "s"} pending runtime verification`
+                    : "Add a guided integration or save this node and reconcile runtime to unlock model choices."}
             </div>
           </div>
         </div>
@@ -1260,14 +1377,17 @@ export function GatewayForm({
                 Enabled for agents
               </label>
               <p className="text-xs text-muted">
-                Choose which managed node models agents and product leads can actually select on this node.
+                Choose which managed node models agents and product leads can
+                actually select on this node.
               </p>
             </div>
             {availableModelEntries.length > 0 && onEnabledModelRefsChange ? (
               <button
                 type="button"
                 onClick={() =>
-                  onEnabledModelRefsChange(availableModelEntries.map((entry) => entry.ref))
+                  onEnabledModelRefsChange(
+                    availableModelEntries.map((entry) => entry.ref),
+                  )
                 }
                 className="text-xs font-medium text-[color:var(--accent)] hover:text-[color:var(--accent-strong)]"
                 disabled={isLoading}
@@ -1278,7 +1398,8 @@ export function GatewayForm({
           </div>
           {availableModelEntries.length === 0 ? (
             <p className="rounded-md border border-[color:var(--border)] bg-[color:var(--surface-muted)] px-3 py-2 text-xs text-muted">
-              Add or verify node models before scoping what agents and product leads can use.
+              Add or verify node models before scoping what agents and product
+              leads can use.
             </p>
           ) : (
             <div className="grid gap-2 md:grid-cols-2">
@@ -1300,7 +1421,9 @@ export function GatewayForm({
                         }
                         const nextRefs = event.target.checked
                           ? [...effectiveEnabledModelRefs, entry.ref]
-                          : effectiveEnabledModelRefs.filter((ref) => ref !== entry.ref);
+                          : effectiveEnabledModelRefs.filter(
+                              (ref) => ref !== entry.ref,
+                            );
                         onEnabledModelRefsChange(Array.from(new Set(nextRefs)));
                       }}
                     />
@@ -1317,8 +1440,10 @@ export function GatewayForm({
           )}
           {availableModelEntries.length > 0 ? (
             <p className="text-xs text-muted">
-              {enabledModelEntries.length} of {availableModelEntries.length} available model
-              {availableModelEntries.length === 1 ? "" : "s"} enabled for agent selection.
+              {enabledModelEntries.length} of {availableModelEntries.length}{" "}
+              available model
+              {availableModelEntries.length === 1 ? "" : "s"} enabled for agent
+              selection.
             </p>
           ) : null}
         </div>
@@ -1331,7 +1456,10 @@ export function GatewayForm({
                   {option.label} primary model
                 </label>
                 <Select
-                  value={modelProfiles?.[option.value]?.primary_model ?? "__inherit__"}
+                  value={
+                    modelProfiles?.[option.value]?.primary_model ??
+                    "__inherit__"
+                  }
                   onValueChange={(value) =>
                     onModelProfilePrimaryChange(
                       option.value,
@@ -1344,9 +1472,14 @@ export function GatewayForm({
                     <SelectValue placeholder="Inherit runtime default" />
                   </SelectTrigger>
                   <SelectContent>
-                    <SelectItem value="__inherit__">Inherit runtime default</SelectItem>
+                    <SelectItem value="__inherit__">
+                      Inherit runtime default
+                    </SelectItem>
                     {enabledModelEntries.map((entry) => (
-                      <SelectItem key={`${option.value}-${entry.ref}`} value={entry.ref}>
+                      <SelectItem
+                        key={`${option.value}-${entry.ref}`}
+                        value={entry.ref}
+                      >
                         {entry.label}
                       </SelectItem>
                     ))}
@@ -1362,7 +1495,9 @@ export function GatewayForm({
         <div className="space-y-1">
           <h2 className="text-sm font-semibold text-strong">Tools</h2>
           <p className="text-xs text-muted">
-            Low-level node tooling stays on named safety profiles. Mission Control expands the effective policy for review but does not expose raw tool internals here.
+            Low-level node tooling stays on named safety profiles. Mission
+            Control expands the effective policy for review but does not expose
+            raw tool internals here.
           </p>
         </div>
         <div className="mt-4 grid gap-6 md:grid-cols-2">
@@ -1372,7 +1507,9 @@ export function GatewayForm({
             </label>
             <Select
               value={toolProfile}
-              onValueChange={(value) => onToolProfileChange?.(value as ToolProfileName)}
+              onValueChange={(value) =>
+                onToolProfileChange?.(value as ToolProfileName)
+              }
               disabled={isLoading || !onToolProfileChange}
             >
               <SelectTrigger>
@@ -1392,18 +1529,24 @@ export function GatewayForm({
               Effective policy
             </p>
             <p className="mt-2 text-sm font-medium text-strong">
-              {TOOL_PROFILE_OPTIONS.find((option) => option.value === previewToolPolicy.profile)
-                ?.label ?? previewToolPolicy.profile}
+              {TOOL_PROFILE_OPTIONS.find(
+                (option) => option.value === previewToolPolicy.profile,
+              )?.label ?? previewToolPolicy.profile}
             </p>
             <p className="mt-2 text-xs leading-5 text-muted">
-              {previewToolPolicy.summary ?? "Managed tool profile ready to apply."}
+              {previewToolPolicy.summary ??
+                "Managed tool profile ready to apply."}
             </p>
             <div className="mt-3 flex flex-wrap gap-2">
               <span className="rounded-full border border-[color:var(--border)] bg-[color:var(--surface-muted)] px-3 py-1 text-xs font-medium text-strong">
-                Browser {previewToolPolicy.browser_enabled ? "enabled" : "disabled"}
+                Browser{" "}
+                {previewToolPolicy.browser_enabled ? "enabled" : "disabled"}
               </span>
               <span className="rounded-full border border-[color:var(--border)] bg-[color:var(--surface-muted)] px-3 py-1 text-xs font-medium text-strong">
-                FS {previewToolPolicy.workspace_only_fs ? "workspace-only" : "broader access"}
+                FS{" "}
+                {previewToolPolicy.workspace_only_fs
+                  ? "workspace-only"
+                  : "broader access"}
               </span>
               {driftDetected ? (
                 <span className="rounded-full border border-amber-500/30 bg-amber-500/10 px-3 py-1 text-xs font-medium text-amber-200">
@@ -1419,7 +1562,9 @@ export function GatewayForm({
         <div className="space-y-1">
           <h2 className="text-sm font-semibold text-strong">Runtime</h2>
           <p className="text-xs text-muted">
-            Saving this form applies the managed toolchain fragment immediately and runs reconcile. Installed marketplace skills stay node-scoped and are still managed on the node detail page.
+            Saving this form applies the managed toolchain fragment immediately
+            and runs reconcile. Installed marketplace skills stay node-scoped
+            and are still managed on the node detail page.
           </p>
         </div>
         <div className="mt-4 grid gap-3 md:grid-cols-2">
@@ -1431,7 +1576,9 @@ export function GatewayForm({
               >
                 <div className="flex items-center justify-between gap-3">
                   <div className="min-w-0">
-                    <p className="text-sm font-medium text-strong">{provider.label}</p>
+                    <p className="text-sm font-medium text-strong">
+                      {provider.label}
+                    </p>
                     {provider.connected_profile ? (
                       <p className="mt-1 text-xs text-muted">
                         Connected profile: {provider.connected_profile}
@@ -1445,7 +1592,9 @@ export function GatewayForm({
                         : "border border-[color:var(--border)] bg-[color:var(--surface-muted)] text-muted"
                     }`}
                   >
-                    {provider.verification_state === "runtime" ? "Verified" : "Configured"}
+                    {provider.verification_state === "runtime"
+                      ? "Verified"
+                      : "Configured"}
                   </span>
                 </div>
                 <div className="mt-3 flex flex-wrap gap-2">
@@ -1478,12 +1627,14 @@ export function GatewayForm({
                   ) : null}
                 </div>
                 <p className="mt-1 text-xs text-muted">
-                  {provider.provider_type} · {provider.verified_model_count ?? 0} verified /{" "}
+                  {provider.provider_type} ·{" "}
+                  {provider.verified_model_count ?? 0} verified /{" "}
                   {provider.configured_model_count ?? 0} configured models
                 </p>
                 {provider.unresolved_secret_refs?.length ? (
                   <div className="mt-3 rounded-md border border-amber-500/30 bg-amber-500/10 px-3 py-2 text-xs text-amber-100">
-                    Unresolved secret refs: {provider.unresolved_secret_refs.join(", ")}
+                    Unresolved secret refs:{" "}
+                    {provider.unresolved_secret_refs.join(", ")}
                   </div>
                 ) : provider.secret_ref_count ? (
                   <p className="mt-3 text-xs text-muted">
@@ -1495,7 +1646,8 @@ export function GatewayForm({
             ))
           ) : (
             <p className="rounded-lg border border-dashed border-[color:var(--border)] bg-[color:var(--surface)] px-4 py-3 text-sm text-muted md:col-span-2">
-              Save and reconcile this node to observe verified providers, configured models, and runtime drift.
+              Save and reconcile this node to observe verified providers,
+              configured models, and runtime drift.
             </p>
           )}
         </div>

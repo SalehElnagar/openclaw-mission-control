@@ -16,22 +16,22 @@ const basePreset: ToolchainCatalogProviderPreset = {
   display_label: "GitHub Copilot",
   provider_type: "github-copilot",
   product_line: "Developer seat",
-  summary: "Uses a signed-in Copilot seat on a local node.",
-  node_classes: ["local"],
+  summary: "Uses a signed-in Copilot seat on the selected node.",
+  node_classes: ["cloud", "local"],
   supported_auth_modes: ["oauth", "login"],
   kind: "local-interactive",
   models: [],
 };
 
 describe("getToolchainAuthGuide", () => {
-  it("marks only service auth as available on cloud nodes", () => {
+  it("marks every auth path as available on cloud nodes", () => {
     expect(
       getToolchainAuthGuide("cloud").map((item) => [item.mode, item.available]),
     ).toEqual([
       ["api-key", true],
       ["token", true],
-      ["oauth", false],
-      ["login", false],
+      ["oauth", true],
+      ["login", true],
     ]);
   });
 
@@ -50,17 +50,20 @@ describe("getToolchainAuthGuide", () => {
 describe("toolchain preset helpers", () => {
   it("keeps preset product metadata readable", () => {
     expect(getPresetProductLine(basePreset)).toBe("Developer seat");
-    expect(getPresetScopeLabel(basePreset)).toBe("Local only");
+    expect(getPresetScopeLabel(basePreset)).toBe("Cloud + local");
     expect(getPresetSummary(basePreset)).toBe(
-      "Uses a signed-in Copilot seat on a local node.",
+      "Uses a signed-in Copilot seat on the selected node.",
     );
   });
 
-  it("filters auth modes by node class", () => {
+  it("keeps preset auth modes intact for every compatible node class", () => {
     expect(getPresetAllowedAuthModes(basePreset, "local")).toEqual([
       "oauth",
       "login",
     ]);
-    expect(getPresetAllowedAuthModes(basePreset, "cloud")).toEqual([]);
+    expect(getPresetAllowedAuthModes(basePreset, "cloud")).toEqual([
+      "oauth",
+      "login",
+    ]);
   });
 });
