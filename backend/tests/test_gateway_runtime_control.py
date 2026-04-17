@@ -17,8 +17,8 @@ from app.models.boards import Board
 from app.models.gateways import Gateway
 from app.models.organizations import Organization
 from app.schemas.gateway_runtime import GatewayRuntimeSyncRequest
-from app.services.openclaw.gateway_agent_pack import MAIN_AGENT_SPEC, STARTER_PACK_PRIMARY_MODEL_REF
 from app.services.openclaw import runtime_control
+from app.services.openclaw.gateway_agent_pack import MAIN_AGENT_SPEC, STARTER_PACK_PRIMARY_MODEL_REF
 from app.services.openclaw.runtime_control import (
     DEFAULT_PRIMARY_MODEL_REF,
     GatewayRuntimeControlService,
