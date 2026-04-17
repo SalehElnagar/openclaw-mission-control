@@ -10,10 +10,11 @@ const KNOWN_PROVIDER_LABELS: Record<string, string> = {
   "github-copilot": "GitHub Copilot",
   "github-models": "GitHub Models",
   "google-gemini": "Google Gemini",
-  "google-gemini-cli": "Google Gemini",
+  "google-gemini-cli": "Google Gemini CLI",
   "google-antigravity": "Antigravity",
   antigravity: "Antigravity",
   anthropic: "Claude",
+  "claude-cli": "Claude CLI",
   claude: "Claude",
   grok: "Grok",
 };

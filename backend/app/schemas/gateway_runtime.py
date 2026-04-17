@@ -522,6 +522,8 @@ class ToolchainCatalogProviderPreset(SQLModel):
     provider_id: str
     display_label: str
     provider_type: str
+    product_line: str | None = None
+    summary: str | None = None
     node_classes: list[GatewayNodeClass] = Field(default_factory=list)
     supported_auth_modes: list[ProviderAuthMode] = Field(default_factory=list)
     default_base_url: str | None = None

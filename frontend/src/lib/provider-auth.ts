@@ -53,23 +53,23 @@ export const providerAuthModeDescription = (
   mode: ProviderAuthMode,
   nodeClass: NodeClass,
 ): string => {
-  const cloudSuffix =
-    nodeClass === "cloud"
-      ? "Cloud nodes use secret refs and service auth only."
-      : "Local nodes can use interactive provider auth flows.";
   switch (mode) {
     case "api-key":
-      return "Secret-ref backed API key auth.";
+      return nodeClass === "cloud"
+        ? "Write-only API key stored for this cloud node."
+        : "Write-only API key stored for this node.";
     case "token":
-      return "Secret-ref backed bearer token auth.";
+      return nodeClass === "cloud"
+        ? "Write-only bearer token stored for this cloud node."
+        : "Write-only bearer token stored for this node.";
     case "oauth":
       return nodeClass === "cloud"
-        ? cloudSuffix
-        : "Interactive OAuth provider auth backed by the node's secure store.";
+        ? "Unavailable on cloud nodes because cloud nodes stay service-auth only."
+        : "Browser-based sign-in on the node with a managed interactive profile.";
     case "login":
       return nodeClass === "cloud"
-        ? cloudSuffix
-        : "Interactive login-backed provider auth backed by the node's secure store.";
+        ? "Unavailable on cloud nodes because cloud nodes stay service-auth only."
+        : "CLI or device-style sign-in on the node with a managed interactive profile.";
   }
 };
 

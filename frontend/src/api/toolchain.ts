@@ -29,6 +29,8 @@ export type ToolchainCatalogProviderPreset = {
   provider_id: string;
   display_label: string;
   provider_type: string;
+  product_line?: string | null;
+  summary?: string | null;
   node_classes: Array<"cloud" | "local">;
   supported_auth_modes: ProviderAuthMode[];
   default_base_url?: string | null;

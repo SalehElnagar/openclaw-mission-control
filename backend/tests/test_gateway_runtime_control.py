@@ -448,8 +448,8 @@ async def test_runtime_summary_exposes_provider_auth_status(
             runtime_control.GatewayRuntimeCatalogEntry(
                 ref="google-gemini-cli/gemini-3.1-pro-preview",
                 provider="google-gemini-cli",
-                provider_label="Google Gemini",
-                label="Google Gemini 3.1 Pro Preview",
+                provider_label="Google Gemini CLI",
+                label="Google Gemini CLI 3.1 Pro Preview",
                 selectable=True,
             )
         ]
@@ -481,6 +481,7 @@ async def test_runtime_summary_exposes_provider_auth_status(
     provider = summary.providers[0]
     assert provider.id == "google-gemini-cli"
     assert provider.auth_mode == "oauth"
+    assert provider.label == "Google Gemini CLI"
     assert provider.connected_profile == "google-gemini-cli:managed"
     assert provider.auth_state == "verified"
 
@@ -1122,7 +1123,7 @@ async def test_connect_provider_auth_uses_gateway_rpc_for_local_login(
                 runtime_control.GatewayRuntimeProviderSummary(
                     id="google-gemini-cli",
                     provider_type="google-gemini-cli",
-                    label="Google Gemini",
+                    label="Google Gemini CLI",
                     auth_mode="login",
                     auth_state="verified",
                     connected_profile="google-gemini-cli:managed",

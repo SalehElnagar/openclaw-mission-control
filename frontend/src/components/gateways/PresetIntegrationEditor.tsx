@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
+import { useMemo, useState } from "react";
 
 import type {
   GatewayModelDefinition,
@@ -26,10 +26,16 @@ import type { NodeClass } from "@/lib/node-scope";
 import {
   providerAuthModeDescription,
   providerAuthModeLabel,
-  providerAuthModeOptionsForNodeClass,
   providerAuthStateLabel,
   type ProviderAuthMode,
 } from "@/lib/provider-auth";
+import {
+  getPresetAllowedAuthModes,
+  getPresetProductLine,
+  getPresetScopeLabel,
+  getPresetSummary,
+  getToolchainAuthGuide,
+} from "@/lib/toolchain-guidance";
 
 type PresetIntegrationEditorProps = {
   nodeClass: NodeClass;
@@ -276,21 +282,24 @@ export function PresetIntegrationEditor({
         })),
     [activeProviderIds, compatiblePresets],
   );
-
-  useEffect(() => {
+  const resolvedPendingPresetId = useMemo(() => {
     if (!availablePresetOptions.length) {
-      if (pendingPresetId) {
-        setPendingPresetId("");
-      }
-      return;
+      return "";
     }
-    const stillValid = availablePresetOptions.some(
-      (option) => option.value === pendingPresetId,
-    );
-    if (!stillValid) {
-      setPendingPresetId(availablePresetOptions[0]?.value ?? "");
-    }
+    return availablePresetOptions.some((option) => option.value === pendingPresetId)
+      ? pendingPresetId
+      : (availablePresetOptions[0]?.value ?? "");
   }, [availablePresetOptions, pendingPresetId]);
+  const authGuide = useMemo(
+    () => getToolchainAuthGuide(nodeClass),
+    [nodeClass],
+  );
+  const pendingPreset = useMemo(
+    () =>
+      compatiblePresets.find((preset) => preset.provider_id === resolvedPendingPresetId) ??
+      null,
+    [compatiblePresets, resolvedPendingPresetId],
+  );
 
   const replaceProviderSecretsForPurpose = (
     providerId: string,
@@ -327,11 +336,7 @@ export function PresetIntegrationEditor({
     if (!preset) {
       return;
     }
-    const allowedModes = preset.supported_auth_modes.filter((mode) =>
-      providerAuthModeOptionsForNodeClass(nodeClass).some(
-        (option) => option.value === mode,
-      ),
-    );
+    const allowedModes = getPresetAllowedAuthModes(preset, nodeClass);
     const nextAuthMode = allowedModes[0] ?? "api-key";
     const selectedModels = preset.models
       .filter((model) => model.enabled_by_default !== false)
@@ -486,7 +491,9 @@ export function PresetIntegrationEditor({
     if (!purpose) {
       return (
         <div className="rounded-lg border border-[color:var(--border)] bg-[color:var(--surface)] px-4 py-3 text-sm text-muted">
-          Interactive auth is configured on this node. Save first, then use the node detail page to connect, refresh, or disconnect the provider session.
+          Interactive auth is configured on this node. Save first, then use the
+          node detail page to connect, refresh, or disconnect the provider
+          session.
         </div>
       );
     }
@@ -501,7 +508,7 @@ export function PresetIntegrationEditor({
       <div className="space-y-3 rounded-lg border border-[color:var(--border)] bg-[color:var(--surface)] p-4">
         <div className="flex flex-wrap items-center justify-between gap-3">
           <div>
-            <p className="text-sm font-medium text-strong">Authentication secret</p>
+            <p className="text-sm font-medium text-strong">Service secret</p>
             <p className="mt-1 text-xs text-muted">
               {authMode === "api-key"
                 ? "Attach the provider API key once, or keep using the stored alias for this node."
@@ -623,7 +630,7 @@ export function PresetIntegrationEditor({
               Add integration
             </label>
             <SearchableSelect
-              value={pendingPresetId}
+              value={resolvedPendingPresetId}
               onValueChange={setPendingPresetId}
               options={availablePresetOptions}
               placeholder="Choose a provider"
@@ -635,18 +642,65 @@ export function PresetIntegrationEditor({
           </div>
           <Button
             type="button"
-            disabled={
-              isLoading ||
-              !pendingPresetId ||
-              !presetByProviderId.has(pendingPresetId)
-            }
-            onClick={() => ensurePresetIntegration(pendingPresetId)}
+              disabled={
+                isLoading ||
+                !resolvedPendingPresetId ||
+                !presetByProviderId.has(resolvedPendingPresetId)
+              }
+            onClick={() => ensurePresetIntegration(resolvedPendingPresetId)}
           >
             Add integration
           </Button>
         </div>
+        {pendingPreset ? (
+          <div className="mt-4 rounded-xl border border-[color:var(--border)] bg-[color:var(--surface)] p-4">
+            <div className="flex flex-wrap gap-2">
+              <Badge variant="outline">{getPresetProductLine(pendingPreset)}</Badge>
+              <Badge variant="outline">{getPresetScopeLabel(pendingPreset)}</Badge>
+              {getPresetAllowedAuthModes(pendingPreset, nodeClass).map((mode) => (
+                <Badge key={`${pendingPreset.provider_id}-${mode}`} variant="outline">
+                  {providerAuthModeLabel(mode)}
+                </Badge>
+              ))}
+            </div>
+            <p className="mt-3 text-sm text-strong">{getPresetSummary(pendingPreset)}</p>
+            <p className="mt-2 text-xs text-muted">
+              {pendingPreset.models.length} model
+              {pendingPreset.models.length === 1 ? "" : "s"} ready:{" "}
+              {pendingPreset.models
+                .slice(0, 2)
+                .map((model) => model.label)
+                .join(", ")}
+              {pendingPreset.models.length > 2 ? ", and more." : "."}
+            </p>
+          </div>
+        ) : null}
+        <div className="mt-4 grid gap-3 md:grid-cols-2 xl:grid-cols-4">
+          {authGuide.map((item) => (
+            <div
+              key={item.mode}
+              className={`rounded-xl border px-4 py-3 ${
+                item.available
+                  ? "border-[color:var(--border)] bg-[color:var(--surface)]"
+                  : "border-[color:var(--border)] bg-[color:var(--surface)] opacity-70"
+              }`}
+            >
+              <div className="flex items-center justify-between gap-3">
+                <p className="text-sm font-medium text-strong">{item.label}</p>
+                <Badge variant={item.available ? "accent" : "outline"}>
+                  {item.available ? "This node" : "Unavailable"}
+                </Badge>
+              </div>
+              <p className="mt-2 text-xs leading-5 text-muted">
+                {item.description}
+              </p>
+            </div>
+          ))}
+        </div>
         <p className="mt-3 text-xs text-muted">
-          Choose a supported provider preset first. Mission Control fills in the provider id, endpoint, API mode, and model catalog automatically, then lets you choose auth and enabled models with guided controls.
+          Choose a supported provider preset first. Mission Control fills in the
+          provider id, endpoint, and model catalog automatically, then keeps the
+          guided flow focused on the auth path that actually fits this node.
         </p>
       </div>
 
@@ -663,11 +717,7 @@ export function PresetIntegrationEditor({
         }
         const providerConfig =
           providerConfigById.get(providerId) ?? buildProviderConfig(preset);
-        const allowedModes = preset.supported_auth_modes.filter((mode) =>
-          providerAuthModeOptionsForNodeClass(nodeClass).some(
-            (option) => option.value === mode,
-          ),
-        );
+        const allowedModes = getPresetAllowedAuthModes(preset, nodeClass);
         const authConfig = providerAuthById.get(providerId);
         const authMode =
           allowedModes.find((mode) => mode === authConfig?.auth_mode) ??
@@ -702,17 +752,17 @@ export function PresetIntegrationEditor({
                     {preset.display_label}
                   </h2>
                   <Badge variant={status.variant}>{status.label}</Badge>
-                  <Badge variant="outline">
-                    {preset.kind === "local-interactive"
-                      ? "Local interactive"
-                      : "Managed preset"}
-                  </Badge>
+                  <Badge variant="outline">{getPresetProductLine(preset)}</Badge>
+                  <Badge variant="outline">{getPresetScopeLabel(preset)}</Badge>
                 </div>
-                <p className="text-xs text-muted">
-                  {providerConfig.base_url
-                    ? `Mission Control manages ${providerConfig.base_url} for this integration.`
-                    : "Mission Control manages this provider preset and fills its runtime metadata automatically."}
+                <p className="text-xs leading-5 text-muted">
+                  {getPresetSummary(preset)}
                 </p>
+                {providerConfig.base_url ? (
+                  <p className="text-[11px] font-mono text-quiet">
+                    {providerConfig.base_url}
+                  </p>
+                ) : null}
               </div>
               <Button
                 type="button"
@@ -738,27 +788,36 @@ export function PresetIntegrationEditor({
                 <label className="text-xs font-medium uppercase tracking-wide text-quiet">
                   Authentication
                 </label>
-                <Select
-                  value={authMode}
-                  onValueChange={(value) =>
-                    updateProviderAuthMode(preset, value as ProviderAuthMode)
-                  }
-                  disabled={isLoading || allowedModes.length === 0}
-                >
-                  <SelectTrigger>
-                    <SelectValue placeholder="Choose auth mode" />
-                  </SelectTrigger>
-                  <SelectContent>
-                    {allowedModes.map((mode) => (
-                      <SelectItem key={mode} value={mode}>
-                        {providerAuthModeLabel(mode)}
-                      </SelectItem>
-                    ))}
-                  </SelectContent>
-                </Select>
-                <p className="text-[11px] leading-5 text-muted">
-                  {providerAuthModeDescription(authMode, nodeClass)}
-                </p>
+                <div className="grid gap-3">
+                  {allowedModes.map((mode) => {
+                    const isSelected = mode === authMode;
+                    return (
+                      <button
+                        key={`${providerId}-${mode}`}
+                        type="button"
+                        disabled={isLoading || isSelected}
+                        onClick={() => updateProviderAuthMode(preset, mode)}
+                        className={`rounded-xl border px-4 py-3 text-left transition ${
+                          isSelected
+                            ? "border-[color:var(--accent)] bg-[color:var(--accent-soft)]/35"
+                            : "border-[color:var(--border)] bg-[color:var(--surface)] hover:border-[color:var(--border-strong)]"
+                        } disabled:cursor-default disabled:opacity-100`}
+                      >
+                        <div className="flex items-center justify-between gap-3">
+                          <p className="text-sm font-medium text-strong">
+                            {providerAuthModeLabel(mode)}
+                          </p>
+                          <Badge variant={isSelected ? "accent" : "outline"}>
+                            {isSelected ? "Selected" : "Available"}
+                          </Badge>
+                        </div>
+                        <p className="mt-2 text-xs leading-5 text-muted">
+                          {providerAuthModeDescription(mode, nodeClass)}
+                        </p>
+                      </button>
+                    );
+                  })}
+                </div>
               </div>
             </div>
 
@@ -803,6 +862,12 @@ export function PresetIntegrationEditor({
                             <p className="mt-1 truncate font-mono text-[11px] text-quiet">
                               {ref}
                             </p>
+                            {model.enabled_by_default === false ? (
+                              <p className="mt-2 text-[11px] text-muted">
+                                Available on demand. Mission Control keeps it out of
+                                the initial managed set until you opt in.
+                              </p>
+                            ) : null}
                           </div>
                         </label>
                         <label className="flex items-center gap-2 text-xs font-medium text-muted">

@@ -183,9 +183,14 @@ def test_toolchain_catalog_exposes_guided_presets() -> None:
     provider_ids = [provider.provider_id for provider in catalog.providers]
 
     assert "microsoft-foundry" in provider_ids
+    assert "anthropic" in provider_ids
     assert "google-gemini" in provider_ids
     assert "github-models" in provider_ids
     assert provider_preset_by_id("github-copilot") is not None
+    anthropic = provider_preset_by_id("anthropic-claude")
+    assert anthropic is not None
+    assert anthropic.product_line == "Hosted API"
+    assert anthropic.supported_auth_modes == ["api-key"]
 
 
 @pytest.mark.asyncio

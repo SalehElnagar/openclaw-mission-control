@@ -23,6 +23,11 @@ def toolchain_catalog() -> ToolchainCatalogResponse:
                 provider_id="microsoft-foundry",
                 display_label="Azure Foundry",
                 provider_type="microsoft-foundry",
+                product_line="Hosted API",
+                summary=(
+                    "Azure-hosted model endpoint for managed service-auth nodes. "
+                    "Use an API key on cloud or local nodes."
+                ),
                 node_classes=["cloud", "local"],
                 supported_auth_modes=["api-key"],
                 default_base_url="https://ai-foundry-advanced-claw.cognitiveservices.azure.com/openai/v1",
@@ -47,10 +52,50 @@ def toolchain_catalog() -> ToolchainCatalogResponse:
                 ],
             ),
             ToolchainCatalogProviderPreset(
+                preset_id="anthropic-claude",
+                provider_id="anthropic",
+                display_label="Anthropic Claude",
+                provider_type="anthropic",
+                product_line="Hosted API",
+                summary=(
+                    "Anthropic's hosted Claude API for managed service-auth nodes. "
+                    "Use an API key; this is separate from any local Claude CLI sign-in flow."
+                ),
+                node_classes=["cloud", "local"],
+                supported_auth_modes=["api-key"],
+                kind="advanced-capable",
+                models=[
+                    ToolchainCatalogModelPreset(
+                        model_id="claude-sonnet-4-6",
+                        label="Claude Sonnet 4.6",
+                        input_modalities=["text"],
+                        cost=GatewayModelCost(
+                            input=3.0,
+                            output=15.0,
+                        ),
+                    ),
+                    ToolchainCatalogModelPreset(
+                        model_id="claude-opus-4-6",
+                        label="Claude Opus 4.6",
+                        input_modalities=["text"],
+                        cost=GatewayModelCost(
+                            input=15.0,
+                            output=75.0,
+                        ),
+                        enabled_by_default=False,
+                    ),
+                ],
+            ),
+            ToolchainCatalogProviderPreset(
                 preset_id="google-gemini",
                 provider_id="google-gemini",
                 display_label="Google Gemini",
                 provider_type="google-gemini",
+                product_line="Hosted API",
+                summary=(
+                    "Google's hosted Gemini API for managed service-auth nodes. "
+                    "Use an API key; this is not the local Gemini CLI flow."
+                ),
                 node_classes=["cloud", "local"],
                 supported_auth_modes=["api-key"],
                 default_base_url="https://generativelanguage.googleapis.com/v1beta/openai/",
@@ -77,6 +122,11 @@ def toolchain_catalog() -> ToolchainCatalogResponse:
                 provider_id="github-models",
                 display_label="GitHub Models",
                 provider_type="github-models",
+                product_line="Hosted API",
+                summary=(
+                    "GitHub-hosted inference API for managed service use. "
+                    "Bring a GitHub token; this is separate from a Copilot seat."
+                ),
                 node_classes=["cloud", "local"],
                 supported_auth_modes=["token"],
                 default_base_url="https://models.github.ai/inference",
@@ -109,6 +159,11 @@ def toolchain_catalog() -> ToolchainCatalogResponse:
                 provider_id="github-copilot",
                 display_label="GitHub Copilot",
                 provider_type="github-copilot",
+                product_line="Developer seat",
+                summary=(
+                    "Uses a signed-in GitHub Copilot seat on a local node. "
+                    "Connect with OAuth or login after saving the node; this is not the GitHub Models token API."
+                ),
                 node_classes=["local"],
                 supported_auth_modes=["oauth", "login"],
                 kind="local-interactive",
@@ -130,6 +185,11 @@ def toolchain_catalog() -> ToolchainCatalogResponse:
                 provider_id="google-gemini-cli",
                 display_label="Google Gemini CLI",
                 provider_type="google-gemini-cli",
+                product_line="CLI sign-in",
+                summary=(
+                    "Uses a locally signed-in Gemini CLI session on a local node. "
+                    "Choose login after save; this is separate from the hosted Gemini API key flow."
+                ),
                 node_classes=["local"],
                 supported_auth_modes=["login"],
                 kind="local-interactive",
