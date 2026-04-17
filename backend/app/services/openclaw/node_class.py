@@ -22,9 +22,7 @@ async def filter_board_ids_by_gateway_id(
         return board_ids
 
     rows = await session.exec(
-        select(Board.id)
-        .where(Board.id.in_(board_ids))
-        .where(Board.gateway_id == gateway_id),
+        select(Board.id).where(Board.id.in_(board_ids)).where(Board.gateway_id == gateway_id),
     )
     matched = set(rows.scalars().all())
     return [board_id for board_id in board_ids if board_id in matched]

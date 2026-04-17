@@ -7,8 +7,9 @@ from datetime import datetime, timedelta
 from uuid import UUID
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
-from sqlalchemy import DateTime, case, func
+from sqlalchemy import DateTime, case
 from sqlalchemy import cast as sql_cast
+from sqlalchemy import func
 from sqlmodel import col, select
 from sqlmodel.ext.asyncio.session import AsyncSession
 
