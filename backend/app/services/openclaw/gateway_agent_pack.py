@@ -112,9 +112,7 @@ def is_gateway_main_agent(agent: Agent) -> bool:
     session_id = getattr(agent, "openclaw_session_id", None)
     if gateway_id is None or not session_id:
         return False
-    return (
-        session_id == GatewayAgentIdentity.session_key_for_id(gateway_id)
-    )
+    return session_id == GatewayAgentIdentity.session_key_for_id(gateway_id)
 
 
 def is_gateway_execution_agent(agent: Agent) -> bool:

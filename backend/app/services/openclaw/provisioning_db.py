@@ -1438,7 +1438,7 @@ class AgentLifecycleService(OpenClawDBService):
                 is_main_agent=True,
                 board=None,
                 gateway=main_gateway,
-        )
+            )
 
         if agent.board_id is None:
             if main_gateway is None:

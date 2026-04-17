@@ -713,9 +713,7 @@ class OpenClawGatewayControlPlane(GatewayControlPlane):
                 break
             except OpenClawGatewayError as exc:
                 should_retry = (
-                    (
-                        agent_just_created and _is_missing_agent_error(exc)
-                    )
+                    (agent_just_created and _is_missing_agent_error(exc))
                     or _is_transient_agent_upsert_error(exc)
                 ) and _attempt < _update_retries - 1
                 if should_retry:

@@ -902,7 +902,9 @@ class GatewayRuntimeControlService(OpenClawDBService):
                 gateway=gateway,
                 available_models=available_models,
             )
-            all_agents = list(await Agent.objects.filter_by(gateway_id=gateway.id).all(self.session))
+            all_agents = list(
+                await Agent.objects.filter_by(gateway_id=gateway.id).all(self.session)
+            )
         repaired_agents: list[Any] = []
         skipped_agents: list[Any] = []
         if request.repair_stuck_agents:

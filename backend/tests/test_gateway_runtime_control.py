@@ -475,7 +475,9 @@ async def test_reconcile_gateway_runtime_backfills_gateway_starter_pack(
             assert by_name[f"{gateway.name} Lead"].model_profile == "general"
             assert by_name[f"{gateway.name} Builder"].model_profile == "coder"
             assert by_name[f"{gateway.name} Security"].model_profile == "budget"
-            assert by_name[f"{gateway.name} Builder"].model_primary == STARTER_PACK_PRIMARY_MODEL_REF
+            assert (
+                by_name[f"{gateway.name} Builder"].model_primary == STARTER_PACK_PRIMARY_MODEL_REF
+            )
             assert gateway.model_profiles is not None
     finally:
         await engine.dispose()
