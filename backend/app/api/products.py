@@ -20,17 +20,17 @@ from app.models.products import Product
 from app.schemas.board_groups import BoardGroupRead
 from app.schemas.products import (
     ProductCreate,
+    ProductLeadRuntimeDefaults,
     ProductMessageCreate,
     ProductMessageRead,
     ProductPlanApproveRequest,
-    ProductLeadRuntimeDefaults,
     ProductPlanRead,
     ProductRead,
     ProductSummaryRead,
     ProductUpdate,
 )
-from app.services.organizations import OrganizationContext
 from app.services.openclaw.runtime_control import GatewayRuntimeControlService
+from app.services.organizations import OrganizationContext
 from app.services.product_planning import (
     ProductPlanningService,
     message_to_read,
