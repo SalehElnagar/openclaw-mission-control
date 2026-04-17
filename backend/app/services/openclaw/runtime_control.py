@@ -603,11 +603,7 @@ class GatewayRuntimeControlService(OpenClawDBService):
                         f"{', '.join(unavailable_enabled)}"
                     ),
                 )
-        available = (
-            set(configured_enabled)
-            if configured_enabled
-            else runtime_available
-        )
+        available = set(configured_enabled) if configured_enabled else runtime_available
         if (
             gateway.model_profiles in ({}, None)
             and DEFAULT_PRIMARY_MODEL_REF in desired_refs

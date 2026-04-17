@@ -94,7 +94,10 @@ def test_gateway_read_normalizes_node_class_case() -> None:
             "disable_device_pairing": False,
             "default_model_profile": "general",
             "model_profiles": None,
-            "enabled_model_refs": [" microsoft-foundry/gpt-5.4-mini ", "microsoft-foundry/gpt-5.4-mini"],
+            "enabled_model_refs": [
+                " microsoft-foundry/gpt-5.4-mini ",
+                "microsoft-foundry/gpt-5.4-mini",
+            ],
             "created_at": "2026-04-13T00:00:00Z",
             "updated_at": "2026-04-13T00:00:00Z",
         },
