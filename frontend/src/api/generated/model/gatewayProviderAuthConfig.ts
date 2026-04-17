@@ -13,8 +13,11 @@ import type { GatewayProviderAuthMode } from "./gatewayProviderAuthMode";
 export interface GatewayProviderAuthConfig {
   provider_id: string;
   auth_mode: GatewayProviderAuthMode;
+  preset_id?: string | null;
+  managed_by_catalog?: boolean | null;
   profile_id?: string | null;
   display_label?: string | null;
   secret_refs?: GatewayProviderSecretRef[] | null;
-  transport?: Record<string, unknown> | null;
+  token_header_name?: string | null;
+  token_header_prefix?: string | null;
 }

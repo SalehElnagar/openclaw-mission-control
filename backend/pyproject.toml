@@ -13,6 +13,8 @@ version = "0.1.0"
 requires-python = ">=3.12"
 dependencies = [
     "alembic==1.18.3",
+    "azure-identity==1.25.1",
+    "azure-keyvault-secrets==4.10.0",
     "clerk-backend-api==4.2.0",
     "fastapi==0.131.0",
     "fastapi-pagination==0.15.10",

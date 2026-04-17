@@ -34,6 +34,7 @@ from app.schemas.gateways import (
 from app.schemas.pagination import DefaultLimitOffsetPage
 from app.schemas.telemetry import GatewayUsagePullResponse
 from app.services.activity_log import actor_fields_from_auth, record_activity, redact_change_values
+from app.services.gateway_secret_store import GatewaySecretStoreService
 from app.services.openclaw.admin_service import GatewayAdminLifecycleService
 from app.services.openclaw.runtime_control import GatewayRuntimeControlService
 from app.services.openclaw.session_service import GatewayTemplateSyncQuery
@@ -74,6 +75,53 @@ _GATEWAY_AUDIT_FIELDS = {
     "provider_secret_refs",
     "token",
 }
+
+
+async def _apply_provider_secret_inputs(
+    *,
+    gateway: Gateway,
+    secret_inputs: list[object] | None,
+    session: AsyncSession,
+) -> None:
+    if not secret_inputs:
+        return
+    service = GatewaySecretStoreService(session)
+    existing_refs = gateway.provider_secret_refs if isinstance(gateway.provider_secret_refs, list) else []
+    refs_by_scope: dict[tuple[str, str], dict[str, object]] = {}
+    order: list[tuple[str, str]] = []
+    for raw in existing_refs:
+        if not isinstance(raw, dict):
+            continue
+        provider_id = raw.get("provider_id")
+        purpose = raw.get("purpose")
+        if not isinstance(provider_id, str) or not isinstance(purpose, str):
+            continue
+        key = (provider_id, purpose)
+        if key not in order:
+            order.append(key)
+        refs_by_scope[key] = dict(raw)
+    for raw in secret_inputs:
+        if not isinstance(raw, dict):
+            continue
+        provider_id = raw.get("provider_id")
+        purpose = raw.get("purpose")
+        value = raw.get("value")
+        alias = raw.get("alias")
+        if not isinstance(provider_id, str) or not isinstance(purpose, str) or not isinstance(value, str):
+            continue
+        stored_ref = await service.upsert_secret(
+            gateway=gateway,
+            provider_id=provider_id,
+            purpose=purpose,
+            value=value,
+            alias=alias if isinstance(alias, str) else None,
+        )
+        key = (provider_id, purpose)
+        if key not in order:
+            order.append(key)
+        refs_by_scope[key] = stored_ref.model_dump(exclude_none=True)
+    gateway.provider_secret_refs = [refs_by_scope[key] for key in order] or None
+    session.add(gateway)
 
 
 def _gateway_audit_payload(values: dict[str, object]) -> dict[str, object]:
@@ -136,13 +184,20 @@ async def create_gateway(
         allow_insecure_tls=payload.allow_insecure_tls,
         disable_device_pairing=payload.disable_device_pairing,
     )
-    data = payload.model_dump()
+    payload_data = payload.model_dump()
+    secret_inputs = payload_data.pop("provider_secret_inputs", None)
+    data = payload_data
     gateway_id = uuid4()
     data["id"] = gateway_id
     data["organization_id"] = ctx.organization.id
     candidate = Gateway.model_validate(data)
     await runtime_service.assert_model_policies_supported(gateway=candidate, agents=[])
     gateway = await crud.create(session, Gateway, **data)
+    await _apply_provider_secret_inputs(
+        gateway=gateway,
+        secret_inputs=secret_inputs,
+        session=session,
+    )
     record_activity(
         session,
         event_type="gateway.config.created",
@@ -191,7 +246,9 @@ async def update_gateway(
         gateway_id=gateway_id,
         organization_id=ctx.organization.id,
     )
-    updates = payload.model_dump(exclude_unset=True)
+    payload_updates = payload.model_dump(exclude_unset=True)
+    secret_inputs = payload_updates.pop("provider_secret_inputs", None)
+    updates = payload_updates
     before = _gateway_audit_payload(gateway.model_dump())
     if (
         "url" in updates
@@ -225,7 +282,12 @@ async def update_gateway(
             agents=existing_agents,
         )
     await crud.patch(session, gateway, updates)
-    if updates:
+    await _apply_provider_secret_inputs(
+        gateway=gateway,
+        secret_inputs=secret_inputs,
+        session=session,
+    )
+    if updates or secret_inputs:
         record_activity(
             session,
             event_type="gateway.config.updated",
@@ -234,7 +296,10 @@ async def update_gateway(
             entity_id=str(gateway.id),
             previous_values=before,
             new_values=_gateway_audit_payload(gateway.model_dump()),
-            details={"updated_fields": sorted(updates.keys())},
+            details={
+                "updated_fields": sorted(updates.keys()),
+                "secret_inputs_updated": bool(secret_inputs),
+            },
             **actor_fields_from_auth(auth),
         )
         await session.commit()

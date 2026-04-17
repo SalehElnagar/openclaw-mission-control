@@ -24,17 +24,25 @@ type GatewayModelProfiles = {
 
 export type GatewayProviderConfig = {
   id: string;
+  preset_id?: string | null;
+  managed_by_catalog?: boolean | null;
   provider_type?: string | null;
   label?: string | null;
   base_url?: string | null;
   api_mode?: string | null;
   auth_header?: boolean | null;
+  headers?: Record<string, string> | null;
 };
 
 export type GatewayProviderSecretRef = {
   provider_id: string;
   purpose: string;
   ref: string;
+  alias?: string | null;
+  storage_backend?: string | null;
+  configured?: boolean | null;
+  updated_at?: string | null;
+  managed_by_catalog?: boolean | null;
 };
 
 export type GatewayModelCost = {
@@ -47,6 +55,8 @@ export type GatewayModelCost = {
 export type GatewayModelDefinition = {
   provider_id: string;
   model_id: string;
+  preset_id?: string | null;
+  managed_by_catalog?: boolean | null;
   label?: string | null;
   api_mode?: string | null;
   reasoning?: boolean | null;

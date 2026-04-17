@@ -5,10 +5,13 @@ import type {
   GatewayModelDefinition,
   GatewayModelProfiles,
   GatewayProviderConfig,
+  GatewayProviderSecretInput,
   GatewayProviderSecretRef,
   GatewayRuntimeProviderSummary,
   GatewayToolProfilePolicy,
 } from "@/api/generated/model";
+import type { ToolchainCatalogProviderPreset } from "@/api/toolchain";
+import { PresetIntegrationEditor } from "@/components/gateways/PresetIntegrationEditor";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -19,6 +22,7 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
+import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import type { GatewayCheckStatus } from "@/lib/gateway-form";
 import type { NodeClass } from "@/lib/node-scope";
 import {
@@ -60,6 +64,8 @@ type GatewayFormProps = {
   providerAuthConfigs?: GatewayProviderAuthConfig[];
   modelDefinitions?: GatewayModelDefinition[];
   providerSecretRefs?: GatewayProviderSecretRef[];
+  providerSecretInputs?: GatewayProviderSecretInput[];
+  toolchainCatalog?: ToolchainCatalogProviderPreset[];
   toolProfile: ToolProfileName;
   effectiveToolPolicy?: GatewayToolProfilePolicy | null;
   runtimeProviderSummaries?: GatewayRuntimeProviderSummary[];
@@ -93,6 +99,7 @@ type GatewayFormProps = {
   onProviderAuthConfigsChange?: (next: GatewayProviderAuthConfig[]) => void;
   onModelDefinitionsChange?: (next: GatewayModelDefinition[]) => void;
   onProviderSecretRefsChange?: (next: GatewayProviderSecretRef[]) => void;
+  onProviderSecretInputsChange?: (next: GatewayProviderSecretInput[]) => void;
   onToolProfileChange?: (next: ToolProfileName) => void;
 };
 
@@ -129,6 +136,8 @@ export function GatewayForm({
   providerAuthConfigs = [],
   modelDefinitions = [],
   providerSecretRefs = [],
+  providerSecretInputs = [],
+  toolchainCatalog = [],
   toolProfile,
   effectiveToolPolicy,
   runtimeProviderSummaries = [],
@@ -159,13 +168,32 @@ export function GatewayForm({
   onProviderAuthConfigsChange,
   onModelDefinitionsChange,
   onProviderSecretRefsChange,
+  onProviderSecretInputsChange,
   onToolProfileChange,
 }: GatewayFormProps) {
-  const verifiedModelMap = new Map(verifiedModelRefs.map((entry) => [entry.ref, entry]));
+  const configuredModelEntries = Array.from(
+    new Map(
+      modelDefinitions.map((definition) => {
+        const ref = `${definition.provider_id}/${definition.model_id}`;
+        return [
+          ref,
+          {
+            ref,
+            label: definition.label?.trim() || ref,
+          },
+        ];
+      }),
+    ).values(),
+  );
+  const availableModelEntries =
+    verifiedModelRefs.length > 0 ? verifiedModelRefs : configuredModelEntries;
+  const verifiedModelMap = new Map(
+    availableModelEntries.map((entry) => [entry.ref, entry]),
+  );
   const effectiveEnabledModelRefs =
     enabledModelRefs.length > 0
       ? enabledModelRefs.filter((ref) => verifiedModelMap.has(ref))
-      : verifiedModelRefs.map((entry) => entry.ref);
+      : availableModelEntries.map((entry) => entry.ref);
   const enabledModelEntries = effectiveEnabledModelRefs
     .map((ref) => verifiedModelMap.get(ref))
     .filter((entry): entry is { ref: string; label: string } => Boolean(entry));
@@ -379,6 +407,46 @@ export function GatewayForm({
         </div>
       </div>
 
+      <Tabs defaultValue="guided" className="space-y-4">
+        <div className="rounded-xl border border-[color:var(--border)] bg-[color:var(--surface-muted)] p-4">
+          <div className="flex flex-wrap items-start justify-between gap-4">
+            <div className="space-y-1">
+              <h2 className="text-sm font-semibold text-strong">
+                Node integrations
+              </h2>
+              <p className="text-xs text-muted">
+                The guided flow is the default path: choose a provider preset, choose the auth method allowed on this node, attach the secret once or connect later for local interactive providers, then choose models from a checklist. Raw provider fields stay available under Advanced / Custom integration.
+              </p>
+            </div>
+            <TabsList>
+              <TabsTrigger value="guided">Guided</TabsTrigger>
+              <TabsTrigger value="advanced">Advanced / Custom</TabsTrigger>
+            </TabsList>
+          </div>
+        </div>
+
+        <TabsContent value="guided" className="mt-0">
+          <PresetIntegrationEditor
+            nodeClass={nodeClass}
+            toolchainCatalog={toolchainCatalog}
+            providerConfigs={providerConfigs}
+            providerAuthConfigs={providerAuthConfigs}
+            modelDefinitions={modelDefinitions}
+            providerSecretRefs={providerSecretRefs}
+            providerSecretInputs={providerSecretInputs}
+            runtimeProviderSummaries={runtimeProviderSummaries}
+            enabledModelRefs={enabledModelRefs}
+            isLoading={isLoading}
+            onProviderConfigsChange={onProviderConfigsChange}
+            onProviderAuthConfigsChange={onProviderAuthConfigsChange}
+            onModelDefinitionsChange={onModelDefinitionsChange}
+            onProviderSecretRefsChange={onProviderSecretRefsChange}
+            onProviderSecretInputsChange={onProviderSecretInputsChange}
+            onEnabledModelRefsChange={onEnabledModelRefsChange}
+          />
+        </TabsContent>
+
+        <TabsContent value="advanced" className="mt-0 space-y-6">
       <div className="rounded-xl border border-[color:var(--border)] bg-[color:var(--surface-muted)] p-4">
         <div className="space-y-1">
           <h2 className="text-sm font-semibold text-strong">Providers</h2>
@@ -714,10 +782,13 @@ export function GatewayForm({
                     provider_id: providerOptions[0]?.value ?? "",
                     auth_mode:
                       providerAuthModeOptions[0]?.value ?? "api-key",
+                    preset_id: null,
+                    managed_by_catalog: false,
                     profile_id: null,
                     display_label: null,
                     secret_refs: null,
-                    transport: null,
+                    token_header_name: null,
+                    token_header_prefix: null,
                   },
                 ])
               }
@@ -1114,6 +1185,8 @@ export function GatewayForm({
           ) : null}
         </div>
       </div>
+        </TabsContent>
+      </Tabs>
 
       <div className="rounded-xl border border-[color:var(--border)] bg-[color:var(--surface-muted)] p-4">
         <div className="space-y-1">
@@ -1154,7 +1227,9 @@ export function GatewayForm({
             <div className="rounded-lg border border-dashed border-[color:var(--border)] bg-[color:var(--surface)] px-3 py-2 text-sm text-muted">
               {verifiedModelRefs.length > 0
                 ? `${verifiedModelRefs.length} verified runtime model${verifiedModelRefs.length === 1 ? "" : "s"} available`
-                : "Save this node and reconcile runtime to unlock verified model choices."}
+                : availableModelEntries.length > 0
+                  ? `${availableModelEntries.length} configured model${availableModelEntries.length === 1 ? "" : "s"} pending runtime verification`
+                  : "Add a guided integration or save this node and reconcile runtime to unlock model choices."}
             </div>
           </div>
         </div>
@@ -1169,26 +1244,26 @@ export function GatewayForm({
                 Choose which verified node models agents and product leads can actually select on this node.
               </p>
             </div>
-            {verifiedModelRefs.length > 0 && onEnabledModelRefsChange ? (
+            {availableModelEntries.length > 0 && onEnabledModelRefsChange ? (
               <button
                 type="button"
                 onClick={() =>
-                  onEnabledModelRefsChange(verifiedModelRefs.map((entry) => entry.ref))
+                  onEnabledModelRefsChange(availableModelEntries.map((entry) => entry.ref))
                 }
                 className="text-xs font-medium text-[color:var(--accent)] hover:text-[color:var(--accent-strong)]"
                 disabled={isLoading}
               >
-                Use all verified models
+                Use all available models
               </button>
             ) : null}
           </div>
-          {verifiedModelRefs.length === 0 ? (
+          {availableModelEntries.length === 0 ? (
             <p className="rounded-md border border-[color:var(--border)] bg-[color:var(--surface-muted)] px-3 py-2 text-xs text-muted">
-              Runtime verification has to succeed before Mission Control can scope node-enabled models.
+              Add or verify node models before scoping what agents and product leads can use.
             </p>
           ) : (
             <div className="grid gap-2 md:grid-cols-2">
-              {verifiedModelRefs.map((entry) => {
+              {availableModelEntries.map((entry) => {
                 const checked = effectiveEnabledModelRefs.includes(entry.ref);
                 return (
                   <label
@@ -1221,10 +1296,10 @@ export function GatewayForm({
               })}
             </div>
           )}
-          {verifiedModelRefs.length > 0 ? (
+          {availableModelEntries.length > 0 ? (
             <p className="text-xs text-muted">
-              {enabledModelEntries.length} of {verifiedModelRefs.length} verified model
-              {verifiedModelRefs.length === 1 ? "" : "s"} enabled for agent selection.
+              {enabledModelEntries.length} of {availableModelEntries.length} available model
+              {availableModelEntries.length === 1 ? "" : "s"} enabled for agent selection.
             </p>
           ) : null}
         </div>

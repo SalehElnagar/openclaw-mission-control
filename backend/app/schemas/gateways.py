@@ -14,6 +14,7 @@ from app.schemas.gateway_runtime import (
     GatewayModelProfiles,
     GatewayProviderAuthConfig,
     GatewayProviderConfig,
+    GatewayProviderSecretInput,
     GatewayProviderSecretRef,
     ProfileName,
     ToolProfileName,
@@ -45,6 +46,7 @@ class GatewayBase(SQLModel):
     model_definitions: list[GatewayModelDefinition] | None = None
     provider_auth_configs: list[GatewayProviderAuthConfig] | None = None
     provider_secret_refs: list[GatewayProviderSecretRef] | None = None
+    provider_secret_inputs: list[GatewayProviderSecretInput] | None = None
 
     @field_validator("model_profiles", mode="before")
     @classmethod
@@ -162,6 +164,7 @@ class GatewayUpdate(SQLModel):
     model_definitions: list[GatewayModelDefinition] | None = None
     provider_auth_configs: list[GatewayProviderAuthConfig] | None = None
     provider_secret_refs: list[GatewayProviderSecretRef] | None = None
+    provider_secret_inputs: list[GatewayProviderSecretInput] | None = None
 
     @field_validator("token", mode="before")
     @classmethod

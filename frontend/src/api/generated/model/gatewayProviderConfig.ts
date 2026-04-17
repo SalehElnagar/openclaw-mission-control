@@ -10,9 +10,12 @@
  */
 export interface GatewayProviderConfig {
   id: string;
+  preset_id?: string | null;
+  managed_by_catalog?: boolean | null;
   provider_type?: string | null;
   label?: string | null;
   base_url?: string | null;
   api_mode?: string | null;
   auth_header?: boolean | null;
+  headers?: Record<string, string> | null;
 }

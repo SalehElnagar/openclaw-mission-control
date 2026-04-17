@@ -12,6 +12,8 @@ import type { GatewayModelCost } from "./gatewayModelCost";
 export interface GatewayModelDefinition {
   provider_id: string;
   model_id: string;
+  preset_id?: string | null;
+  managed_by_catalog?: boolean | null;
   label?: string | null;
   api_mode?: string | null;
   reasoning?: boolean | null;

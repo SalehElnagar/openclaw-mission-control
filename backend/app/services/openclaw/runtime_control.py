@@ -42,6 +42,7 @@ from app.schemas.gateway_runtime import (
 )
 from app.schemas.telemetry import UsageSampleCreate
 from app.services.activity_log import actor_fields_from_auth, record_activity
+from app.services.gateway_secret_store import GatewaySecretStoreService
 from app.services.openclaw.constants import DEFAULT_HEARTBEAT_CONFIG
 from app.services.openclaw.db_service import OpenClawDBService
 from app.services.openclaw.gateway_agent_pack import (
@@ -196,6 +197,18 @@ def _config_provider_configs(config_data: dict[str, Any]) -> list[GatewayProvide
                 auth_header=(
                     provider_config.get("authHeader")
                     if isinstance(provider_config.get("authHeader"), bool)
+                    else None
+                ),
+                headers=(
+                    {
+                        str(header_name).strip(): str(header_value).strip()
+                        for header_name, header_value in provider_config.get("headers", {}).items()
+                        if isinstance(header_name, str)
+                        and header_name.strip()
+                        and isinstance(header_value, str)
+                        and header_value.strip()
+                    }
+                    if isinstance(provider_config.get("headers"), dict)
                     else None
                 ),
             ),
@@ -453,14 +466,20 @@ def _secret_provider_source(
     return source.strip() if isinstance(source, str) and source.strip() else None
 
 
-def _resolve_secret_ref_value(
+async def _resolve_secret_ref_value(
     ref: str,
     *,
+    gateway: Gateway,
     config_data: dict[str, Any],
-) -> tuple[dict[str, str] | None, str | None]:
+    secret_store: GatewaySecretStoreService | None = None,
+) -> tuple[dict[str, str] | str | None, str | None]:
     prefix, separator, secret_id = ref.partition(":")
     if not separator or not secret_id.strip():
-        return None, "Secret refs must use env:NAME or provider:secret-id syntax."
+        return None, "Secret refs must use env:NAME, provider:secret-id, or managed:uuid syntax."
+    if prefix == "managed":
+        if secret_store is None:
+            return None, "Managed secret refs require Mission Control secret storage."
+        return await secret_store.resolve_managed_ref(gateway=gateway, ref=ref)
     if prefix == "env":
         provider_name = _default_env_secret_provider(config_data)
         if provider_name is None:
@@ -841,9 +860,12 @@ def _toolchain_drift_detected(
         ):
             return True
     if gateway.provider_secret_refs is not None:
-        if _effective_provider_secret_refs(gateway=gateway, config_data=config_data) != (
-            _config_provider_secret_refs(config_data or {})
-        ):
+        expected_secret_refs = [
+            item
+            for item in _effective_provider_secret_refs(gateway=gateway, config_data=config_data)
+            if not item.ref.startswith("managed:")
+        ]
+        if expected_secret_refs != _config_provider_secret_refs(config_data or {}):
             return True
     if gateway.provider_auth_configs is not None:
         if _effective_provider_auth_configs(gateway=gateway, config_data=config_data) != (
@@ -896,11 +918,12 @@ def _infer_provider_auth_mode(
     return None
 
 
-def _provider_runtime_summaries(
+async def _provider_runtime_summaries(
     *,
     gateway: Gateway,
     config_data: dict[str, Any] | None,
     catalog: Iterable[GatewayRuntimeCatalogEntry],
+    secret_store: GatewaySecretStoreService | None = None,
 ) -> list[GatewayRuntimeProviderSummary]:
     effective_configs = _effective_provider_configs(gateway=gateway, config_data=config_data)
     effective_models = _effective_model_definitions(gateway=gateway, config_data=config_data)
@@ -944,7 +967,12 @@ def _provider_runtime_summaries(
         provider_secret_refs = secret_refs_by_provider.get(provider_id, [])
         unresolved_secret_refs: list[str] = []
         for secret_ref in provider_secret_refs:
-            _value, error = _resolve_secret_ref_value(secret_ref.ref, config_data=config_data or {})
+            _value, error = await _resolve_secret_ref_value(
+                secret_ref.ref,
+                gateway=gateway,
+                config_data=config_data or {},
+                secret_store=secret_store,
+            )
             if error:
                 unresolved_secret_refs.append(f"{secret_ref.purpose} ({secret_ref.ref})")
         auth_mode = _infer_provider_auth_mode(
@@ -1018,10 +1046,11 @@ def _render_runtime_model_definition(
     return model_payload
 
 
-def _render_managed_provider_patch(
+async def _render_managed_provider_patch(
     *,
     gateway: Gateway,
     config_data: dict[str, Any],
+    secret_store: GatewaySecretStoreService | None = None,
 ) -> tuple[dict[str, Any], list[str]]:
     provider_configs = _load_provider_configs(gateway)
     model_definitions = _load_model_definitions(gateway)
@@ -1083,10 +1112,17 @@ def _render_managed_provider_patch(
             provider_patch["api"] = provider_config.api_mode
         if provider_config and provider_config.auth_header is not None:
             provider_patch["authHeader"] = provider_config.auth_header
-        header_refs: dict[str, dict[str, str]] = {}
-        static_token_ref: dict[str, str] | None = None
+        header_refs: dict[str, dict[str, str] | str] = (
+            dict(provider_config.headers or {}) if provider_config else {}
+        )
+        static_token_ref: dict[str, str] | str | None = None
         for secret_ref in secret_refs_by_provider.get(provider_id, []):
-            resolved, error = _resolve_secret_ref_value(secret_ref.ref, config_data=config_data)
+            resolved, error = await _resolve_secret_ref_value(
+                secret_ref.ref,
+                gateway=gateway,
+                config_data=config_data,
+                secret_store=secret_store,
+            )
             if error:
                 warnings.append(f"{provider_id} {secret_ref.purpose}: {error}")
                 continue
@@ -1109,7 +1145,7 @@ def _render_managed_provider_patch(
             if header_name.lower() == "authorization" and header_prefix.lower() == "bearer":
                 provider_patch["authHeader"] = True
                 provider_patch["apiKey"] = static_token_ref
-            elif header_prefix:
+            elif header_prefix and isinstance(static_token_ref, dict):
                 warnings.append(
                     f"{provider_id} token auth custom header prefix is not runtime-renderable; "
                     "using Authorization bearer header.",
@@ -1117,7 +1153,11 @@ def _render_managed_provider_patch(
                 provider_patch["authHeader"] = True
                 provider_patch["apiKey"] = static_token_ref
             else:
-                header_refs[header_name] = static_token_ref
+                header_refs[header_name] = (
+                    f"{header_prefix} {static_token_ref}".strip()
+                    if header_prefix and isinstance(static_token_ref, str)
+                    else static_token_ref
+                )
         if header_refs:
             provider_patch["headers"] = header_refs
         providers_patch[provider_id] = provider_patch
@@ -1525,6 +1565,7 @@ class GatewayRuntimeControlService(OpenClawDBService):
             runtime_available_models = []
             enabled_model_refs = []
         tool_policy = _effective_tool_policy(gateway=gateway, config_data=config_data)
+        secret_store = GatewaySecretStoreService(self.session)
         return GatewayRuntimeSummary(
             gateway_id=gateway.id,
             node_class=gateway.node_class,
@@ -1553,10 +1594,11 @@ class GatewayRuntimeControlService(OpenClawDBService):
                 gateway=gateway,
                 config_data=config_data,
             ),
-            providers=_provider_runtime_summaries(
+            providers=await _provider_runtime_summaries(
                 gateway=gateway,
                 config_data=config_data,
                 catalog=catalog,
+                secret_store=secret_store,
             ),
             effective_tool_profile=tool_policy.profile,
             effective_tool_policy=tool_policy,
@@ -1731,9 +1773,10 @@ class GatewayRuntimeControlService(OpenClawDBService):
             or actual_tool_policy.browser_enabled != desired_tool_policy.browser_enabled
             or actual_tool_policy.workspace_only_fs != desired_tool_policy.workspace_only_fs
         )
-        managed_provider_patch, toolchain_warnings = _render_managed_provider_patch(
+        managed_provider_patch, toolchain_warnings = await _render_managed_provider_patch(
             gateway=gateway,
             config_data=config_data,
+            secret_store=GatewaySecretStoreService(self.session),
         )
         managed_auth_patch, auth_warnings = _render_managed_auth_patch(
             gateway=gateway,

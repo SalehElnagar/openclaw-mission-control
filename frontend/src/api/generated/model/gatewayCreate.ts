@@ -9,6 +9,7 @@ import type { GatewayModelDefinition } from "./gatewayModelDefinition";
 import type { GatewayModelProfiles } from "./gatewayModelProfiles";
 import type { GatewayProviderAuthConfig } from "./gatewayProviderAuthConfig";
 import type { GatewayProviderConfig } from "./gatewayProviderConfig";
+import type { GatewayProviderSecretInput } from "./gatewayProviderSecretInput";
 import type { GatewayProviderSecretRef } from "./gatewayProviderSecretRef";
 
 /**
@@ -29,5 +30,6 @@ export interface GatewayCreate {
   provider_auth_configs?: GatewayProviderAuthConfig[] | null;
   model_definitions?: GatewayModelDefinition[] | null;
   provider_secret_refs?: GatewayProviderSecretRef[] | null;
+  provider_secret_inputs?: GatewayProviderSecretInput[] | null;
   token?: string | null;
 }

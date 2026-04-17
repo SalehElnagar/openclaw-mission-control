@@ -17,6 +17,7 @@ from app.core.auth_mode import AuthMode
 from app.core.config import settings
 from app.db.session import get_session
 from app.schemas.gateways import GatewayRead, GatewayUpdate
+from app.services.toolchain_catalog import provider_preset_by_id, toolchain_catalog
 
 
 async def _make_engine() -> AsyncEngine:
@@ -153,6 +154,38 @@ def test_gateway_update_accepts_provider_auth_configs_patch() -> None:
     assert payload.provider_auth_configs[0].provider_id == "google-gemini"
     assert payload.provider_auth_configs[0].auth_mode == "api-key"
     assert payload.provider_auth_configs[0].secret_refs[0].ref == "env:OPENCLAW_GEMINI_API_KEY"
+
+
+def test_gateway_update_accepts_provider_secret_inputs_patch() -> None:
+    payload = GatewayUpdate.model_validate(
+        {
+            "provider_secret_inputs": [
+                {
+                    "provider_id": "google-gemini",
+                    "purpose": "apiKey",
+                    "mode": "paste-once",
+                    "value": "secret-value",
+                    "alias": "gemini-cloud-key",
+                    "preset_id": "google-gemini",
+                }
+            ]
+        },
+    )
+
+    assert payload.provider_secret_inputs is not None
+    assert payload.provider_secret_inputs[0].provider_id == "google-gemini"
+    assert payload.provider_secret_inputs[0].mode == "paste-once"
+    assert payload.provider_secret_inputs[0].alias == "gemini-cloud-key"
+
+
+def test_toolchain_catalog_exposes_guided_presets() -> None:
+    catalog = toolchain_catalog()
+    provider_ids = [provider.provider_id for provider in catalog.providers]
+
+    assert "microsoft-foundry" in provider_ids
+    assert "google-gemini" in provider_ids
+    assert "github-models" in provider_ids
+    assert provider_preset_by_id("github-copilot") is not None
 
 
 @pytest.mark.asyncio

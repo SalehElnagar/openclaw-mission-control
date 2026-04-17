@@ -84,6 +84,11 @@ class Settings(BaseSettings):
     # OpenClaw gateway runtime compatibility
     gateway_min_version: str = "2026.02.9"
 
+    # Managed node toolchain secret storage
+    managed_secret_backend: str = "database"
+    managed_secret_encryption_key: str = ""
+    azure_key_vault_url: str = ""
+
     # Logging
     log_level: str = "INFO"
     log_format: str = "text"
@@ -138,6 +143,20 @@ class Settings(BaseSettings):
         # schema drift (e.g. missing newly-added columns).
         if "db_auto_migrate" not in self.model_fields_set and self.environment == "dev":
             self.db_auto_migrate = True
+
+        backend = self.managed_secret_backend.strip().lower()
+        if backend not in {"database", "azure-keyvault"}:
+            raise ValueError(
+                "MANAGED_SECRET_BACKEND must be either 'database' or 'azure-keyvault'.",
+            )
+        self.managed_secret_backend = backend
+        if backend == "azure-keyvault":
+            vault_url = self.azure_key_vault_url.strip()
+            if not vault_url:
+                raise ValueError(
+                    "AZURE_KEY_VAULT_URL must be set when MANAGED_SECRET_BACKEND=azure-keyvault.",
+                )
+            self.azure_key_vault_url = vault_url.rstrip("/")
         return self
 
 

@@ -14,11 +14,13 @@ import {
   useUpdateGatewayApiV1GatewaysGatewayIdPatch,
 } from "@/api/generated/gateways/gateways";
 import { useQuery } from "@tanstack/react-query";
+import { getToolchainCatalog } from "@/api/toolchain";
 import { useOrganizationMembership } from "@/lib/use-organization-membership";
 import type {
   GatewayProviderAuthConfig,
   GatewayModelDefinition,
   GatewayProviderConfig,
+  GatewayProviderSecretInput,
   GatewayProviderSecretRef,
   GatewayUpdate,
 } from "@/api/generated/model";
@@ -39,11 +41,14 @@ function sanitizeProviderConfigs(
   const sanitized = providerConfigs
     .map((provider) => ({
       id: provider.id.trim(),
+      preset_id: provider.preset_id?.trim() || null,
+      managed_by_catalog: provider.managed_by_catalog ?? null,
       provider_type: provider.provider_type?.trim() || null,
       label: provider.label?.trim() || null,
       base_url: provider.base_url?.trim() || null,
       api_mode: provider.api_mode?.trim() || null,
       auth_header: Boolean(provider.auth_header),
+      headers: provider.headers ?? null,
     }))
     .filter((provider) => provider.id.length > 0);
   return sanitized.length > 0 ? sanitized : null;
@@ -56,6 +61,8 @@ function sanitizeProviderAuthConfigs(
     .map((config) => ({
       provider_id: config.provider_id.trim(),
       auth_mode: config.auth_mode,
+      preset_id: config.preset_id?.trim() || null,
+      managed_by_catalog: config.managed_by_catalog ?? null,
       profile_id: config.profile_id?.trim() || null,
       display_label: config.display_label?.trim() || null,
       secret_refs: (config.secret_refs ?? [])
@@ -70,7 +77,8 @@ function sanitizeProviderAuthConfigs(
             secretRef.purpose.length > 0 &&
             secretRef.ref.length > 0,
         ),
-      transport: config.transport ?? null,
+      token_header_name: config.token_header_name?.trim() || null,
+      token_header_prefix: config.token_header_prefix?.trim() || null,
     }))
     .filter(
       (config) =>
@@ -91,6 +99,8 @@ function sanitizeModelDefinitions(
       ...definition,
       provider_id: definition.provider_id.trim(),
       model_id: definition.model_id.trim(),
+      preset_id: definition.preset_id?.trim() || null,
+      managed_by_catalog: definition.managed_by_catalog ?? null,
       label: definition.label?.trim() || null,
       api_mode: definition.api_mode?.trim() || null,
       input_modalities: (definition.input_modalities ?? [])
@@ -120,12 +130,38 @@ function sanitizeProviderSecretRefs(
       provider_id: secretRef.provider_id.trim(),
       purpose: secretRef.purpose.trim(),
       ref: secretRef.ref.trim(),
+      alias: secretRef.alias?.trim() || null,
+      storage_backend: secretRef.storage_backend?.trim() || null,
+      configured: secretRef.configured ?? null,
+      updated_at: secretRef.updated_at ?? null,
+      managed_by_catalog: secretRef.managed_by_catalog ?? null,
     }))
     .filter(
       (secretRef) =>
         secretRef.provider_id.length > 0 &&
         secretRef.purpose.length > 0 &&
         secretRef.ref.length > 0,
+    );
+  return sanitized.length > 0 ? sanitized : null;
+}
+
+function sanitizeProviderSecretInputs(
+  providerSecretInputs: GatewayProviderSecretInput[],
+): GatewayProviderSecretInput[] | null {
+  const sanitized = providerSecretInputs
+    .map((secretInput) => ({
+      provider_id: secretInput.provider_id.trim(),
+      purpose: secretInput.purpose.trim(),
+      mode: "paste-once" as const,
+      value: secretInput.value,
+      alias: secretInput.alias?.trim() || null,
+      preset_id: secretInput.preset_id?.trim() || null,
+    }))
+    .filter(
+      (secretInput) =>
+        secretInput.provider_id.length > 0 &&
+        secretInput.purpose.length > 0 &&
+        secretInput.value.trim().length > 0,
     );
   return sanitized.length > 0 ? sanitized : null;
 }
@@ -187,6 +223,9 @@ export default function EditGatewayPage() {
   const [providerSecretRefs, setProviderSecretRefs] = useState<
     GatewayProviderSecretRef[] | undefined
   >(undefined);
+  const [providerSecretInputs, setProviderSecretInputs] = useState<
+    GatewayProviderSecretInput[] | undefined
+  >(undefined);
   const [toolProfile, setToolProfile] = useState<
     "restricted" | "coding" | "research" | "browser-assisted" | undefined
   >(undefined);
@@ -246,6 +285,12 @@ export default function EditGatewayPage() {
     queryFn: () => getGatewayRuntime(gatewayId ?? ""),
     enabled: Boolean(isSignedIn && isAdmin && gatewayId),
     refetchInterval: 30_000,
+  });
+  const toolchainCatalogQuery = useQuery({
+    queryKey: ["toolchain-catalog"],
+    queryFn: () => getToolchainCatalog(),
+    enabled: Boolean(isSignedIn && isAdmin),
+    staleTime: 60_000,
   });
   const verifiedModelRefs = useMemo(
     () =>
@@ -373,6 +418,9 @@ export default function EditGatewayPage() {
       provider_secret_refs: sanitizeProviderSecretRefs(
         resolvedProviderSecretRefs,
       ),
+      provider_secret_inputs: sanitizeProviderSecretInputs(
+        providerSecretInputs ?? [],
+      ),
     };
 
     updateMutation.mutate({ gatewayId, data: payload });
@@ -409,6 +457,8 @@ export default function EditGatewayPage() {
         providerAuthConfigs={resolvedProviderAuthConfigs}
         modelDefinitions={resolvedModelDefinitions}
         providerSecretRefs={resolvedProviderSecretRefs}
+        providerSecretInputs={providerSecretInputs ?? []}
+        toolchainCatalog={toolchainCatalogQuery.data?.data.providers ?? []}
         toolProfile={resolvedToolProfile}
         effectiveToolPolicy={runtimeSummary?.effective_tool_policy ?? null}
         runtimeProviderSummaries={runtimeSummary?.providers ?? []}
@@ -454,6 +504,7 @@ export default function EditGatewayPage() {
         onProviderAuthConfigsChange={setProviderAuthConfigs}
         onModelDefinitionsChange={setModelDefinitions}
         onProviderSecretRefsChange={setProviderSecretRefs}
+        onProviderSecretInputsChange={setProviderSecretInputs}
         onToolProfileChange={setToolProfile}
         onEnabledModelRefsChange={(next) => {
           setEnabledModelRefs(next);

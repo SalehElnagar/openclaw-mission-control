@@ -117,6 +117,7 @@ export * from "./gatewayMainAskUserResponse";
 export * from "./gatewayModelProfiles";
 export * from "./gatewayProviderConfig";
 export * from "./gatewayProviderSecretRef";
+export * from "./gatewayProviderSecretInput";
 export * from "./gatewayRead";
 export * from "./gatewayReadDefaultModelProfile";
 export * from "./gatewayProviderAuthState";

@@ -713,6 +713,10 @@ async def test_sync_model_policies_renders_managed_token_auth_into_provider_patc
                 "id": "github-models",
                 "provider_type": "github-models",
                 "base_url": "https://models.github.ai/inference",
+                "headers": {
+                    "Accept": "application/vnd.github+json",
+                    "X-GitHub-Api-Version": "2026-03-10",
+                },
             }
         ],
         model_definitions=[
@@ -792,6 +796,133 @@ async def test_sync_model_policies_renders_managed_token_auth_into_provider_patc
         "provider": "localenv",
         "id": "OPENCLAW_GITHUB_MODELS_TOKEN",
     }
+    assert provider_patch["headers"]["Accept"] == "application/vnd.github+json"
+    assert provider_patch["headers"]["X-GitHub-Api-Version"] == "2026-03-10"
+
+
+@pytest.mark.asyncio
+async def test_sync_model_policies_renders_managed_secret_values_into_provider_patch(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    class _SessionStub:
+        def add(self, _value: object) -> None:
+            return None
+
+        async def commit(self) -> None:
+            return None
+
+    model_ref = "google-gemini/gemini-2.5-flash"
+    gateway = Gateway(
+        organization_id=uuid4(),
+        name="gateway",
+        node_class="cloud",
+        url="ws://gateway.example/ws",
+        workspace_root="/tmp/workspaces",
+        default_model_profile="general",
+        enabled_model_refs=[model_ref],
+        model_profiles={
+            "general": {
+                "primary_model": model_ref,
+                "fallback_models": [],
+            }
+        },
+        provider_configs=[
+            {
+                "id": "google-gemini",
+                "provider_type": "google-gemini",
+                "base_url": "https://generativelanguage.googleapis.com/v1beta/openai/",
+                "api_mode": "openai-completions",
+                "auth_header": True,
+            }
+        ],
+        model_definitions=[
+            {
+                "provider_id": "google-gemini",
+                "model_id": "gemini-2.5-flash",
+                "label": "Gemini 2.5 Flash",
+            }
+        ],
+        provider_secret_refs=[
+            {
+                "provider_id": "google-gemini",
+                "purpose": "apiKey",
+                "ref": "managed:00000000-0000-0000-0000-000000000111",
+                "alias": "gemini-cloud-key",
+            }
+        ],
+        provider_auth_configs=[
+            {
+                "provider_id": "google-gemini",
+                "auth_mode": "api-key",
+            }
+        ],
+    )
+    service = GatewayRuntimeControlService(session=_SessionStub())  # type: ignore[arg-type]
+    captured: dict[str, object] = {}
+
+    async def _fake_load_gateway_config_with_retry(
+        _gateway: Gateway,
+        *,
+        context: str,
+    ) -> tuple[str | None, dict[str, object]]:
+        assert "gateway runtime sync" in context
+        return (
+            "hash",
+            {
+                "agents": {"defaults": {"models": {}}, "list": []},
+                "models": {"providers": {}},
+                "secrets": {
+                    "providers": {"localenv": {"source": "env"}},
+                    "defaults": {"env": "localenv"},
+                },
+            },
+        )
+
+    async def _fake_available_models(_gateway: Gateway) -> list[str]:
+        return [model_ref]
+
+    async def _fake_openclaw_call(
+        method: str,
+        params: dict[str, object] | None = None,
+        *,
+        config: object,
+    ) -> object:
+        assert method == "config.patch"
+        assert config is not None
+        assert params is not None
+        captured["patch"] = json.loads(str(params["raw"]))
+        return {}
+
+    async def _fake_resolve_managed_ref(
+        self,  # noqa: ARG001
+        *,
+        gateway: Gateway,  # noqa: ARG001
+        ref: str,
+    ) -> tuple[str | None, str | None]:
+        assert ref == "managed:00000000-0000-0000-0000-000000000111"
+        return "gemini-secret-value", None
+
+    monkeypatch.setattr(
+        service,
+        "_load_gateway_config_with_retry",
+        _fake_load_gateway_config_with_retry,
+    )
+    monkeypatch.setattr(service, "available_models", _fake_available_models)
+    monkeypatch.setattr(runtime_control, "openclaw_call", _fake_openclaw_call)
+    monkeypatch.setattr(
+        runtime_control.GatewaySecretStoreService,
+        "resolve_managed_ref",
+        _fake_resolve_managed_ref,
+    )
+
+    changed = await service.sync_model_policies(gateway=gateway, agents=[], auth=None)
+
+    assert changed is True
+    patch = captured["patch"]
+    assert isinstance(patch, dict)
+    provider_patch = patch["models"]["providers"]["google-gemini"]
+    assert provider_patch["authHeader"] is True
+    assert provider_patch["apiKey"] == "gemini-secret-value"
 
 
 @pytest.mark.asyncio

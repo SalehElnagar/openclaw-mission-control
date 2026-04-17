@@ -32,6 +32,7 @@ from app.api.tags import router as tags_router
 from app.api.task_custom_fields import router as task_custom_fields_router
 from app.api.tasks import router as tasks_router
 from app.api.telemetry import router as telemetry_router
+from app.api.toolchain import router as toolchain_router
 from app.api.users import router as users_router
 from app.api.weather import router as weather_router
 from app.core.config import settings
@@ -72,6 +73,10 @@ OPENAPI_TAGS = [
     {
         "name": "gateways",
         "description": "Gateway management, synchronization, and runtime control operations.",
+    },
+    {
+        "name": "toolchain",
+        "description": "Preset provider, auth, and model catalogs used by the node toolchain editor.",
     },
     {
         "name": "metrics",
@@ -555,6 +560,7 @@ api_v1.include_router(agents_router)
 api_v1.include_router(activity_router)
 api_v1.include_router(gateway_router)
 api_v1.include_router(gateways_router)
+api_v1.include_router(toolchain_router)
 api_v1.include_router(metrics_router)
 api_v1.include_router(telemetry_router)
 api_v1.include_router(organizations_router)

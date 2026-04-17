@@ -12,4 +12,9 @@ export interface GatewayProviderSecretRef {
   provider_id: string;
   purpose: string;
   ref: string;
+  alias?: string | null;
+  storage_backend?: string | null;
+  configured?: boolean | null;
+  updated_at?: string | null;
+  managed_by_catalog?: boolean | null;
 }

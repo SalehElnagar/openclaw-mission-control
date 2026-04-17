@@ -22,6 +22,7 @@ CatalogVerificationState = Literal["runtime", "configured"]
 ToolProfileName = Literal["restricted", "coding", "research", "browser-assisted"]
 ProviderAuthMode = Literal["api-key", "token", "oauth", "login"]
 ProviderAuthVerificationState = Literal["verified", "configured", "requires-login", "expired"]
+ManagedSecretWriteMode = Literal["paste-once"]
 
 
 def _normalize_text(value: object) -> str | None | object:
@@ -119,6 +120,11 @@ class GatewayProviderSecretRef(SQLModel):
     provider_id: str
     purpose: str
     ref: str
+    alias: str | None = None
+    storage_backend: str | None = None
+    configured: bool | None = None
+    updated_at: datetime | None = None
+    managed_by_catalog: bool | None = None
 
     @model_validator(mode="before")
     @classmethod
@@ -131,15 +137,30 @@ class GatewayProviderSecretRef(SQLModel):
         )
         purpose = _normalize_text(normalized.get("purpose"))
         ref = _normalize_text(normalized.get("ref"))
+        alias = _normalize_text(normalized.get("alias"))
+        storage_backend = _normalize_text(
+            normalized.get("storage_backend") or normalized.get("storageBackend"),
+        )
         if provider_id is not None:
             normalized["provider_id"] = provider_id
         if purpose is not None:
             normalized["purpose"] = purpose
         if ref is not None:
             normalized["ref"] = ref
+        if alias is not None:
+            normalized["alias"] = alias
+        if storage_backend is not None:
+            normalized["storage_backend"] = storage_backend
         return normalized
 
-    @field_validator("provider_id", "purpose", "ref", mode="before")
+    @field_validator(
+        "provider_id",
+        "purpose",
+        "ref",
+        "alias",
+        "storage_backend",
+        mode="before",
+    )
     @classmethod
     def normalize_required_text(cls, value: object) -> str | None | object:
         return _normalize_text(value)
@@ -150,6 +171,8 @@ class GatewayProviderAuthConfig(SQLModel):
 
     provider_id: str
     auth_mode: ProviderAuthMode = "api-key"
+    preset_id: str | None = None
+    managed_by_catalog: bool | None = None
     profile_id: str | None = None
     display_label: str | None = None
     secret_refs: list[GatewayProviderSecretRef] = Field(default_factory=list)
@@ -165,6 +188,7 @@ class GatewayProviderAuthConfig(SQLModel):
         provider_id = _normalize_text(
             normalized.get("provider_id") or normalized.get("provider"),
         )
+        preset_id = _normalize_text(normalized.get("preset_id") or normalized.get("presetId"))
         auth_mode = _normalize_provider_auth_mode(
             normalized.get("auth_mode") or normalized.get("mode"),
         )
@@ -182,6 +206,8 @@ class GatewayProviderAuthConfig(SQLModel):
         )
         if provider_id is not None:
             normalized["provider_id"] = provider_id
+        if preset_id is not None:
+            normalized["preset_id"] = preset_id
         if auth_mode is not None:
             normalized["auth_mode"] = auth_mode
         if profile_id is not None:
@@ -196,6 +222,7 @@ class GatewayProviderAuthConfig(SQLModel):
 
     @field_validator(
         "provider_id",
+        "preset_id",
         "profile_id",
         "display_label",
         "token_header_name",
@@ -235,11 +262,14 @@ class GatewayProviderConfig(SQLModel):
     """Managed provider definition saved on a node."""
 
     id: str
+    preset_id: str | None = None
+    managed_by_catalog: bool | None = None
     provider_type: str | None = None
     label: str | None = None
     base_url: str | None = None
     api_mode: str | None = None
     auth_header: bool | None = None
+    headers: dict[str, str] | None = None
 
     @model_validator(mode="before")
     @classmethod
@@ -250,6 +280,7 @@ class GatewayProviderConfig(SQLModel):
         provider_id = _normalize_text(
             normalized.get("id") or normalized.get("provider_id"),
         )
+        preset_id = _normalize_text(normalized.get("preset_id") or normalized.get("presetId"))
         provider_type = _normalize_text(
             normalized.get("provider_type") or normalized.get("type"),
         )
@@ -262,6 +293,8 @@ class GatewayProviderConfig(SQLModel):
         )
         if provider_id is not None:
             normalized["id"] = provider_id
+        if preset_id is not None:
+            normalized["preset_id"] = preset_id
         if provider_type is not None:
             normalized["provider_type"] = provider_type
         if label is not None:
@@ -272,10 +305,32 @@ class GatewayProviderConfig(SQLModel):
             normalized["api_mode"] = api_mode
         return normalized
 
-    @field_validator("id", "provider_type", "label", "base_url", "api_mode", mode="before")
+    @field_validator(
+        "id",
+        "preset_id",
+        "provider_type",
+        "label",
+        "base_url",
+        "api_mode",
+        mode="before",
+    )
     @classmethod
     def normalize_text_fields(cls, value: object) -> str | None | object:
         return _normalize_text(value)
+
+    @field_validator("headers", mode="before")
+    @classmethod
+    def normalize_headers(cls, value: object) -> dict[str, str] | None:
+        if value is None or not isinstance(value, dict):
+            return None
+        normalized: dict[str, str] = {}
+        for key, raw in value.items():
+            header_name = _normalize_text(key)
+            header_value = _normalize_text(raw)
+            if not isinstance(header_name, str) or not isinstance(header_value, str):
+                continue
+            normalized[header_name] = header_value
+        return normalized or None
 
     @model_validator(mode="after")
     def apply_defaults(self) -> "GatewayProviderConfig":
@@ -310,6 +365,8 @@ class GatewayModelDefinition(SQLModel):
 
     provider_id: str
     model_id: str
+    preset_id: str | None = None
+    managed_by_catalog: bool | None = None
     label: str | None = None
     api_mode: str | None = None
     reasoning: bool | None = None
@@ -330,6 +387,7 @@ class GatewayModelDefinition(SQLModel):
         model_id = _normalize_text(
             normalized.get("model_id") or normalized.get("id"),
         )
+        preset_id = _normalize_text(normalized.get("preset_id") or normalized.get("presetId"))
         label = _normalize_text(normalized.get("label") or normalized.get("name"))
         api_mode = _normalize_text(
             normalized.get("api_mode") or normalized.get("api"),
@@ -338,6 +396,8 @@ class GatewayModelDefinition(SQLModel):
             normalized["provider_id"] = provider_id
         if model_id is not None:
             normalized["model_id"] = model_id
+        if preset_id is not None:
+            normalized["preset_id"] = preset_id
         if label is not None:
             normalized["label"] = label
         if api_mode is not None:
@@ -350,7 +410,14 @@ class GatewayModelDefinition(SQLModel):
             normalized["max_tokens"] = normalized.get("maxTokens")
         return normalized
 
-    @field_validator("provider_id", "model_id", "label", "api_mode", mode="before")
+    @field_validator(
+        "provider_id",
+        "model_id",
+        "preset_id",
+        "label",
+        "api_mode",
+        mode="before",
+    )
     @classmethod
     def normalize_text_fields(cls, value: object) -> str | None | object:
         return _normalize_text(value)
@@ -416,6 +483,61 @@ class GatewayRuntimeProviderSummary(SQLModel):
     verified_model_count: int = 0
     secret_ref_count: int = 0
     unresolved_secret_refs: list[str] = Field(default_factory=list)
+
+
+class GatewayProviderSecretInput(SQLModel):
+    """Write-only provider secret input accepted on create/update payloads."""
+
+    provider_id: str
+    purpose: str
+    mode: ManagedSecretWriteMode = "paste-once"
+    value: str
+    alias: str | None = None
+    preset_id: str | None = None
+
+    @field_validator("provider_id", "purpose", "mode", "alias", "preset_id", mode="before")
+    @classmethod
+    def normalize_secret_input_text(cls, value: object) -> str | None | object:
+        return _normalize_text(value)
+
+
+class ToolchainCatalogModelPreset(SQLModel):
+    """Preset model metadata used by the guided node editor."""
+
+    model_id: str
+    label: str
+    api_mode: str | None = None
+    reasoning: bool | None = None
+    input_modalities: list[str] = Field(default_factory=list)
+    context_window: int | None = None
+    max_tokens: int | None = None
+    cost: GatewayModelCost | None = None
+    enabled_by_default: bool = True
+
+
+class ToolchainCatalogProviderPreset(SQLModel):
+    """Provider preset exposed to the Mission Control preset-first editor."""
+
+    preset_id: str
+    provider_id: str
+    display_label: str
+    provider_type: str
+    node_classes: list[GatewayNodeClass] = Field(default_factory=list)
+    supported_auth_modes: list[ProviderAuthMode] = Field(default_factory=list)
+    default_base_url: str | None = None
+    default_api_mode: str | None = None
+    default_auth_header: bool | None = None
+    default_headers: dict[str, str] | None = None
+    default_token_header_name: str | None = None
+    default_token_header_prefix: str | None = None
+    kind: str = "preset-only"
+    models: list[ToolchainCatalogModelPreset] = Field(default_factory=list)
+
+
+class ToolchainCatalogResponse(SQLModel):
+    """Full preset catalog returned to the guided node editor."""
+
+    providers: list[ToolchainCatalogProviderPreset] = Field(default_factory=list)
 
 
 class GatewayRuntimeSummary(SQLModel):

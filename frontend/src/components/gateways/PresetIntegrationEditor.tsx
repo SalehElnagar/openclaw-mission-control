@@ -1,0 +1,868 @@
+"use client";
+
+import { useEffect, useMemo, useState } from "react";
+
+import type {
+  GatewayModelDefinition,
+  GatewayProviderAuthConfig,
+  GatewayProviderConfig,
+  GatewayProviderSecretInput,
+  GatewayProviderSecretRef,
+} from "@/api/generated/model";
+import type { GatewayRuntimeProviderSummary } from "@/api/runtime-control";
+import type { ToolchainCatalogProviderPreset } from "@/api/toolchain";
+import { Badge } from "@/components/ui/badge";
+import { Button } from "@/components/ui/button";
+import { Input } from "@/components/ui/input";
+import SearchableSelect from "@/components/ui/searchable-select";
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select";
+import type { NodeClass } from "@/lib/node-scope";
+import {
+  providerAuthModeDescription,
+  providerAuthModeLabel,
+  providerAuthModeOptionsForNodeClass,
+  providerAuthStateLabel,
+  type ProviderAuthMode,
+} from "@/lib/provider-auth";
+
+type PresetIntegrationEditorProps = {
+  nodeClass: NodeClass;
+  toolchainCatalog: ToolchainCatalogProviderPreset[];
+  providerConfigs: GatewayProviderConfig[];
+  providerAuthConfigs: GatewayProviderAuthConfig[];
+  modelDefinitions: GatewayModelDefinition[];
+  providerSecretRefs: GatewayProviderSecretRef[];
+  providerSecretInputs: GatewayProviderSecretInput[];
+  runtimeProviderSummaries?: GatewayRuntimeProviderSummary[];
+  enabledModelRefs?: string[];
+  isLoading: boolean;
+  onProviderConfigsChange?: (next: GatewayProviderConfig[]) => void;
+  onProviderAuthConfigsChange?: (next: GatewayProviderAuthConfig[]) => void;
+  onModelDefinitionsChange?: (next: GatewayModelDefinition[]) => void;
+  onProviderSecretRefsChange?: (next: GatewayProviderSecretRef[]) => void;
+  onProviderSecretInputsChange?: (next: GatewayProviderSecretInput[]) => void;
+  onEnabledModelRefsChange?: (next: string[]) => void;
+};
+
+type SecretEntryMode = "existing" | "paste-once";
+
+const servicePurposeForMode = (
+  authMode?: ProviderAuthMode | null,
+): "apiKey" | "token" | null => {
+  if (authMode === "api-key") {
+    return "apiKey";
+  }
+  if (authMode === "token") {
+    return "token";
+  }
+  return null;
+};
+
+const providerRef = (providerId: string, modelId: string) =>
+  `${providerId}/${modelId}`;
+
+const secretScopeKey = (providerId: string, purpose: string) =>
+  `${providerId}::${purpose}`;
+
+const dedupeModelRefs = (values: string[]) => Array.from(new Set(values));
+
+function buildProviderConfig(
+  preset: ToolchainCatalogProviderPreset,
+): GatewayProviderConfig {
+  return {
+    id: preset.provider_id,
+    preset_id: preset.preset_id,
+    managed_by_catalog: true,
+    provider_type: preset.provider_type,
+    label: preset.display_label,
+    base_url: preset.default_base_url ?? null,
+    api_mode: preset.default_api_mode ?? null,
+    auth_header: preset.default_auth_header ?? null,
+    headers: preset.default_headers ?? null,
+  };
+}
+
+function buildProviderAuthConfig(
+  preset: ToolchainCatalogProviderPreset,
+  authMode: ProviderAuthMode,
+  existing?: GatewayProviderAuthConfig | null,
+): GatewayProviderAuthConfig {
+  return {
+    provider_id: preset.provider_id,
+    preset_id: preset.preset_id,
+    managed_by_catalog: true,
+    auth_mode: authMode,
+    profile_id:
+      authMode === "oauth" || authMode === "login"
+        ? existing?.profile_id ?? `${preset.provider_id}:managed`
+        : null,
+    display_label: existing?.display_label ?? preset.display_label,
+    secret_refs: existing?.secret_refs ?? [],
+    token_header_name:
+      authMode === "token"
+        ? existing?.token_header_name ??
+          preset.default_token_header_name ??
+          "Authorization"
+        : null,
+    token_header_prefix:
+      authMode === "token"
+        ? existing?.token_header_prefix ??
+          preset.default_token_header_prefix ??
+          "Bearer"
+        : null,
+  };
+}
+
+function buildModelDefinition(
+  preset: ToolchainCatalogProviderPreset,
+  modelId: string,
+): GatewayModelDefinition | null {
+  const modelPreset = preset.models.find((item) => item.model_id === modelId);
+  if (!modelPreset) {
+    return null;
+  }
+  return {
+    provider_id: preset.provider_id,
+    model_id: modelPreset.model_id,
+    preset_id: preset.preset_id,
+    managed_by_catalog: true,
+    label: modelPreset.label,
+    api_mode: modelPreset.api_mode ?? preset.default_api_mode ?? null,
+    reasoning: modelPreset.reasoning ?? null,
+    input_modalities: modelPreset.input_modalities ?? [],
+    context_window: modelPreset.context_window ?? null,
+    max_tokens: modelPreset.max_tokens ?? null,
+    cost: modelPreset.cost ?? null,
+  };
+}
+
+function integrationStatus(
+  runtime: GatewayRuntimeProviderSummary | undefined,
+  authMode: ProviderAuthMode | undefined,
+  hasServiceSecret: boolean,
+  hasSelectedModels: boolean,
+): { label: string; variant: "outline" | "warning" | "danger" | "success" } {
+  if (runtime?.unresolved_secret_refs?.length) {
+    return { label: "Error", variant: "danger" };
+  }
+  if (authMode === "oauth" || authMode === "login") {
+    if (runtime?.requires_login || runtime?.auth_state === "requires-login") {
+      return { label: "Needs login", variant: "warning" };
+    }
+  } else if ((authMode === "api-key" || authMode === "token") && !hasServiceSecret) {
+    return { label: "Needs secret", variant: "warning" };
+  }
+  if (runtime?.auth_state === "verified" || runtime?.verification_state === "runtime") {
+    return { label: "Verified", variant: "success" };
+  }
+  if (hasSelectedModels || authMode) {
+    return { label: "Verifying", variant: "outline" };
+  }
+  return { label: "Not configured", variant: "outline" };
+}
+
+export function PresetIntegrationEditor({
+  nodeClass,
+  toolchainCatalog,
+  providerConfigs,
+  providerAuthConfigs,
+  modelDefinitions,
+  providerSecretRefs,
+  providerSecretInputs,
+  runtimeProviderSummaries = [],
+  enabledModelRefs = [],
+  isLoading,
+  onProviderConfigsChange,
+  onProviderAuthConfigsChange,
+  onModelDefinitionsChange,
+  onProviderSecretRefsChange,
+  onProviderSecretInputsChange,
+  onEnabledModelRefsChange,
+}: PresetIntegrationEditorProps) {
+  const [pendingPresetId, setPendingPresetId] = useState<string>("");
+  const [secretModes, setSecretModes] = useState<Record<string, SecretEntryMode>>(
+    {},
+  );
+
+  const compatiblePresets = useMemo(
+    () =>
+      toolchainCatalog.filter((preset) => preset.node_classes.includes(nodeClass)),
+    [nodeClass, toolchainCatalog],
+  );
+  const presetByProviderId = useMemo(
+    () => new Map(compatiblePresets.map((preset) => [preset.provider_id, preset])),
+    [compatiblePresets],
+  );
+  const runtimeByProviderId = useMemo(
+    () =>
+      new Map(runtimeProviderSummaries.map((provider) => [provider.id, provider])),
+    [runtimeProviderSummaries],
+  );
+  const providerConfigById = useMemo(
+    () => new Map(providerConfigs.map((provider) => [provider.id, provider])),
+    [providerConfigs],
+  );
+  const providerAuthById = useMemo(
+    () =>
+      new Map(providerAuthConfigs.map((config) => [config.provider_id, config])),
+    [providerAuthConfigs],
+  );
+  const secretRefByScope = useMemo(
+    () =>
+      new Map(
+        providerSecretRefs.map((secretRef) => [
+          secretScopeKey(secretRef.provider_id, secretRef.purpose),
+          secretRef,
+        ]),
+      ),
+    [providerSecretRefs],
+  );
+  const secretInputByScope = useMemo(
+    () =>
+      new Map(
+        providerSecretInputs.map((secretInput) => [
+          secretScopeKey(secretInput.provider_id, secretInput.purpose),
+          secretInput,
+        ]),
+      ),
+    [providerSecretInputs],
+  );
+  const modelRefsByProvider = useMemo(() => {
+    const next = new Map<string, Set<string>>();
+    for (const definition of modelDefinitions) {
+      const current = next.get(definition.provider_id) ?? new Set<string>();
+      current.add(providerRef(definition.provider_id, definition.model_id));
+      next.set(definition.provider_id, current);
+    }
+    return next;
+  }, [modelDefinitions]);
+  const activeProviderIds = useMemo(() => {
+    const ids = new Set<string>();
+    for (const provider of compatiblePresets) {
+      if (
+        providerConfigs.some((item) => item.id === provider.provider_id) ||
+        providerAuthConfigs.some((item) => item.provider_id === provider.provider_id) ||
+        modelDefinitions.some((item) => item.provider_id === provider.provider_id) ||
+        providerSecretRefs.some((item) => item.provider_id === provider.provider_id) ||
+        providerSecretInputs.some((item) => item.provider_id === provider.provider_id)
+      ) {
+        ids.add(provider.provider_id);
+      }
+    }
+    return compatiblePresets
+      .filter((provider) => ids.has(provider.provider_id))
+      .map((provider) => provider.provider_id);
+  }, [
+    compatiblePresets,
+    modelDefinitions,
+    providerAuthConfigs,
+    providerConfigs,
+    providerSecretInputs,
+    providerSecretRefs,
+  ]);
+  const availablePresetOptions = useMemo(
+    () =>
+      compatiblePresets
+        .filter((preset) => !activeProviderIds.includes(preset.provider_id))
+        .map((preset) => ({
+          value: preset.provider_id,
+          label: preset.display_label,
+        })),
+    [activeProviderIds, compatiblePresets],
+  );
+
+  useEffect(() => {
+    if (!availablePresetOptions.length) {
+      if (pendingPresetId) {
+        setPendingPresetId("");
+      }
+      return;
+    }
+    const stillValid = availablePresetOptions.some(
+      (option) => option.value === pendingPresetId,
+    );
+    if (!stillValid) {
+      setPendingPresetId(availablePresetOptions[0]?.value ?? "");
+    }
+  }, [availablePresetOptions, pendingPresetId]);
+
+  const replaceProviderSecretsForPurpose = (
+    providerId: string,
+    purpose: string,
+    nextSecretRef: GatewayProviderSecretRef | null,
+  ) => {
+    if (!onProviderSecretRefsChange) {
+      return;
+    }
+    const filtered = providerSecretRefs.filter(
+      (item) => !(item.provider_id === providerId && item.purpose === purpose),
+    );
+    onProviderSecretRefsChange(nextSecretRef ? [...filtered, nextSecretRef] : filtered);
+  };
+
+  const replaceProviderSecretInput = (
+    providerId: string,
+    purpose: string,
+    nextSecretInput: GatewayProviderSecretInput | null,
+  ) => {
+    if (!onProviderSecretInputsChange) {
+      return;
+    }
+    const filtered = providerSecretInputs.filter(
+      (item) => !(item.provider_id === providerId && item.purpose === purpose),
+    );
+    onProviderSecretInputsChange(
+      nextSecretInput ? [...filtered, nextSecretInput] : filtered,
+    );
+  };
+
+  const ensurePresetIntegration = (presetId: string) => {
+    const preset = presetByProviderId.get(presetId);
+    if (!preset) {
+      return;
+    }
+    const allowedModes = preset.supported_auth_modes.filter((mode) =>
+      providerAuthModeOptionsForNodeClass(nodeClass).some(
+        (option) => option.value === mode,
+      ),
+    );
+    const nextAuthMode = allowedModes[0] ?? "api-key";
+    const selectedModels = preset.models
+      .filter((model) => model.enabled_by_default !== false)
+      .map((model) => buildModelDefinition(preset, model.model_id))
+      .filter((model): model is GatewayModelDefinition => Boolean(model));
+
+    onProviderConfigsChange?.([
+      ...providerConfigs.filter((provider) => provider.id !== preset.provider_id),
+      buildProviderConfig(preset),
+    ]);
+    onProviderAuthConfigsChange?.([
+      ...providerAuthConfigs.filter(
+        (config) => config.provider_id !== preset.provider_id,
+      ),
+      buildProviderAuthConfig(preset, nextAuthMode),
+    ]);
+    onModelDefinitionsChange?.([
+      ...modelDefinitions.filter(
+        (definition) => definition.provider_id !== preset.provider_id,
+      ),
+      ...selectedModels,
+    ]);
+    onEnabledModelRefsChange?.(
+      dedupeModelRefs([
+        ...enabledModelRefs.filter(
+          (ref) => !ref.startsWith(`${preset.provider_id}/`),
+        ),
+        ...selectedModels.map((model) =>
+          providerRef(model.provider_id, model.model_id),
+        ),
+      ]),
+    );
+  };
+
+  const removePresetIntegration = (providerId: string) => {
+    onProviderConfigsChange?.(
+      providerConfigs.filter((provider) => provider.id !== providerId),
+    );
+    onProviderAuthConfigsChange?.(
+      providerAuthConfigs.filter((config) => config.provider_id !== providerId),
+    );
+    onModelDefinitionsChange?.(
+      modelDefinitions.filter((definition) => definition.provider_id !== providerId),
+    );
+    onProviderSecretRefsChange?.(
+      providerSecretRefs.filter((secretRef) => secretRef.provider_id !== providerId),
+    );
+    onProviderSecretInputsChange?.(
+      providerSecretInputs.filter((secretInput) => secretInput.provider_id !== providerId),
+    );
+    onEnabledModelRefsChange?.(
+      enabledModelRefs.filter((ref) => !ref.startsWith(`${providerId}/`)),
+    );
+  };
+
+  const updateProviderAuthMode = (
+    preset: ToolchainCatalogProviderPreset,
+    nextAuthMode: ProviderAuthMode,
+  ) => {
+    const existing = providerAuthById.get(preset.provider_id) ?? null;
+    const nextPurpose = servicePurposeForMode(nextAuthMode);
+    const previousPurpose = servicePurposeForMode(existing?.auth_mode);
+
+    onProviderAuthConfigsChange?.([
+      ...providerAuthConfigs.filter(
+        (config) => config.provider_id !== preset.provider_id,
+      ),
+      buildProviderAuthConfig(preset, nextAuthMode, existing),
+    ]);
+
+    if (previousPurpose && nextPurpose && previousPurpose !== nextPurpose) {
+      const existingRef = secretRefByScope.get(
+        secretScopeKey(preset.provider_id, previousPurpose),
+      );
+      const existingInput = secretInputByScope.get(
+        secretScopeKey(preset.provider_id, previousPurpose),
+      );
+      replaceProviderSecretsForPurpose(
+        preset.provider_id,
+        previousPurpose,
+        null,
+      );
+      replaceProviderSecretInput(
+        preset.provider_id,
+        previousPurpose,
+        null,
+      );
+      if (existingRef) {
+        replaceProviderSecretsForPurpose(preset.provider_id, nextPurpose, {
+          ...existingRef,
+          purpose: nextPurpose,
+        });
+      }
+      if (existingInput) {
+        replaceProviderSecretInput(preset.provider_id, nextPurpose, {
+          ...existingInput,
+          purpose: nextPurpose,
+        });
+      }
+    }
+  };
+
+  const togglePresetModel = (
+    preset: ToolchainCatalogProviderPreset,
+    modelId: string,
+    checked: boolean,
+  ) => {
+    const definition = buildModelDefinition(preset, modelId);
+    if (!definition || !onModelDefinitionsChange) {
+      return;
+    }
+    const modelRefValue = providerRef(preset.provider_id, modelId);
+    const filtered = modelDefinitions.filter(
+      (item) =>
+        !(item.provider_id === preset.provider_id && item.model_id === modelId),
+    );
+    onModelDefinitionsChange(
+      checked ? [...filtered, definition] : filtered,
+    );
+    if (!checked) {
+      onEnabledModelRefsChange?.(
+        enabledModelRefs.filter((ref) => ref !== modelRefValue),
+      );
+    }
+  };
+
+  const toggleEnabledModel = (
+    preset: ToolchainCatalogProviderPreset,
+    modelId: string,
+    checked: boolean,
+  ) => {
+    if (!onEnabledModelRefsChange) {
+      return;
+    }
+    const modelRefValue = providerRef(preset.provider_id, modelId);
+    const selectedModels = modelRefsByProvider.get(preset.provider_id) ?? new Set<string>();
+    if (!selectedModels.has(modelRefValue) && checked) {
+      togglePresetModel(preset, modelId, true);
+    }
+    onEnabledModelRefsChange(
+      checked
+        ? dedupeModelRefs([...enabledModelRefs, modelRefValue])
+        : enabledModelRefs.filter((ref) => ref !== modelRefValue),
+    );
+  };
+
+  const renderSecretEditor = (
+    preset: ToolchainCatalogProviderPreset,
+    authMode: ProviderAuthMode,
+  ) => {
+    const purpose = servicePurposeForMode(authMode);
+    if (!purpose) {
+      return (
+        <div className="rounded-lg border border-[color:var(--border)] bg-[color:var(--surface)] px-4 py-3 text-sm text-muted">
+          Interactive auth is configured on this node. Save first, then use the node detail page to connect, refresh, or disconnect the provider session.
+        </div>
+      );
+    }
+
+    const scope = secretScopeKey(preset.provider_id, purpose);
+    const existingSecret = secretRefByScope.get(scope);
+    const pendingSecret = secretInputByScope.get(scope);
+    const selectedMode =
+      secretModes[scope] ?? (existingSecret ? "existing" : "paste-once");
+
+    return (
+      <div className="space-y-3 rounded-lg border border-[color:var(--border)] bg-[color:var(--surface)] p-4">
+        <div className="flex flex-wrap items-center justify-between gap-3">
+          <div>
+            <p className="text-sm font-medium text-strong">Authentication secret</p>
+            <p className="mt-1 text-xs text-muted">
+              {authMode === "api-key"
+                ? "Attach the provider API key once, or keep using the stored alias for this node."
+                : "Attach the provider token once, or keep using the stored alias for this node."}
+            </p>
+          </div>
+          <Select
+            value={selectedMode}
+            onValueChange={(value) =>
+              setSecretModes((current) => ({
+                ...current,
+                [scope]: value as SecretEntryMode,
+              }))
+            }
+            disabled={isLoading || (selectedMode === "existing" && !existingSecret)}
+          >
+            <SelectTrigger className="w-full max-w-[16rem]">
+              <SelectValue placeholder="Choose secret flow" />
+            </SelectTrigger>
+            <SelectContent>
+              {existingSecret ? (
+                <SelectItem value="existing">Use existing secret alias</SelectItem>
+              ) : null}
+              <SelectItem value="paste-once">Paste once</SelectItem>
+            </SelectContent>
+          </Select>
+        </div>
+
+        {selectedMode === "existing" && existingSecret ? (
+          <div className="rounded-lg border border-[color:var(--border)] bg-[color:var(--surface-muted)] px-4 py-3 text-sm text-muted">
+            <p className="font-medium text-strong">
+              {existingSecret.alias?.trim() || existingSecret.ref}
+            </p>
+            <p className="mt-1 text-xs text-muted">
+              {existingSecret.storage_backend ?? "managed store"}
+              {existingSecret.updated_at
+                ? ` · updated ${new Date(existingSecret.updated_at).toLocaleString()}`
+                : ""}
+            </p>
+            <p className="mt-2 text-xs text-muted">
+              Mission Control will keep using this stored secret and will not show the value again.
+            </p>
+          </div>
+        ) : (
+          <div className="grid gap-4 md:grid-cols-2">
+            <div className="space-y-2 md:col-span-2">
+              <label className="text-xs font-medium uppercase tracking-wide text-quiet">
+                Paste once
+              </label>
+              <Input
+                type="password"
+                value={pendingSecret?.value ?? ""}
+                onChange={(event) =>
+                  replaceProviderSecretInput(preset.provider_id, purpose, {
+                    provider_id: preset.provider_id,
+                    purpose,
+                    mode: "paste-once",
+                    value: event.target.value,
+                    alias: pendingSecret?.alias ?? null,
+                    preset_id: preset.preset_id,
+                  })
+                }
+                placeholder={
+                  authMode === "api-key"
+                    ? "Paste the API key once"
+                    : "Paste the token once"
+                }
+                disabled={isLoading}
+              />
+              <p className="text-[11px] leading-5 text-muted">
+                The pasted value is write-only. Mission Control stores it in the configured secret backend and will only show alias metadata after save.
+              </p>
+            </div>
+            <div className="space-y-2">
+              <label className="text-xs font-medium uppercase tracking-wide text-quiet">
+                Secret alias
+              </label>
+              <Input
+                value={pendingSecret?.alias ?? ""}
+                onChange={(event) => {
+                  const nextValue = pendingSecret?.value ?? "";
+                  if (!nextValue.trim() && !event.target.value.trim()) {
+                    replaceProviderSecretInput(preset.provider_id, purpose, null);
+                    return;
+                  }
+                  replaceProviderSecretInput(preset.provider_id, purpose, {
+                    provider_id: preset.provider_id,
+                    purpose,
+                    mode: "paste-once",
+                    value: nextValue,
+                    alias: event.target.value || null,
+                    preset_id: preset.preset_id,
+                  });
+                }}
+                placeholder={`${preset.provider_id}-${purpose}`}
+                disabled={isLoading}
+              />
+            </div>
+          </div>
+        )}
+      </div>
+    );
+  };
+
+  if (!compatiblePresets.length) {
+    return (
+      <div className="rounded-xl border border-dashed border-[color:var(--border)] bg-[color:var(--surface)] px-4 py-5 text-sm text-muted">
+        No guided provider presets are available for this node class yet. Use the Advanced / Custom integration tab for raw provider setup.
+      </div>
+    );
+  }
+
+  return (
+    <div className="space-y-4">
+      <div className="rounded-xl border border-[color:var(--border)] bg-[color:var(--surface-muted)] p-4">
+        <div className="flex flex-wrap items-end gap-3">
+          <div className="min-w-[18rem] flex-1 space-y-2">
+            <label className="text-sm font-medium text-strong">
+              Add integration
+            </label>
+            <SearchableSelect
+              value={pendingPresetId}
+              onValueChange={setPendingPresetId}
+              options={availablePresetOptions}
+              placeholder="Choose a provider"
+              ariaLabel="Choose a provider preset"
+              disabled={isLoading || availablePresetOptions.length === 0}
+              searchPlaceholder="Search providers..."
+              emptyMessage="All compatible presets are already configured."
+            />
+          </div>
+          <Button
+            type="button"
+            disabled={
+              isLoading ||
+              !pendingPresetId ||
+              !presetByProviderId.has(pendingPresetId)
+            }
+            onClick={() => ensurePresetIntegration(pendingPresetId)}
+          >
+            Add integration
+          </Button>
+        </div>
+        <p className="mt-3 text-xs text-muted">
+          Choose a supported provider preset first. Mission Control fills in the provider id, endpoint, API mode, and model catalog automatically, then lets you choose auth and enabled models with guided controls.
+        </p>
+      </div>
+
+      {activeProviderIds.length === 0 ? (
+        <div className="rounded-xl border border-dashed border-[color:var(--border)] bg-[color:var(--surface)] px-4 py-5 text-sm text-muted">
+          No preset integrations configured yet. Add one above to get a guided provider, auth, and model flow instead of typing raw node runtime metadata.
+        </div>
+      ) : null}
+
+      {activeProviderIds.map((providerId) => {
+        const preset = presetByProviderId.get(providerId);
+        if (!preset) {
+          return null;
+        }
+        const providerConfig =
+          providerConfigById.get(providerId) ?? buildProviderConfig(preset);
+        const allowedModes = preset.supported_auth_modes.filter((mode) =>
+          providerAuthModeOptionsForNodeClass(nodeClass).some(
+            (option) => option.value === mode,
+          ),
+        );
+        const authConfig = providerAuthById.get(providerId);
+        const authMode =
+          allowedModes.find((mode) => mode === authConfig?.auth_mode) ??
+          allowedModes[0] ??
+          "api-key";
+        const runtime = runtimeByProviderId.get(providerId);
+        const servicePurpose = servicePurposeForMode(authMode);
+        const hasServiceSecret = servicePurpose
+          ? Boolean(
+              secretRefByScope.get(secretScopeKey(providerId, servicePurpose)) ||
+                secretInputByScope.get(secretScopeKey(providerId, servicePurpose))
+                  ?.value,
+            )
+          : true;
+        const selectedModelRefs = modelRefsByProvider.get(providerId) ?? new Set<string>();
+        const status = integrationStatus(
+          runtime,
+          authMode,
+          hasServiceSecret,
+          selectedModelRefs.size > 0,
+        );
+
+        return (
+          <div
+            key={providerId}
+            className="rounded-xl border border-[color:var(--border)] bg-[color:var(--surface-muted)] p-4"
+          >
+            <div className="flex flex-wrap items-start justify-between gap-3">
+              <div className="space-y-2">
+                <div className="flex flex-wrap items-center gap-2">
+                  <h2 className="text-sm font-semibold text-strong">
+                    {preset.display_label}
+                  </h2>
+                  <Badge variant={status.variant}>{status.label}</Badge>
+                  <Badge variant="outline">
+                    {preset.kind === "local-interactive"
+                      ? "Local interactive"
+                      : "Managed preset"}
+                  </Badge>
+                </div>
+                <p className="text-xs text-muted">
+                  {providerConfig.base_url
+                    ? `Mission Control manages ${providerConfig.base_url} for this integration.`
+                    : "Mission Control manages this provider preset and fills its runtime metadata automatically."}
+                </p>
+              </div>
+              <Button
+                type="button"
+                variant="outline"
+                size="sm"
+                disabled={isLoading}
+                onClick={() => removePresetIntegration(providerId)}
+              >
+                Remove
+              </Button>
+            </div>
+
+            <div className="mt-4 grid gap-4 md:grid-cols-2">
+              <div className="space-y-2">
+                <label className="text-xs font-medium uppercase tracking-wide text-quiet">
+                  Provider
+                </label>
+                <div className="rounded-lg border border-[color:var(--border)] bg-[color:var(--surface)] px-3 py-3 text-sm text-strong">
+                  {preset.display_label}
+                </div>
+              </div>
+              <div className="space-y-2">
+                <label className="text-xs font-medium uppercase tracking-wide text-quiet">
+                  Authentication
+                </label>
+                <Select
+                  value={authMode}
+                  onValueChange={(value) =>
+                    updateProviderAuthMode(preset, value as ProviderAuthMode)
+                  }
+                  disabled={isLoading || allowedModes.length === 0}
+                >
+                  <SelectTrigger>
+                    <SelectValue placeholder="Choose auth mode" />
+                  </SelectTrigger>
+                  <SelectContent>
+                    {allowedModes.map((mode) => (
+                      <SelectItem key={mode} value={mode}>
+                        {providerAuthModeLabel(mode)}
+                      </SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+                <p className="text-[11px] leading-5 text-muted">
+                  {providerAuthModeDescription(authMode, nodeClass)}
+                </p>
+              </div>
+            </div>
+
+            <div className="mt-4">
+              {renderSecretEditor(preset, authMode)}
+            </div>
+
+            <div className="mt-4 rounded-lg border border-[color:var(--border)] bg-[color:var(--surface)] p-4">
+              <div className="space-y-1">
+                <p className="text-sm font-medium text-strong">Models</p>
+                <p className="text-xs text-muted">
+                  Choose the models this node should manage for {preset.display_label}, then decide which of the selected models are available to agents and product leads.
+                </p>
+              </div>
+              <div className="mt-4 space-y-3">
+                {preset.models.map((model) => {
+                  const ref = providerRef(providerId, model.model_id);
+                  const selected = selectedModelRefs.has(ref);
+                  const enabled = enabledModelRefs.includes(ref);
+                  return (
+                    <div
+                      key={ref}
+                      className="rounded-lg border border-[color:var(--border)] bg-[color:var(--surface-muted)] px-4 py-3"
+                    >
+                      <div className="flex flex-wrap items-start justify-between gap-3">
+                        <label className="flex min-w-0 flex-1 cursor-pointer items-start gap-3">
+                          <input
+                            type="checkbox"
+                            className="mt-1 h-4 w-4 rounded border-[color:var(--border)] text-[color:var(--accent)] focus:ring-[color:var(--accent)]"
+                            checked={selected}
+                            disabled={isLoading}
+                            onChange={(event) =>
+                              togglePresetModel(
+                                preset,
+                                model.model_id,
+                                event.target.checked,
+                              )
+                            }
+                          />
+                          <div className="min-w-0">
+                            <p className="font-medium text-strong">{model.label}</p>
+                            <p className="mt-1 truncate font-mono text-[11px] text-quiet">
+                              {ref}
+                            </p>
+                          </div>
+                        </label>
+                        <label className="flex items-center gap-2 text-xs font-medium text-muted">
+                          <input
+                            type="checkbox"
+                            className="h-4 w-4 rounded border-[color:var(--border)] text-[color:var(--accent)] focus:ring-[color:var(--accent)]"
+                            checked={enabled}
+                            disabled={isLoading || !onEnabledModelRefsChange}
+                            onChange={(event) =>
+                              toggleEnabledModel(
+                                preset,
+                                model.model_id,
+                                event.target.checked,
+                              )
+                            }
+                          />
+                          Enable for agents
+                        </label>
+                      </div>
+                    </div>
+                  );
+                })}
+              </div>
+            </div>
+
+            {runtime ? (
+              <div className="mt-4 flex flex-wrap gap-2">
+                {runtime.auth_mode ? (
+                  <Badge variant="outline">
+                    {providerAuthModeLabel(runtime.auth_mode)}
+                  </Badge>
+                ) : null}
+                <Badge
+                  variant={
+                    providerAuthStateLabel(
+                      runtime.auth_state,
+                      runtime.requires_login,
+                    ) === "Verified"
+                      ? "success"
+                      : providerAuthStateLabel(
+                            runtime.auth_state,
+                            runtime.requires_login,
+                          ) === "Login required"
+                        ? "warning"
+                        : "outline"
+                  }
+                >
+                  {providerAuthStateLabel(
+                    runtime.auth_state,
+                    runtime.requires_login,
+                  )}
+                </Badge>
+                <Badge variant="outline">
+                  {runtime.verified_model_count ?? 0} verified
+                </Badge>
+              </div>
+            ) : null}
+          </div>
+        );
+      })}
+    </div>
+  );
+}
