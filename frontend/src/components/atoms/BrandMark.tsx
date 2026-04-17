@@ -5,8 +5,8 @@ export function BrandMark() {
         <span className="font-heading">MC</span>
       </div>
       <div className="leading-tight">
-        <div className="font-heading text-sm uppercase tracking-[0.24em] text-strong">
-          MC DELIVERY
+        <div className="font-heading text-sm tracking-[0.18em] text-strong">
+          MC Delivery
         </div>
         <div className="text-[11px] font-medium text-quiet">
           Mission Control
