@@ -5,6 +5,9 @@
  * OpenAPI spec version: 0.1.0
  */
 
+import type { GatewayProviderAuthMode } from "./gatewayProviderAuthMode";
+import type { GatewayProviderAuthState } from "./gatewayProviderAuthState";
+
 /**
  * Observed/configured provider status for one node provider.
  */
@@ -12,6 +15,10 @@ export interface GatewayRuntimeProviderSummary {
   id: string;
   provider_type: string;
   label: string;
+  auth_mode?: GatewayProviderAuthMode | null;
+  auth_state?: GatewayProviderAuthState | null;
+  requires_login?: boolean | null;
+  connected_profile?: string | null;
   verification_state?: "runtime" | "configured";
   configured_model_count?: number;
   verified_model_count?: number;

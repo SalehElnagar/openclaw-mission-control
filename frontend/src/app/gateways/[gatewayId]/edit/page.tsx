@@ -16,6 +16,7 @@ import {
 import { useQuery } from "@tanstack/react-query";
 import { useOrganizationMembership } from "@/lib/use-organization-membership";
 import type {
+  GatewayProviderAuthConfig,
   GatewayModelDefinition,
   GatewayProviderConfig,
   GatewayProviderSecretRef,
@@ -45,6 +46,40 @@ function sanitizeProviderConfigs(
       auth_header: Boolean(provider.auth_header),
     }))
     .filter((provider) => provider.id.length > 0);
+  return sanitized.length > 0 ? sanitized : null;
+}
+
+function sanitizeProviderAuthConfigs(
+  providerAuthConfigs: GatewayProviderAuthConfig[],
+): GatewayProviderAuthConfig[] | null {
+  const sanitized = providerAuthConfigs
+    .map((config) => ({
+      provider_id: config.provider_id.trim(),
+      auth_mode: config.auth_mode,
+      profile_id: config.profile_id?.trim() || null,
+      display_label: config.display_label?.trim() || null,
+      secret_refs: (config.secret_refs ?? [])
+        .map((secretRef) => ({
+          provider_id: secretRef.provider_id.trim(),
+          purpose: secretRef.purpose.trim(),
+          ref: secretRef.ref.trim(),
+        }))
+        .filter(
+          (secretRef) =>
+            secretRef.provider_id.length > 0 &&
+            secretRef.purpose.length > 0 &&
+            secretRef.ref.length > 0,
+        ),
+      transport: config.transport ?? null,
+    }))
+    .filter(
+      (config) =>
+        config.provider_id.length > 0 &&
+        (config.auth_mode === "api-key" ||
+          config.auth_mode === "token" ||
+          config.auth_mode === "oauth" ||
+          config.auth_mode === "login"),
+    );
   return sanitized.length > 0 ? sanitized : null;
 }
 
@@ -143,6 +178,9 @@ export default function EditGatewayPage() {
   const [providerConfigs, setProviderConfigs] = useState<
     GatewayProviderConfig[] | undefined
   >(undefined);
+  const [providerAuthConfigs, setProviderAuthConfigs] = useState<
+    GatewayProviderAuthConfig[] | undefined
+  >(undefined);
   const [modelDefinitions, setModelDefinitions] = useState<
     GatewayModelDefinition[] | undefined
   >(undefined);
@@ -234,6 +272,12 @@ export default function EditGatewayPage() {
       loadedGateway?.provider_configs,
       runtimeSummary?.configured_provider_configs,
     );
+  const resolvedProviderAuthConfigs =
+    providerAuthConfigs ??
+    pickManagedList(
+      loadedGateway?.provider_auth_configs,
+      runtimeSummary?.configured_provider_auth_configs,
+    );
   const resolvedModelDefinitions =
     modelDefinitions ??
     pickManagedList(
@@ -322,6 +366,9 @@ export default function EditGatewayPage() {
       enabled_model_refs: normalizedEnabledModelRefsForSave,
       tool_profile: resolvedToolProfile,
       provider_configs: sanitizeProviderConfigs(resolvedProviderConfigs),
+      provider_auth_configs: sanitizeProviderAuthConfigs(
+        resolvedProviderAuthConfigs,
+      ),
       model_definitions: sanitizeModelDefinitions(resolvedModelDefinitions),
       provider_secret_refs: sanitizeProviderSecretRefs(
         resolvedProviderSecretRefs,
@@ -359,6 +406,7 @@ export default function EditGatewayPage() {
         verifiedModelRefs={verifiedModelRefs}
         enabledModelRefs={resolvedEnabledModelRefs}
         providerConfigs={resolvedProviderConfigs}
+        providerAuthConfigs={resolvedProviderAuthConfigs}
         modelDefinitions={resolvedModelDefinitions}
         providerSecretRefs={resolvedProviderSecretRefs}
         toolProfile={resolvedToolProfile}
@@ -403,6 +451,7 @@ export default function EditGatewayPage() {
         }}
         onDefaultModelProfileChange={setDefaultModelProfile}
         onProviderConfigsChange={setProviderConfigs}
+        onProviderAuthConfigsChange={setProviderAuthConfigs}
         onModelDefinitionsChange={setModelDefinitions}
         onProviderSecretRefsChange={setProviderSecretRefs}
         onToolProfileChange={setToolProfile}

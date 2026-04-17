@@ -19,6 +19,7 @@ from app.models.gateways import Gateway
 from app.models.skills import GatewayInstalledSkill
 from app.schemas.common import OkResponse
 from app.schemas.gateway_runtime import (
+    GatewayProviderAuthActionResponse,
     GatewayRuntimeSummary,
     GatewayRuntimeSyncRequest,
     GatewayRuntimeSyncResponse,
@@ -69,6 +70,7 @@ _GATEWAY_AUDIT_FIELDS = {
     "tool_profile",
     "provider_configs",
     "model_definitions",
+    "provider_auth_configs",
     "provider_secret_refs",
     "token",
 }
@@ -294,6 +296,75 @@ async def reconcile_gateway_runtime(
         gateway=gateway,
         auth=auth,
         request=payload,
+    )
+
+
+@router.post(
+    "/{gateway_id}/providers/{provider_id}/connect",
+    response_model=GatewayProviderAuthActionResponse,
+)
+async def connect_gateway_provider_auth(
+    gateway_id: UUID,
+    provider_id: str,
+    session: AsyncSession = SESSION_DEP,
+    auth: AuthContext = AUTH_DEP,
+    ctx: OrganizationContext = ORG_ADMIN_DEP,
+) -> GatewayProviderAuthActionResponse:
+    service = GatewayAdminLifecycleService(session)
+    gateway = await service.require_gateway(
+        gateway_id=gateway_id,
+        organization_id=ctx.organization.id,
+    )
+    return await GatewayRuntimeControlService(session).connect_provider_auth(
+        gateway=gateway,
+        provider_id=provider_id,
+        auth=auth,
+    )
+
+
+@router.post(
+    "/{gateway_id}/providers/{provider_id}/refresh",
+    response_model=GatewayProviderAuthActionResponse,
+)
+async def refresh_gateway_provider_auth(
+    gateway_id: UUID,
+    provider_id: str,
+    session: AsyncSession = SESSION_DEP,
+    auth: AuthContext = AUTH_DEP,
+    ctx: OrganizationContext = ORG_ADMIN_DEP,
+) -> GatewayProviderAuthActionResponse:
+    service = GatewayAdminLifecycleService(session)
+    gateway = await service.require_gateway(
+        gateway_id=gateway_id,
+        organization_id=ctx.organization.id,
+    )
+    return await GatewayRuntimeControlService(session).refresh_provider_auth(
+        gateway=gateway,
+        provider_id=provider_id,
+        auth=auth,
+    )
+
+
+@router.post(
+    "/{gateway_id}/providers/{provider_id}/disconnect",
+    response_model=GatewayProviderAuthActionResponse,
+)
+async def disconnect_gateway_provider_auth(
+    gateway_id: UUID,
+    provider_id: str,
+    session: AsyncSession = SESSION_DEP,
+    auth: AuthContext = AUTH_DEP,
+    ctx: OrganizationContext = ORG_ADMIN_DEP,
+) -> GatewayProviderAuthActionResponse:
+    service = GatewayAdminLifecycleService(session)
+    gateway = await service.require_gateway(
+        gateway_id=gateway_id,
+        organization_id=ctx.organization.id,
+    )
+    return await GatewayRuntimeControlService(session).disconnect_provider_auth(
+        gateway=gateway,
+        provider_id=provider_id,
+        auth=auth,
     )
 
 

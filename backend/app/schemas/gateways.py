@@ -12,10 +12,12 @@ from app.core.node_class import GatewayNodeClass
 from app.schemas.gateway_runtime import (
     GatewayModelDefinition,
     GatewayModelProfiles,
+    GatewayProviderAuthConfig,
     GatewayProviderConfig,
     GatewayProviderSecretRef,
     ProfileName,
     ToolProfileName,
+    _normalize_provider_auth_configs,
     _normalize_model_definitions,
     _normalize_model_list,
     _normalize_provider_configs,
@@ -41,6 +43,7 @@ class GatewayBase(SQLModel):
     tool_profile: ToolProfileName | None = None
     provider_configs: list[GatewayProviderConfig] | None = None
     model_definitions: list[GatewayModelDefinition] | None = None
+    provider_auth_configs: list[GatewayProviderAuthConfig] | None = None
     provider_secret_refs: list[GatewayProviderSecretRef] | None = None
 
     @field_validator("model_profiles", mode="before")
@@ -105,6 +108,15 @@ class GatewayBase(SQLModel):
         """Normalize managed node model definitions."""
         return _normalize_model_definitions(value)
 
+    @field_validator("provider_auth_configs", mode="before")
+    @classmethod
+    def normalize_provider_auth_configs(
+        cls,
+        value: object,
+    ) -> list[GatewayProviderAuthConfig] | None:
+        """Normalize managed node provider auth definitions."""
+        return _normalize_provider_auth_configs(value)
+
     @field_validator("provider_secret_refs", mode="before")
     @classmethod
     def normalize_provider_secret_refs(
@@ -148,6 +160,7 @@ class GatewayUpdate(SQLModel):
     tool_profile: ToolProfileName | None = None
     provider_configs: list[GatewayProviderConfig] | None = None
     model_definitions: list[GatewayModelDefinition] | None = None
+    provider_auth_configs: list[GatewayProviderAuthConfig] | None = None
     provider_secret_refs: list[GatewayProviderSecretRef] | None = None
 
     @field_validator("token", mode="before")
@@ -225,6 +238,15 @@ class GatewayUpdate(SQLModel):
     ) -> list[GatewayModelDefinition] | None:
         """Normalize patched managed model definitions."""
         return _normalize_model_definitions(value)
+
+    @field_validator("provider_auth_configs", mode="before")
+    @classmethod
+    def normalize_update_provider_auth_configs(
+        cls,
+        value: object,
+    ) -> list[GatewayProviderAuthConfig] | None:
+        """Normalize patched managed provider auth definitions."""
+        return _normalize_provider_auth_configs(value)
 
     @field_validator("provider_secret_refs", mode="before")
     @classmethod

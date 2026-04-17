@@ -7,6 +7,7 @@
 import type { GatewayCreateDefaultModelProfile } from "./gatewayCreateDefaultModelProfile";
 import type { GatewayModelDefinition } from "./gatewayModelDefinition";
 import type { GatewayModelProfiles } from "./gatewayModelProfiles";
+import type { GatewayProviderAuthConfig } from "./gatewayProviderAuthConfig";
 import type { GatewayProviderConfig } from "./gatewayProviderConfig";
 import type { GatewayProviderSecretRef } from "./gatewayProviderSecretRef";
 
@@ -25,6 +26,7 @@ export interface GatewayCreate {
   enabled_model_refs?: string[] | null;
   tool_profile?: "restricted" | "coding" | "research" | "browser-assisted" | null;
   provider_configs?: GatewayProviderConfig[] | null;
+  provider_auth_configs?: GatewayProviderAuthConfig[] | null;
   model_definitions?: GatewayModelDefinition[] | null;
   provider_secret_refs?: GatewayProviderSecretRef[] | null;
   token?: string | null;

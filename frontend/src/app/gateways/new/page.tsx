@@ -13,6 +13,7 @@ import { useOrganizationMembership } from "@/lib/use-organization-membership";
 import { GatewayForm } from "@/components/gateways/GatewayForm";
 import { DashboardPageLayout } from "@/components/templates/DashboardPageLayout";
 import type {
+  GatewayProviderAuthConfig,
   GatewayModelDefinition,
   GatewayProviderConfig,
   GatewayProviderSecretRef,
@@ -38,6 +39,40 @@ function sanitizeProviderConfigs(
       auth_header: Boolean(provider.auth_header),
     }))
     .filter((provider) => provider.id.length > 0);
+  return sanitized.length > 0 ? sanitized : null;
+}
+
+function sanitizeProviderAuthConfigs(
+  providerAuthConfigs: GatewayProviderAuthConfig[],
+): GatewayProviderAuthConfig[] | null {
+  const sanitized = providerAuthConfigs
+    .map((config) => ({
+      provider_id: config.provider_id.trim(),
+      auth_mode: config.auth_mode,
+      profile_id: config.profile_id?.trim() || null,
+      display_label: config.display_label?.trim() || null,
+      secret_refs: (config.secret_refs ?? [])
+        .map((secretRef) => ({
+          provider_id: secretRef.provider_id.trim(),
+          purpose: secretRef.purpose.trim(),
+          ref: secretRef.ref.trim(),
+        }))
+        .filter(
+          (secretRef) =>
+            secretRef.provider_id.length > 0 &&
+            secretRef.purpose.length > 0 &&
+            secretRef.ref.length > 0,
+        ),
+      transport: config.transport ?? null,
+    }))
+    .filter(
+      (config) =>
+        config.provider_id.length > 0 &&
+        (config.auth_mode === "api-key" ||
+          config.auth_mode === "token" ||
+          config.auth_mode === "oauth" ||
+          config.auth_mode === "login"),
+    );
   return sanitized.length > 0 ? sanitized : null;
 }
 
@@ -107,6 +142,9 @@ export default function NewGatewayPage() {
   const [providerConfigs, setProviderConfigs] = useState<GatewayProviderConfig[]>(
     [],
   );
+  const [providerAuthConfigs, setProviderAuthConfigs] = useState<
+    GatewayProviderAuthConfig[]
+  >([]);
   const [modelDefinitions, setModelDefinitions] = useState<
     GatewayModelDefinition[]
   >([]);
@@ -194,6 +232,7 @@ export default function NewGatewayPage() {
         default_model_profile: defaultModelProfile,
         tool_profile: toolProfile,
         provider_configs: sanitizeProviderConfigs(providerConfigs),
+        provider_auth_configs: sanitizeProviderAuthConfigs(providerAuthConfigs),
         model_definitions: sanitizeModelDefinitions(modelDefinitions),
         provider_secret_refs: sanitizeProviderSecretRefs(providerSecretRefs),
       },
@@ -221,6 +260,7 @@ export default function NewGatewayPage() {
         allowInsecureTls={allowInsecureTls}
         defaultModelProfile={defaultModelProfile}
         providerConfigs={providerConfigs}
+        providerAuthConfigs={providerAuthConfigs}
         modelDefinitions={modelDefinitions}
         providerSecretRefs={providerSecretRefs}
         toolProfile={toolProfile}
@@ -264,6 +304,7 @@ export default function NewGatewayPage() {
         }}
         onDefaultModelProfileChange={setDefaultModelProfile}
         onProviderConfigsChange={setProviderConfigs}
+        onProviderAuthConfigsChange={setProviderAuthConfigs}
         onModelDefinitionsChange={setModelDefinitions}
         onProviderSecretRefsChange={setProviderSecretRefs}
         onToolProfileChange={setToolProfile}

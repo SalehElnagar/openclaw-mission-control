@@ -1,6 +1,7 @@
 import type { FormEvent } from "react";
 
 import type {
+  GatewayProviderAuthConfig,
   GatewayModelDefinition,
   GatewayModelProfiles,
   GatewayProviderConfig,
@@ -8,6 +9,7 @@ import type {
   GatewayRuntimeProviderSummary,
   GatewayToolProfilePolicy,
 } from "@/api/generated/model";
+import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import {
@@ -19,6 +21,12 @@ import {
 } from "@/components/ui/select";
 import type { GatewayCheckStatus } from "@/lib/gateway-form";
 import type { NodeClass } from "@/lib/node-scope";
+import {
+  providerAuthModeDescription,
+  providerAuthModeLabel,
+  providerAuthModeOptionsForNodeClass,
+  providerAuthStateLabel,
+} from "@/lib/provider-auth";
 
 const MODEL_PROFILE_OPTIONS = [
   { value: "general", label: "General" },
@@ -49,6 +57,7 @@ type GatewayFormProps = {
   verifiedModelRefs?: Array<{ ref: string; label: string }>;
   enabledModelRefs?: string[];
   providerConfigs?: GatewayProviderConfig[];
+  providerAuthConfigs?: GatewayProviderAuthConfig[];
   modelDefinitions?: GatewayModelDefinition[];
   providerSecretRefs?: GatewayProviderSecretRef[];
   toolProfile: ToolProfileName;
@@ -81,6 +90,7 @@ type GatewayFormProps = {
     value: string | null,
   ) => void;
   onProviderConfigsChange?: (next: GatewayProviderConfig[]) => void;
+  onProviderAuthConfigsChange?: (next: GatewayProviderAuthConfig[]) => void;
   onModelDefinitionsChange?: (next: GatewayModelDefinition[]) => void;
   onProviderSecretRefsChange?: (next: GatewayProviderSecretRef[]) => void;
   onToolProfileChange?: (next: ToolProfileName) => void;
@@ -116,6 +126,7 @@ export function GatewayForm({
   verifiedModelRefs = [],
   enabledModelRefs = [],
   providerConfigs = [],
+  providerAuthConfigs = [],
   modelDefinitions = [],
   providerSecretRefs = [],
   toolProfile,
@@ -145,6 +156,7 @@ export function GatewayForm({
   onEnabledModelRefsChange,
   onModelProfilePrimaryChange,
   onProviderConfigsChange,
+  onProviderAuthConfigsChange,
   onModelDefinitionsChange,
   onProviderSecretRefsChange,
   onToolProfileChange,
@@ -163,6 +175,10 @@ export function GatewayForm({
       label: provider.label?.trim() || provider.id,
     }))
     .filter((provider) => provider.value.trim().length > 0);
+  const providerAuthModeOptions = providerAuthModeOptionsForNodeClass(nodeClass);
+  const providerAuthModeSet = new Set(
+    providerAuthModeOptions.map((option) => option.value),
+  );
   const previewToolPolicy = effectiveToolPolicy ?? {
     profile: toolProfile,
     browser_enabled: toolProfile === "browser-assisted",
@@ -187,6 +203,20 @@ export function GatewayForm({
     onProviderConfigsChange(
       providerConfigs.map((provider, providerIndex) =>
         providerIndex === index ? { ...provider, ...patch } : provider,
+      ),
+    );
+  };
+
+  const updateProviderAuthConfig = (
+    index: number,
+    patch: Partial<GatewayProviderAuthConfig>,
+  ) => {
+    if (!onProviderAuthConfigsChange) {
+      return;
+    }
+    onProviderAuthConfigsChange(
+      providerAuthConfigs.map((authConfig, authIndex) =>
+        authIndex === index ? { ...authConfig, ...patch } : authConfig,
       ),
     );
   };
@@ -508,6 +538,191 @@ export function GatewayForm({
               }
             >
               Add provider
+            </Button>
+          ) : null}
+        </div>
+      </div>
+
+      <div className="rounded-xl border border-[color:var(--border)] bg-[color:var(--surface-muted)] p-4">
+        <div className="space-y-1">
+          <h2 className="text-sm font-semibold text-strong">Provider auth</h2>
+          <p className="text-xs text-muted">
+            Choose the auth mode Mission Control should manage for each provider. Cloud nodes only allow secret-ref backed `api-key` and `token` auth. Local nodes can also use `oauth` and `login`, with connect/refresh/disconnect actions on the node detail page.
+          </p>
+        </div>
+        <div className="mt-4 space-y-3">
+          {providerAuthConfigs.length > 0 ? (
+            providerAuthConfigs.map((authConfig, index) => {
+              const allowedModes = providerAuthModeOptions;
+              const currentMode =
+                providerAuthModeSet.has(authConfig.auth_mode)
+                  ? authConfig.auth_mode
+                  : allowedModes[0]?.value ?? "api-key";
+              const providerLabel =
+                (providerOptions.find(
+                  (provider) => provider.value === authConfig.provider_id,
+                )?.label ?? authConfig.provider_id) ||
+                `Provider auth ${index + 1}`;
+
+              return (
+                <div
+                  key={`${authConfig.provider_id || "provider"}-${index}`}
+                  className="rounded-lg border border-[color:var(--border)] bg-[color:var(--surface)] p-4"
+                >
+                  <div className="flex items-start justify-between gap-3">
+                    <div>
+                      <p className="text-sm font-medium text-strong">
+                        {authConfig.display_label?.trim() || providerLabel}
+                      </p>
+                      <p className="mt-1 text-xs text-muted">
+                        {providerAuthModeLabel(currentMode)} auth for {authConfig.provider_id || "this provider"}.
+                      </p>
+                    </div>
+                    {onProviderAuthConfigsChange ? (
+                      <Button
+                        type="button"
+                        variant="outline"
+                        size="sm"
+                        disabled={isLoading}
+                        onClick={() =>
+                          onProviderAuthConfigsChange(
+                            providerAuthConfigs.filter((_, authIndex) => authIndex !== index),
+                          )
+                        }
+                      >
+                        Remove
+                      </Button>
+                    ) : null}
+                  </div>
+
+                  <div className="mt-4 grid gap-4 md:grid-cols-2">
+                    <div className="space-y-2">
+                      <label className="text-xs font-medium uppercase tracking-wide text-quiet">
+                        Provider id
+                      </label>
+                      <Input
+                        value={authConfig.provider_id}
+                        onChange={(event) =>
+                          updateProviderAuthConfig(index, {
+                            provider_id: event.target.value,
+                          })
+                        }
+                        placeholder={providerOptions[0]?.value ?? "microsoft-foundry"}
+                        disabled={isLoading}
+                      />
+                    </div>
+                    <div className="space-y-2">
+                      <label className="text-xs font-medium uppercase tracking-wide text-quiet">
+                        Auth mode
+                      </label>
+                      <Select
+                        value={currentMode}
+                        onValueChange={(value) =>
+                          updateProviderAuthConfig(index, {
+                            auth_mode: value as GatewayProviderAuthConfig["auth_mode"],
+                          })
+                        }
+                        disabled={isLoading || allowedModes.length === 0}
+                      >
+                        <SelectTrigger>
+                          <SelectValue placeholder="Choose an auth mode" />
+                        </SelectTrigger>
+                        <SelectContent>
+                          {allowedModes.map((option) => (
+                            <SelectItem key={option.value} value={option.value}>
+                              {option.label}
+                            </SelectItem>
+                          ))}
+                        </SelectContent>
+                      </Select>
+                      <p className="text-[11px] leading-5 text-muted">
+                        {providerAuthModeDescription(currentMode, nodeClass)}
+                      </p>
+                    </div>
+                    <div className="space-y-2">
+                      <label className="text-xs font-medium uppercase tracking-wide text-quiet">
+                        Display label
+                      </label>
+                      <Input
+                        value={authConfig.display_label ?? ""}
+                        onChange={(event) =>
+                          updateProviderAuthConfig(index, {
+                            display_label: event.target.value || null,
+                          })
+                        }
+                        placeholder={providerLabel}
+                        disabled={isLoading}
+                      />
+                    </div>
+                    <div className="space-y-2">
+                      <label className="text-xs font-medium uppercase tracking-wide text-quiet">
+                        Profile id
+                      </label>
+                      <Input
+                        value={authConfig.profile_id ?? ""}
+                        onChange={(event) =>
+                          updateProviderAuthConfig(index, {
+                            profile_id: event.target.value || null,
+                          })
+                        }
+                        placeholder="default"
+                        disabled={isLoading}
+                      />
+                    </div>
+                  </div>
+
+                  <div className="mt-4 flex flex-wrap gap-2">
+                    <Badge variant="outline">{providerAuthModeLabel(currentMode)}</Badge>
+                    <Badge
+                      variant={nodeClass === "cloud" ? "warning" : "success"}
+                    >
+                      {nodeClass === "cloud"
+                        ? "Cloud: secret refs only"
+                        : "Local: interactive auth available"}
+                    </Badge>
+                    {providerAuthModeSet.has(authConfig.auth_mode) ? null : (
+                      <Badge variant="warning">Unsupported auth mode reset to default</Badge>
+                    )}
+                  </div>
+
+                  {currentMode === "api-key" || currentMode === "token" ? (
+                    <p className="mt-3 text-xs text-muted">
+                      Secret refs for this provider are still edited in the secret-ref section below. Use `env:` or `keyvault:` refs for cloud nodes.
+                    </p>
+                  ) : (
+                    <p className="mt-3 text-xs text-muted">
+                      This provider uses interactive auth. Mission Control will show connect/refresh/disconnect controls on the node detail page after save. Cloud nodes do not offer these flows.
+                    </p>
+                  )}
+                </div>
+              );
+            })
+          ) : (
+            <p className="rounded-lg border border-dashed border-[color:var(--border)] bg-[color:var(--surface)] px-4 py-3 text-sm text-muted">
+              No provider auth configs saved yet. Add one per provider to choose whether the node uses `api-key`, `token`, `oauth`, or `login` auth.
+            </p>
+          )}
+          {onProviderAuthConfigsChange ? (
+            <Button
+              type="button"
+              variant="outline"
+              disabled={isLoading}
+              onClick={() =>
+                onProviderAuthConfigsChange([
+                  ...providerAuthConfigs,
+                  {
+                    provider_id: providerOptions[0]?.value ?? "",
+                    auth_mode:
+                      providerAuthModeOptions[0]?.value ?? "api-key",
+                    profile_id: null,
+                    display_label: null,
+                    secret_refs: null,
+                    transport: null,
+                  },
+                ])
+              }
+            >
+              Add provider auth
             </Button>
           ) : null}
         </div>
@@ -1121,7 +1336,14 @@ export function GatewayForm({
                 className="rounded-lg border border-[color:var(--border)] bg-[color:var(--surface)] p-4"
               >
                 <div className="flex items-center justify-between gap-3">
-                  <p className="text-sm font-medium text-strong">{provider.label}</p>
+                  <div className="min-w-0">
+                    <p className="text-sm font-medium text-strong">{provider.label}</p>
+                    {provider.connected_profile ? (
+                      <p className="mt-1 text-xs text-muted">
+                        Connected profile: {provider.connected_profile}
+                      </p>
+                    ) : null}
+                  </div>
                   <span
                     className={`rounded-full px-2 py-0.5 text-[11px] font-semibold ${
                       provider.verification_state === "runtime"
@@ -1131,6 +1353,35 @@ export function GatewayForm({
                   >
                     {provider.verification_state === "runtime" ? "Verified" : "Configured"}
                   </span>
+                </div>
+                <div className="mt-3 flex flex-wrap gap-2">
+                  {provider.auth_mode ? (
+                    <Badge variant="outline">
+                      {providerAuthModeLabel(provider.auth_mode)}
+                    </Badge>
+                  ) : null}
+                  {provider.auth_state || provider.requires_login ? (
+                    <Badge
+                      variant={
+                        providerAuthStateLabel(
+                          provider.auth_state,
+                          provider.requires_login,
+                        ) === "Verified"
+                          ? "success"
+                          : providerAuthStateLabel(
+                                provider.auth_state,
+                                provider.requires_login,
+                              ) === "Expired"
+                            ? "danger"
+                            : "warning"
+                      }
+                    >
+                      {providerAuthStateLabel(
+                        provider.auth_state,
+                        provider.requires_login,
+                      )}
+                    </Badge>
+                  ) : null}
                 </div>
                 <p className="mt-1 text-xs text-muted">
                   {provider.provider_type} · {provider.verified_model_count ?? 0} verified /{" "}

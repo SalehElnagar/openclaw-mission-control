@@ -14,11 +14,14 @@ from app.core.node_class import GatewayNodeClass
 RUNTIME_TYPE_REFERENCES = (datetime, UUID)
 PROFILE_NAMES = ("general", "coder", "budget")
 TOOL_PROFILE_NAMES = ("restricted", "coding", "research", "browser-assisted")
+PROVIDER_AUTH_MODES = ("api-key", "token", "oauth", "login")
 ProfileName = Literal["general", "coder", "budget"]
 FallbackPolicy = Literal["profile", "explicit-only", "none"]
 CatalogEntryKind = Literal["model"]
 CatalogVerificationState = Literal["runtime", "configured"]
 ToolProfileName = Literal["restricted", "coding", "research", "browser-assisted"]
+ProviderAuthMode = Literal["api-key", "token", "oauth", "login"]
+ProviderAuthVerificationState = Literal["verified", "configured", "requires-login", "expired"]
 
 
 def _normalize_text(value: object) -> str | None | object:
@@ -60,6 +63,18 @@ def _normalize_tool_profile(value: object) -> ToolProfileName | None | object:
         return normalized
     if normalized not in TOOL_PROFILE_NAMES:
         msg = f"tool_profile must be one of: {', '.join(TOOL_PROFILE_NAMES)}"
+        raise ValueError(msg)
+    return normalized
+
+
+def _normalize_provider_auth_mode(value: object) -> ProviderAuthMode | None | object:
+    normalized = _normalize_text(value)
+    if normalized is None or not isinstance(normalized, str):
+        return normalized
+    if normalized == "api_key":
+        normalized = "api-key"
+    if normalized not in PROVIDER_AUTH_MODES:
+        msg = f"auth_mode must be one of: {', '.join(PROVIDER_AUTH_MODES)}"
         raise ValueError(msg)
     return normalized
 
@@ -128,6 +143,92 @@ class GatewayProviderSecretRef(SQLModel):
     @classmethod
     def normalize_required_text(cls, value: object) -> str | None | object:
         return _normalize_text(value)
+
+
+class GatewayProviderAuthConfig(SQLModel):
+    """Managed provider auth strategy saved on a node."""
+
+    provider_id: str
+    auth_mode: ProviderAuthMode = "api-key"
+    profile_id: str | None = None
+    display_label: str | None = None
+    secret_refs: list[GatewayProviderSecretRef] = Field(default_factory=list)
+    token_header_name: str | None = None
+    token_header_prefix: str | None = None
+
+    @model_validator(mode="before")
+    @classmethod
+    def normalize_payload(cls, value: object) -> object:
+        if not isinstance(value, dict):
+            return value
+        normalized = dict(value)
+        provider_id = _normalize_text(
+            normalized.get("provider_id") or normalized.get("provider"),
+        )
+        auth_mode = _normalize_provider_auth_mode(
+            normalized.get("auth_mode") or normalized.get("mode"),
+        )
+        profile_id = _normalize_text(
+            normalized.get("profile_id") or normalized.get("profile"),
+        )
+        display_label = _normalize_text(
+            normalized.get("display_label") or normalized.get("label") or normalized.get("name"),
+        )
+        token_header_name = _normalize_text(
+            normalized.get("token_header_name") or normalized.get("tokenHeaderName"),
+        )
+        token_header_prefix = _normalize_text(
+            normalized.get("token_header_prefix") or normalized.get("tokenHeaderPrefix"),
+        )
+        if provider_id is not None:
+            normalized["provider_id"] = provider_id
+        if auth_mode is not None:
+            normalized["auth_mode"] = auth_mode
+        if profile_id is not None:
+            normalized["profile_id"] = profile_id
+        if display_label is not None:
+            normalized["display_label"] = display_label
+        if token_header_name is not None:
+            normalized["token_header_name"] = token_header_name
+        if token_header_prefix is not None:
+            normalized["token_header_prefix"] = token_header_prefix
+        return normalized
+
+    @field_validator(
+        "provider_id",
+        "profile_id",
+        "display_label",
+        "token_header_name",
+        "token_header_prefix",
+        mode="before",
+    )
+    @classmethod
+    def normalize_text_fields(cls, value: object) -> str | None | object:
+        return _normalize_text(value)
+
+    @field_validator("auth_mode", mode="before")
+    @classmethod
+    def normalize_auth_mode(
+        cls,
+        value: object,
+    ) -> ProviderAuthMode | None | object:
+        return _normalize_provider_auth_mode(value)
+
+    @field_validator("secret_refs", mode="before")
+    @classmethod
+    def normalize_secret_refs(
+        cls,
+        value: object,
+    ) -> list[GatewayProviderSecretRef]:
+        return _normalize_provider_secret_refs(value) or []
+
+    @model_validator(mode="after")
+    def apply_defaults(self) -> "GatewayProviderAuthConfig":
+        if self.profile_id is None and self.auth_mode in {"oauth", "login"}:
+            self.profile_id = f"{self.provider_id}:managed"
+        if self.token_header_prefix is None and self.auth_mode == "token":
+            self.token_header_prefix = "Bearer"
+        return self
 
 
 class GatewayProviderConfig(SQLModel):
@@ -306,6 +407,10 @@ class GatewayRuntimeProviderSummary(SQLModel):
     id: str
     provider_type: str
     label: str
+    auth_mode: ProviderAuthMode | None = None
+    auth_state: ProviderAuthVerificationState = "configured"
+    requires_login: bool = False
+    connected_profile: str | None = None
     verification_state: CatalogVerificationState = "configured"
     configured_model_count: int = 0
     verified_model_count: int = 0
@@ -329,6 +434,9 @@ class GatewayRuntimeSummary(SQLModel):
     enabled_model_refs: list[str] = Field(default_factory=list)
     configured_provider_configs: list[GatewayProviderConfig] = Field(default_factory=list)
     configured_model_definitions: list[GatewayModelDefinition] = Field(default_factory=list)
+    configured_provider_auth_configs: list[GatewayProviderAuthConfig] = Field(
+        default_factory=list,
+    )
     configured_provider_secret_refs: list[GatewayProviderSecretRef] = Field(
         default_factory=list,
     )
@@ -399,6 +507,23 @@ def _normalize_provider_secret_refs(
     return [deduped[key] for key in order] or None
 
 
+def _normalize_provider_auth_configs(
+    value: object,
+) -> list[GatewayProviderAuthConfig] | None:
+    if value is None:
+        return None
+    if not isinstance(value, list):
+        return None
+    deduped: dict[str, GatewayProviderAuthConfig] = {}
+    order: list[str] = []
+    for raw in value:
+        item = GatewayProviderAuthConfig.model_validate(raw)
+        if item.provider_id not in order:
+            order.append(item.provider_id)
+        deduped[item.provider_id] = item
+    return [deduped[key] for key in order] or None
+
+
 class GatewayRuntimeSyncRequest(SQLModel):
     """Control flags for runtime reconciliation."""
 
@@ -416,6 +541,19 @@ class GatewayRuntimeSyncResponse(SQLModel):
     sync_generation: int
     synced_models: bool = False
     telemetry_samples_ingested: int = 0
+    warnings: list[str] = Field(default_factory=list)
+
+
+class GatewayProviderAuthActionResponse(SQLModel):
+    """Result returned after a provider auth lifecycle action."""
+
+    gateway_id: UUID
+    provider_id: str
+    auth_mode: ProviderAuthMode | None = None
+    auth_state: ProviderAuthVerificationState | None = None
+    connected_profile: str | None = None
+    requires_login: bool = False
+    message: str | None = None
     warnings: list[str] = Field(default_factory=list)
 
 

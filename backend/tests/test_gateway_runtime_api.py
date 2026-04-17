@@ -130,6 +130,31 @@ def test_gateway_update_accepts_runtime_model_profile_patch() -> None:
     assert payload.enabled_model_refs == ["microsoft-foundry/model-router"]
 
 
+def test_gateway_update_accepts_provider_auth_configs_patch() -> None:
+    payload = GatewayUpdate.model_validate(
+        {
+            "provider_auth_configs": [
+                {
+                    "provider": "google-gemini",
+                    "mode": "api_key",
+                    "secret_refs": [
+                        {
+                            "provider": "google-gemini",
+                            "purpose": "apiKey",
+                            "ref": "env:OPENCLAW_GEMINI_API_KEY",
+                        }
+                    ],
+                }
+            ]
+        },
+    )
+
+    assert payload.provider_auth_configs is not None
+    assert payload.provider_auth_configs[0].provider_id == "google-gemini"
+    assert payload.provider_auth_configs[0].auth_mode == "api-key"
+    assert payload.provider_auth_configs[0].secret_refs[0].ref == "env:OPENCLAW_GEMINI_API_KEY"
+
+
 @pytest.mark.asyncio
 async def test_gateway_runtime_reconcile_requires_auth(
     monkeypatch: pytest.MonkeyPatch,

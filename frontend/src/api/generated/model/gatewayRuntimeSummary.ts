@@ -6,6 +6,7 @@
  */
 import type { GatewayModelDefinition } from "./gatewayModelDefinition";
 import type { GatewayModelProfiles } from "./gatewayModelProfiles";
+import type { GatewayProviderAuthConfig } from "./gatewayProviderAuthConfig";
 import type { GatewayProviderConfig } from "./gatewayProviderConfig";
 import type { GatewayProviderSecretRef } from "./gatewayProviderSecretRef";
 import type { GatewayRuntimeProviderSummary } from "./gatewayRuntimeProviderSummary";
@@ -29,6 +30,7 @@ export interface GatewayRuntimeSummary {
   available_models?: string[];
   enabled_model_refs?: string[];
   configured_provider_configs?: GatewayProviderConfig[];
+  configured_provider_auth_configs?: GatewayProviderAuthConfig[];
   configured_model_definitions?: GatewayModelDefinition[];
   configured_provider_secret_refs?: GatewayProviderSecretRef[];
   providers?: GatewayRuntimeProviderSummary[];

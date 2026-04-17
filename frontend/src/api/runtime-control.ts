@@ -1,4 +1,9 @@
 import { customFetch } from "@/api/mutator";
+import type {
+  GatewayProviderAuthConfig,
+  GatewayProviderAuthMode,
+  GatewayProviderAuthState,
+} from "@/api/generated/model";
 
 type ApiEnvelope<T> = {
   data: T;
@@ -55,6 +60,10 @@ export type GatewayRuntimeProviderSummary = {
   id: string;
   provider_type: string;
   label: string;
+  auth_mode?: GatewayProviderAuthMode | null;
+  auth_state?: GatewayProviderAuthState | null;
+  requires_login?: boolean | null;
+  connected_profile?: string | null;
   verification_state?: "runtime" | "configured";
   configured_model_count?: number;
   verified_model_count?: number;
@@ -93,6 +102,7 @@ export type GatewayRuntimeSummary = {
   available_models: string[];
   enabled_model_refs: string[];
   configured_provider_configs?: GatewayProviderConfig[];
+  configured_provider_auth_configs?: GatewayProviderAuthConfig[];
   configured_model_definitions?: GatewayModelDefinition[];
   configured_provider_secret_refs?: GatewayProviderSecretRef[];
   providers?: GatewayRuntimeProviderSummary[];
@@ -120,6 +130,19 @@ export type GatewayRuntimeSyncResponse = {
 export type GatewayUsagePullResponse = {
   gateway_id: string;
   ingested_samples: number;
+  warnings: string[];
+};
+
+export type GatewayProviderAuthAction = "connect" | "refresh" | "disconnect";
+
+export type GatewayProviderAuthActionResponse = {
+  gateway_id: string;
+  provider_id: string;
+  auth_mode?: GatewayProviderAuthMode | null;
+  auth_state?: GatewayProviderAuthState | null;
+  connected_profile?: string | null;
+  requires_login?: boolean | null;
+  message?: string | null;
   warnings: string[];
 };
 
@@ -185,6 +208,16 @@ export const pullGatewayTelemetry = async (
 ): Promise<ApiEnvelope<GatewayUsagePullResponse>> =>
   customFetch<ApiEnvelope<GatewayUsagePullResponse>>(
     `/api/v1/gateways/${gatewayId}/telemetry/pull`,
+    { method: "POST" },
+  );
+
+export const mutateGatewayProviderAuth = async (
+  gatewayId: string,
+  providerId: string,
+  action: GatewayProviderAuthAction,
+): Promise<ApiEnvelope<GatewayProviderAuthActionResponse>> =>
+  customFetch<ApiEnvelope<GatewayProviderAuthActionResponse>>(
+    `/api/v1/gateways/${gatewayId}/providers/${providerId}/${action}`,
     { method: "POST" },
   );
 

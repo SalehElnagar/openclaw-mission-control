@@ -9,6 +9,7 @@ import { useAuth } from "@/auth/clerk";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { AgentsTable } from "@/components/agents/AgentsTable";
 import { DashboardPageLayout } from "@/components/templates/DashboardPageLayout";
+import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { ConfirmActionDialog } from "@/components/ui/confirm-action-dialog";
 
@@ -20,6 +21,7 @@ import {
 import {
   type gatewaysStatusApiV1GatewaysStatusGetResponse,
   type getGatewayApiV1GatewaysGatewayIdGetResponse,
+  getGetGatewayApiV1GatewaysGatewayIdGetQueryKey,
   useGatewaysStatusApiV1GatewaysStatusGet,
   useGetGatewayApiV1GatewaysGatewayIdGet,
   useSyncGatewayTemplatesApiV1GatewaysGatewayIdTemplatesSyncPost,
@@ -32,6 +34,7 @@ import {
 } from "@/api/generated/agents/agents";
 import {
   type AgentRead,
+  type GatewayProviderAuthConfig,
   type MarketplaceSkillCardRead,
   type SkillPackRead,
 } from "@/api/generated/model";
@@ -47,12 +50,19 @@ import {
   aggregateUsage,
   getGatewayRuntime,
   type GatewayRuntimeCatalogEntry,
+  type GatewayRuntimeProviderSummary,
+  mutateGatewayProviderAuth,
   listGatewayAudit,
   pullGatewayTelemetry,
   reconcileGatewayRuntime,
 } from "@/api/runtime-control";
 import { formatTimestamp } from "@/lib/formatters";
 import { createOptimisticListDeleteMutation } from "@/lib/list-delete";
+import {
+  providerAuthAllowsInteractiveActions,
+  providerAuthModeLabel,
+  providerAuthStateLabel,
+} from "@/lib/provider-auth";
 import { useOrganizationMembership } from "@/lib/use-organization-membership";
 
 const maskToken = (value?: string | null) => {
@@ -104,6 +114,28 @@ const toolProfileLabel = (
     default:
       return "Coding";
   }
+};
+
+const providerAuthStateVariant = (
+  state?: "verified" | "configured" | "requires-login" | "expired" | "disconnected" | null,
+  requiresLogin?: boolean | null,
+): "success" | "warning" | "danger" | "outline" => {
+  if (requiresLogin || state === "requires-login") {
+    return "warning";
+  }
+  if (state === "verified") {
+    return "success";
+  }
+  if (state === "expired" || state === "disconnected") {
+    return "danger";
+  }
+  return "outline";
+};
+
+type ProviderAuthRecord = {
+  providerId: string;
+  authConfig: GatewayProviderAuthConfig | null;
+  runtime: GatewayRuntimeProviderSummary | null;
 };
 
 export default function GatewayDetailPage() {
@@ -304,6 +336,33 @@ export default function GatewayDetailPage() {
       });
     },
   });
+  const providerAuthMutation = useMutation({
+    mutationFn: ({
+      providerId,
+      action,
+    }: {
+      providerId: string;
+      action: "connect" | "refresh" | "disconnect";
+    }) => mutateGatewayProviderAuth(gatewayId ?? "", providerId, action),
+    onSuccess: (result) => {
+      if (result.status !== 200) return;
+      setControlMessage(
+        result.data.message ??
+          `Provider ${result.data.provider_id} ${result.data.auth_state ?? "updated"}.`,
+      );
+      queryClient.invalidateQueries({
+        queryKey: ["gateway-runtime", gatewayId],
+      });
+      queryClient.invalidateQueries({
+        queryKey: getGetGatewayApiV1GatewaysGatewayIdGetQueryKey(
+          gatewayId ?? "",
+        ),
+      });
+    },
+    onError: (err: Error) => {
+      setControlMessage(err.message || "Provider auth action failed.");
+    },
+  });
   const installSkillMutation =
     useInstallMarketplaceSkillApiV1SkillsMarketplaceSkillIdInstallPost<ApiError>(
       {
@@ -413,9 +472,31 @@ export default function GatewayDetailPage() {
   );
   const runtimeProviders = runtime?.providers ?? [];
   const configuredProviderConfigs = runtime?.configured_provider_configs ?? [];
+  const configuredProviderAuthConfigs =
+    runtime?.configured_provider_auth_configs ?? gateway?.provider_auth_configs ?? [];
   const configuredModelDefinitions = runtime?.configured_model_definitions ?? [];
   const configuredProviderSecretRefs =
     runtime?.configured_provider_secret_refs ?? [];
+  const gatewayNodeClass = gateway?.node_class ?? "cloud";
+  const providerAuthRecords = useMemo<ProviderAuthRecord[]>(
+    () => {
+      const runtimeById = new Map(runtimeProviders.map((provider) => [provider.id, provider]));
+      const configById = new Map(
+        configuredProviderAuthConfigs.map((config) => [config.provider_id, config]),
+      );
+      const ids = new Set([
+        ...runtimeById.keys(),
+        ...configById.keys(),
+        ...configuredProviderConfigs.map((provider) => provider.id),
+      ]);
+      return Array.from(ids).map((providerId) => ({
+        providerId,
+        authConfig: configById.get(providerId) ?? null,
+        runtime: runtimeById.get(providerId) ?? null,
+      }));
+    },
+    [configuredProviderAuthConfigs, configuredProviderConfigs, runtimeProviders],
+  );
   const handleDelete = () => {
     if (!deleteTarget) return;
     deleteMutation.mutate({ agentId: deleteTarget.id });
@@ -748,6 +829,134 @@ export default function GatewayDetailPage() {
                   <div>
                     <p className="text-xs uppercase text-quiet">Modules</p>
                     <div className="mt-2 space-y-3">
+                      <div className="rounded-lg border border-[color:var(--border)] bg-[color:var(--surface-muted)] p-3">
+                        <div className="flex items-center justify-between gap-3">
+                          <p className="text-xs uppercase text-quiet">Provider auth</p>
+                          <span className="text-xs text-muted">
+                            {providerAuthRecords.length} observed
+                          </span>
+                        </div>
+                        <div className="mt-2 space-y-2">
+                          {providerAuthRecords.length > 0 ? (
+                            providerAuthRecords.map((record) => {
+                              const authMode =
+                                record.authConfig?.auth_mode ?? record.runtime?.auth_mode ?? null;
+                              const authState =
+                                record.runtime?.auth_state ??
+                                (record.runtime?.requires_login
+                                  ? "requires-login"
+                                  : record.runtime?.verification_state === "runtime"
+                                    ? "verified"
+                                    : "configured");
+                              const interactiveAllowed =
+                                providerAuthAllowsInteractiveActions(gatewayNodeClass, authMode);
+
+                              return (
+                                <div
+                                  key={record.providerId}
+                                  className="rounded-md border border-[color:var(--border)] bg-[color:var(--surface)] px-3 py-2"
+                                >
+                                  <div className="flex items-start justify-between gap-3">
+                                    <div className="min-w-0">
+                                      <p className="text-sm font-medium text-strong">
+                                        {record.authConfig?.display_label?.trim() ||
+                                          record.runtime?.label ||
+                                          record.providerId}
+                                      </p>
+                                      <p className="mt-1 text-xs text-muted">
+                                        {record.providerId}
+                                        {record.authConfig?.profile_id
+                                          ? ` · profile ${record.authConfig.profile_id}`
+                                          : ""}
+                                      </p>
+                                    </div>
+                                    <div className="flex shrink-0 flex-wrap items-center justify-end gap-1.5">
+                                      {authMode ? (
+                                        <Badge variant="outline">
+                                          {providerAuthModeLabel(authMode)}
+                                        </Badge>
+                                      ) : null}
+                                      <Badge variant={providerAuthStateVariant(authState, record.runtime?.requires_login)}>
+                                        {providerAuthStateLabel(authState, record.runtime?.requires_login)}
+                                      </Badge>
+                                      {record.runtime?.connected_profile ? (
+                                        <Badge variant="accent">
+                                          {record.runtime.connected_profile}
+                                        </Badge>
+                                      ) : null}
+                                    </div>
+                                  </div>
+                                  <p className="mt-2 text-xs text-muted">
+                                    {record.runtime?.verification_state === "runtime"
+                                      ? "Runtime verified auth is available for agent selection."
+                                      : "Auth is configured but still needs runtime verification."}
+                                  </p>
+                                  {record.runtime?.unresolved_secret_refs?.length ? (
+                                    <p className="mt-2 text-xs text-amber-200">
+                                      Unresolved secret refs:{" "}
+                                      {record.runtime.unresolved_secret_refs.join(", ")}
+                                    </p>
+                                  ) : null}
+                                  {interactiveAllowed ? (
+                                    <div className="mt-3 flex flex-wrap gap-2">
+                                      <Button
+                                        type="button"
+                                        variant="outline"
+                                        size="sm"
+                                        disabled={providerAuthMutation.isPending}
+                                        onClick={() =>
+                                          providerAuthMutation.mutate({
+                                            providerId: record.providerId,
+                                            action: "connect",
+                                          })
+                                        }
+                                      >
+                                        Connect
+                                      </Button>
+                                      <Button
+                                        type="button"
+                                        variant="outline"
+                                        size="sm"
+                                        disabled={providerAuthMutation.isPending}
+                                        onClick={() =>
+                                          providerAuthMutation.mutate({
+                                            providerId: record.providerId,
+                                            action: "refresh",
+                                          })
+                                        }
+                                      >
+                                        Refresh
+                                      </Button>
+                                      <Button
+                                        type="button"
+                                        variant="outline"
+                                        size="sm"
+                                        disabled={providerAuthMutation.isPending}
+                                        onClick={() =>
+                                          providerAuthMutation.mutate({
+                                            providerId: record.providerId,
+                                            action: "disconnect",
+                                          })
+                                        }
+                                      >
+                                        Disconnect
+                                      </Button>
+                                    </div>
+                                  ) : authMode === "oauth" || authMode === "login" ? (
+                                    <p className="mt-3 text-xs text-muted">
+                                      Cloud nodes stay secret-ref backed and do not expose interactive auth actions.
+                                    </p>
+                                  ) : null}
+                                </div>
+                              );
+                            })
+                          ) : (
+                            <p className="text-xs text-muted">
+                              No provider auth configs observed yet.
+                            </p>
+                          )}
+                        </div>
+                      </div>
                       <div className="rounded-lg border border-[color:var(--border)] bg-[color:var(--surface-muted)] p-3">
                         <div className="flex items-center justify-between gap-3">
                           <p className="text-xs uppercase text-quiet">

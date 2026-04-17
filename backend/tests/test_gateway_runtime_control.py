@@ -424,6 +424,68 @@ async def test_runtime_summary_exposes_codex_fallback_default_when_profiles_are_
 
 
 @pytest.mark.asyncio
+async def test_runtime_summary_exposes_provider_auth_status(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    gateway = Gateway(
+        organization_id=uuid4(),
+        name="gateway",
+        node_class="local",
+        url="ws://gateway.example/ws",
+        workspace_root="/tmp/workspaces",
+        provider_auth_configs=[
+            {
+                "provider_id": "google-gemini-cli",
+                "auth_mode": "oauth",
+                "profile_id": "google-gemini-cli:managed",
+            }
+        ],
+    )
+    service = GatewayRuntimeControlService(session=object())  # type: ignore[arg-type]
+
+    async def _fake_runtime_catalog(_gateway: Gateway) -> list[object]:
+        return [
+            runtime_control.GatewayRuntimeCatalogEntry(
+                ref="google-gemini-cli/gemini-3.1-pro-preview",
+                provider="google-gemini-cli",
+                provider_label="Google Gemini",
+                label="Google Gemini 3.1 Pro Preview",
+                selectable=True,
+            )
+        ]
+
+    async def _fake_load_gateway_config(_gateway: Gateway) -> tuple[str | None, dict[str, object]]:
+        return (
+            "hash",
+            {
+                "auth": {
+                    "profiles": {
+                        "google-gemini-cli:managed": {
+                            "provider": "google-gemini-cli",
+                            "mode": "oauth",
+                        }
+                    },
+                    "order": {
+                        "google-gemini-cli": ["google-gemini-cli:managed"],
+                    },
+                }
+            },
+        )
+
+    monkeypatch.setattr(service, "runtime_catalog", _fake_runtime_catalog)
+    monkeypatch.setattr(service, "_load_gateway_config", _fake_load_gateway_config)
+
+    summary = await service.runtime_summary(gateway=gateway)
+
+    assert summary.configured_provider_auth_configs[0].auth_mode == "oauth"
+    provider = summary.providers[0]
+    assert provider.id == "google-gemini-cli"
+    assert provider.auth_mode == "oauth"
+    assert provider.connected_profile == "google-gemini-cli:managed"
+    assert provider.auth_state == "verified"
+
+
+@pytest.mark.asyncio
 async def test_assert_model_policies_supported_rejects_models_outside_enabled_set(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -540,6 +602,199 @@ async def test_sync_model_policies_prunes_runtime_catalog_to_enabled_models(
 
 
 @pytest.mark.asyncio
+async def test_sync_model_policies_renders_managed_oauth_profiles(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    class _SessionStub:
+        def add(self, _value: object) -> None:
+            return None
+
+        async def commit(self) -> None:
+            return None
+
+    gateway = Gateway(
+        organization_id=uuid4(),
+        name="gateway",
+        node_class="local",
+        url="ws://gateway.example/ws",
+        workspace_root="/tmp/workspaces",
+        default_model_profile="general",
+        model_profiles={
+            "general": {
+                "primary_model": STARTER_PACK_PRIMARY_MODEL_REF,
+                "fallback_models": [],
+            }
+        },
+        provider_auth_configs=[
+            {
+                "provider_id": "google-gemini-cli",
+                "auth_mode": "oauth",
+                "profile_id": "google-gemini-cli:managed",
+            }
+        ],
+    )
+    service = GatewayRuntimeControlService(session=_SessionStub())  # type: ignore[arg-type]
+    captured: dict[str, object] = {}
+
+    async def _fake_load_gateway_config_with_retry(
+        _gateway: Gateway,
+        *,
+        context: str,
+    ) -> tuple[str | None, dict[str, object]]:
+        assert "gateway runtime sync" in context
+        return (
+            "hash",
+            {
+                "agents": {"defaults": {"models": {}}, "list": []},
+                "auth": {"profiles": {}, "order": {}},
+            },
+        )
+
+    async def _fake_available_models(_gateway: Gateway) -> list[str]:
+        return [STARTER_PACK_PRIMARY_MODEL_REF]
+
+    async def _fake_openclaw_call(
+        method: str,
+        params: dict[str, object] | None = None,
+        *,
+        config: object,
+    ) -> object:
+        assert method == "config.patch"
+        assert config is not None
+        assert params is not None
+        captured["patch"] = json.loads(str(params["raw"]))
+        return {}
+
+    monkeypatch.setattr(
+        service,
+        "_load_gateway_config_with_retry",
+        _fake_load_gateway_config_with_retry,
+    )
+    monkeypatch.setattr(service, "available_models", _fake_available_models)
+    monkeypatch.setattr(runtime_control, "openclaw_call", _fake_openclaw_call)
+
+    changed = await service.sync_model_policies(gateway=gateway, agents=[], auth=None)
+
+    assert changed is True
+    patch = captured["patch"]
+    assert isinstance(patch, dict)
+    assert patch["auth"]["profiles"]["google-gemini-cli:managed"]["mode"] == "oauth"
+    assert patch["auth"]["order"]["google-gemini-cli"] == ["google-gemini-cli:managed"]
+
+
+@pytest.mark.asyncio
+async def test_sync_model_policies_renders_managed_token_auth_into_provider_patch(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    class _SessionStub:
+        def add(self, _value: object) -> None:
+            return None
+
+        async def commit(self) -> None:
+            return None
+
+    model_ref = "github-models/openai/gpt-4.1"
+    gateway = Gateway(
+        organization_id=uuid4(),
+        name="gateway",
+        node_class="cloud",
+        url="ws://gateway.example/ws",
+        workspace_root="/tmp/workspaces",
+        default_model_profile="general",
+        enabled_model_refs=[model_ref],
+        model_profiles={
+            "general": {
+                "primary_model": model_ref,
+                "fallback_models": [],
+            }
+        },
+        provider_configs=[
+            {
+                "id": "github-models",
+                "provider_type": "github-models",
+                "base_url": "https://models.github.ai/inference",
+            }
+        ],
+        model_definitions=[
+            {
+                "provider_id": "github-models",
+                "model_id": "openai/gpt-4.1",
+                "label": "OpenAI GPT-4.1",
+            }
+        ],
+        provider_auth_configs=[
+            {
+                "provider_id": "github-models",
+                "auth_mode": "token",
+                "secret_refs": [
+                    {
+                        "provider_id": "github-models",
+                        "purpose": "token",
+                        "ref": "env:OPENCLAW_GITHUB_MODELS_TOKEN",
+                    }
+                ],
+            }
+        ],
+    )
+    service = GatewayRuntimeControlService(session=_SessionStub())  # type: ignore[arg-type]
+    captured: dict[str, object] = {}
+
+    async def _fake_load_gateway_config_with_retry(
+        _gateway: Gateway,
+        *,
+        context: str,
+    ) -> tuple[str | None, dict[str, object]]:
+        assert "gateway runtime sync" in context
+        return (
+            "hash",
+            {
+                "agents": {"defaults": {"models": {}}, "list": []},
+                "models": {"providers": {}},
+                "secrets": {
+                    "providers": {"localenv": {"source": "env"}},
+                    "defaults": {"env": "localenv"},
+                },
+            },
+        )
+
+    async def _fake_available_models(_gateway: Gateway) -> list[str]:
+        return [model_ref]
+
+    async def _fake_openclaw_call(
+        method: str,
+        params: dict[str, object] | None = None,
+        *,
+        config: object,
+    ) -> object:
+        assert method == "config.patch"
+        assert config is not None
+        assert params is not None
+        captured["patch"] = json.loads(str(params["raw"]))
+        return {}
+
+    monkeypatch.setattr(
+        service,
+        "_load_gateway_config_with_retry",
+        _fake_load_gateway_config_with_retry,
+    )
+    monkeypatch.setattr(service, "available_models", _fake_available_models)
+    monkeypatch.setattr(runtime_control, "openclaw_call", _fake_openclaw_call)
+
+    changed = await service.sync_model_policies(gateway=gateway, agents=[], auth=None)
+
+    assert changed is True
+    patch = captured["patch"]
+    assert isinstance(patch, dict)
+    provider_patch = patch["models"]["providers"]["github-models"]
+    assert provider_patch["authHeader"] is True
+    assert provider_patch["apiKey"] == {
+        "source": "env",
+        "provider": "localenv",
+        "id": "OPENCLAW_GITHUB_MODELS_TOKEN",
+    }
+
+
+@pytest.mark.asyncio
 async def test_reconcile_gateway_runtime_repairs_stuck_agents(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -627,6 +882,160 @@ async def test_reconcile_gateway_runtime_repairs_stuck_agents(
             assert result.synced_models is True
     finally:
         await engine.dispose()
+
+
+@pytest.mark.asyncio
+async def test_connect_provider_auth_rejects_cloud_login(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    class _SessionStub:
+        def add(self, _value: object) -> None:
+            return None
+
+        async def commit(self) -> None:
+            return None
+
+    gateway = Gateway(
+        organization_id=uuid4(),
+        name="gateway",
+        node_class="cloud",
+        url="ws://gateway.example/ws",
+        workspace_root="/tmp/workspaces",
+        provider_auth_configs=[
+            {
+                "provider_id": "google-gemini-cli",
+                "auth_mode": "login",
+                "profile_id": "google-gemini-cli:managed",
+            }
+        ],
+    )
+    service = GatewayRuntimeControlService(session=_SessionStub())  # type: ignore[arg-type]
+
+    async def _fake_load_gateway_config_with_retry(
+        _gateway: Gateway,
+        *,
+        context: str,
+    ) -> tuple[str | None, dict[str, object]]:
+        assert "provider auth resolve" in context
+        return ("hash", {})
+
+    async def _fake_runtime_summary(*, gateway: Gateway) -> runtime_control.GatewayRuntimeSummary:
+        return runtime_control.GatewayRuntimeSummary(
+            gateway_id=gateway.id,
+            node_class=gateway.node_class,
+            runtime_sync_generation=0,
+        )
+
+    monkeypatch.setattr(
+        service,
+        "_load_gateway_config_with_retry",
+        _fake_load_gateway_config_with_retry,
+    )
+    monkeypatch.setattr(service, "runtime_summary", _fake_runtime_summary)
+
+    response = await service.connect_provider_auth(
+        gateway=gateway,
+        provider_id="google-gemini-cli",
+        auth=AuthContext(
+            actor_type="user",
+            user=SimpleNamespace(id=uuid4(), preferred_name=None, name="User", email=None),
+        ),
+    )
+
+    assert response.auth_state == "configured"
+    assert "Shared cloud nodes only support service-auth providers." in response.warnings
+
+
+@pytest.mark.asyncio
+async def test_connect_provider_auth_uses_gateway_rpc_for_local_login(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    class _SessionStub:
+        def add(self, _value: object) -> None:
+            return None
+
+        async def commit(self) -> None:
+            return None
+
+    gateway = Gateway(
+        organization_id=uuid4(),
+        name="gateway",
+        node_class="local",
+        url="ws://gateway.example/ws",
+        workspace_root="/tmp/workspaces",
+        provider_auth_configs=[
+            {
+                "provider_id": "google-gemini-cli",
+                "auth_mode": "login",
+                "profile_id": "google-gemini-cli:managed",
+            }
+        ],
+    )
+    service = GatewayRuntimeControlService(session=_SessionStub())  # type: ignore[arg-type]
+    captured: dict[str, object] = {}
+
+    async def _fake_load_gateway_config_with_retry(
+        _gateway: Gateway,
+        *,
+        context: str,
+    ) -> tuple[str | None, dict[str, object]]:
+        assert "provider auth resolve" in context
+        return ("hash", {})
+
+    async def _fake_runtime_summary(*, gateway: Gateway) -> runtime_control.GatewayRuntimeSummary:
+        return runtime_control.GatewayRuntimeSummary(
+            gateway_id=gateway.id,
+            node_class=gateway.node_class,
+            runtime_sync_generation=1,
+            providers=[
+                runtime_control.GatewayRuntimeProviderSummary(
+                    id="google-gemini-cli",
+                    provider_type="google-gemini-cli",
+                    label="Google Gemini",
+                    auth_mode="login",
+                    auth_state="verified",
+                    connected_profile="google-gemini-cli:managed",
+                    verification_state="runtime",
+                    configured_model_count=1,
+                    verified_model_count=1,
+                )
+            ],
+        )
+
+    async def _fake_openclaw_call(
+        method: str,
+        params: dict[str, object] | None = None,
+        *,
+        config: object,
+    ) -> object:
+        captured["method"] = method
+        captured["params"] = params
+        assert config is not None
+        return {}
+
+    monkeypatch.setattr(
+        service,
+        "_load_gateway_config_with_retry",
+        _fake_load_gateway_config_with_retry,
+    )
+    monkeypatch.setattr(service, "runtime_summary", _fake_runtime_summary)
+    monkeypatch.setattr(runtime_control, "openclaw_call", _fake_openclaw_call)
+
+    response = await service.connect_provider_auth(
+        gateway=gateway,
+        provider_id="google-gemini-cli",
+        auth=AuthContext(
+            actor_type="user",
+            user=SimpleNamespace(id=uuid4(), preferred_name=None, name="User", email=None),
+        ),
+    )
+
+    assert captured["method"] == "providers.connect"
+    assert captured["params"] == {
+        "providerId": "google-gemini-cli",
+        "profileId": "google-gemini-cli:managed",
+    }
+    assert response.auth_state == "verified"
 
 
 @pytest.mark.asyncio

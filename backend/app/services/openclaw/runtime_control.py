@@ -18,8 +18,10 @@ from app.schemas.gateway_runtime import (
     GatewayModelCost,
     GatewayModelDefinition,
     GatewayModelProfiles,
+    GatewayProviderAuthConfig,
     GatewayProviderConfig,
     GatewayProviderSecretRef,
+    GatewayProviderAuthActionResponse,
     GatewayRuntimeCatalogEntry,
     GatewayRuntimeProviderSummary,
     GatewayRuntimeSummary,
@@ -27,7 +29,10 @@ from app.schemas.gateway_runtime import (
     GatewayRuntimeSyncResponse,
     GatewayToolProfilePolicy,
     ModelSelection,
+    ProviderAuthMode,
     ToolProfileName,
+    _normalize_provider_auth_configs,
+    _normalize_provider_auth_mode,
     _normalize_model_definitions,
     _normalize_model_list,
     _normalize_model_ref,
@@ -69,8 +74,11 @@ KNOWN_PROVIDER_LABELS: dict[str, str] = {
     "microsoft-foundry": "Azure Foundry",
     "openai-codex": "Codex",
     "github-copilot": "GitHub Copilot",
+    "github-models": "GitHub Models",
     "anthropic": "Claude",
     "claude": "Claude",
+    "google-gemini": "Google Gemini",
+    "google-gemini-cli": "Google Gemini",
     "google-antigravity": "Antigravity",
     "antigravity": "Antigravity",
 }
@@ -80,8 +88,13 @@ KNOWN_MODEL_LABELS: dict[str, str] = {
     "openai-codex/gpt-5.4": "Codex GPT-5.4",
     "github-copilot/gpt-5": "GitHub Copilot GPT-5",
     "github-copilot/gpt-5.4": "GitHub Copilot GPT-5.4",
+    "github-models/openai/gpt-4.1": "GitHub Models OpenAI GPT-4.1",
+    "github-models/openai/gpt-4o": "GitHub Models OpenAI GPT-4o",
     "anthropic/claude-sonnet-4-6": "Claude Sonnet 4.6",
     "claude/claude-sonnet-4": "Claude Sonnet 4",
+    "google-gemini/gemini-2.5-flash": "Google Gemini 2.5 Flash",
+    "google-gemini/gemini-2.5-pro": "Google Gemini 2.5 Pro",
+    "google-gemini-cli/gemini-3.1-pro-preview": "Google Gemini 3.1 Pro Preview",
     "google-antigravity/claude-opus-4-6-thinking": "Antigravity Claude Opus 4.6 Thinking",
     "antigravity/operator": "Antigravity Operator",
 }
@@ -124,6 +137,10 @@ def _load_provider_configs(gateway: Gateway) -> list[GatewayProviderConfig] | No
 
 def _load_model_definitions(gateway: Gateway) -> list[GatewayModelDefinition] | None:
     return _normalize_model_definitions(gateway.model_definitions)
+
+
+def _load_provider_auth_configs(gateway: Gateway) -> list[GatewayProviderAuthConfig] | None:
+    return _normalize_provider_auth_configs(gateway.provider_auth_configs)
 
 
 def _load_provider_secret_refs(gateway: Gateway) -> list[GatewayProviderSecretRef] | None:
@@ -258,6 +275,97 @@ def _secret_ref_label_from_runtime_value(
     if source == "env" and provider_name == default_env_provider:
         return f"env:{secret_id}"
     return f"{provider_name}:{secret_id}"
+
+
+def _config_provider_auth_configs(
+    config_data: dict[str, Any],
+) -> list[GatewayProviderAuthConfig]:
+    auth_section = config_data.get("auth")
+    if not isinstance(auth_section, dict):
+        return []
+    profiles = auth_section.get("profiles")
+    orders = auth_section.get("order")
+    if not isinstance(profiles, dict):
+        profiles = {}
+    if not isinstance(orders, dict):
+        orders = {}
+
+    deduped: dict[str, GatewayProviderAuthConfig] = {}
+    order: list[str] = []
+
+    def _append(provider_id: str, profile_id: str, profile_data: dict[str, Any]) -> None:
+        normalized_mode = _normalize_provider_auth_mode(profile_data.get("mode"))
+        if normalized_mode == "api-key":
+            mode: ProviderAuthMode = "api-key"
+        elif normalized_mode == "token":
+            mode = "token"
+        elif normalized_mode == "login":
+            mode = "login"
+        else:
+            mode = "oauth"
+        secret_refs: list[GatewayProviderSecretRef] = []
+        if mode == "api-key":
+            key_ref = _secret_ref_label_from_runtime_value(
+                profile_data.get("keyRef"),
+                config_data=config_data,
+            )
+            if key_ref:
+                secret_refs.append(
+                    GatewayProviderSecretRef(
+                        provider_id=provider_id,
+                        purpose="apiKey",
+                        ref=key_ref,
+                    ),
+                )
+        elif mode == "token":
+            token_ref = _secret_ref_label_from_runtime_value(
+                profile_data.get("tokenRef"),
+                config_data=config_data,
+            )
+            if token_ref:
+                secret_refs.append(
+                    GatewayProviderSecretRef(
+                        provider_id=provider_id,
+                        purpose="token",
+                        ref=token_ref,
+                    ),
+                )
+        config = GatewayProviderAuthConfig(
+            provider_id=provider_id,
+            auth_mode=mode,
+            profile_id=profile_id if mode in {"oauth", "login"} else None,
+            display_label=(
+                profile_data.get("displayName")
+                if isinstance(profile_data.get("displayName"), str)
+                else None
+            ),
+            secret_refs=secret_refs,
+        )
+        if provider_id not in order:
+            order.append(provider_id)
+        deduped[provider_id] = config
+
+    for provider_id, raw_profile_ids in orders.items():
+        if not isinstance(provider_id, str):
+            continue
+        profile_ids = raw_profile_ids if isinstance(raw_profile_ids, list) else []
+        for raw_profile_id in profile_ids:
+            if not isinstance(raw_profile_id, str):
+                continue
+            profile_data = profiles.get(raw_profile_id)
+            if isinstance(profile_data, dict):
+                _append(provider_id, raw_profile_id, profile_data)
+                break
+
+    for profile_id, raw_profile in profiles.items():
+        if not isinstance(profile_id, str) or not isinstance(raw_profile, dict):
+            continue
+        provider_id = raw_profile.get("provider")
+        if not isinstance(provider_id, str) or provider_id in deduped:
+            continue
+        _append(provider_id, profile_id, raw_profile)
+
+    return [deduped[key] for key in order]
 
 
 def _config_provider_secret_refs(config_data: dict[str, Any]) -> list[GatewayProviderSecretRef]:
@@ -439,6 +547,19 @@ def _effective_provider_secret_refs(
     if not isinstance(config_data, dict):
         return []
     return _config_provider_secret_refs(config_data)
+
+
+def _effective_provider_auth_configs(
+    *,
+    gateway: Gateway,
+    config_data: dict[str, Any] | None,
+) -> list[GatewayProviderAuthConfig]:
+    stored = _load_provider_auth_configs(gateway)
+    if stored is not None:
+        return stored
+    if not isinstance(config_data, dict):
+        return []
+    return _config_provider_auth_configs(config_data)
 
 
 def _managed_declared_model_refs(gateway: Gateway) -> list[str]:
@@ -724,10 +845,55 @@ def _toolchain_drift_detected(
             _config_provider_secret_refs(config_data or {})
         ):
             return True
+    if gateway.provider_auth_configs is not None:
+        if _effective_provider_auth_configs(gateway=gateway, config_data=config_data) != (
+            _config_provider_auth_configs(config_data or {})
+        ):
+            return True
     managed_tool_profile = _load_tool_profile(gateway)
     return (
         managed_tool_profile is not None and managed_tool_profile != effective_tool_policy.profile
     )
+
+
+def _merged_provider_secret_refs(
+    *,
+    gateway: Gateway,
+    config_data: dict[str, Any] | None,
+    auth_configs: list[GatewayProviderAuthConfig] | None = None,
+) -> list[GatewayProviderSecretRef]:
+    merged: dict[tuple[str, str], GatewayProviderSecretRef] = {}
+    order: list[tuple[str, str]] = []
+    for secret_ref in _effective_provider_secret_refs(gateway=gateway, config_data=config_data):
+        key = (secret_ref.provider_id, secret_ref.purpose)
+        if key not in order:
+            order.append(key)
+        merged[key] = secret_ref
+    for auth_config in auth_configs or _effective_provider_auth_configs(
+        gateway=gateway,
+        config_data=config_data,
+    ):
+        for secret_ref in auth_config.secret_refs:
+            key = (secret_ref.provider_id, secret_ref.purpose)
+            if key not in order:
+                order.append(key)
+            merged[key] = secret_ref
+    return [merged[key] for key in order]
+
+
+def _infer_provider_auth_mode(
+    *,
+    auth_config: GatewayProviderAuthConfig | None,
+    secret_refs: list[GatewayProviderSecretRef],
+) -> ProviderAuthMode | None:
+    if auth_config is not None:
+        return auth_config.auth_mode
+    purposes = {item.purpose for item in secret_refs}
+    if "token" in purposes:
+        return "token"
+    if "apiKey" in purposes:
+        return "api-key"
+    return None
 
 
 def _provider_runtime_summaries(
@@ -738,10 +904,18 @@ def _provider_runtime_summaries(
 ) -> list[GatewayRuntimeProviderSummary]:
     effective_configs = _effective_provider_configs(gateway=gateway, config_data=config_data)
     effective_models = _effective_model_definitions(gateway=gateway, config_data=config_data)
-    effective_secret_refs = _effective_provider_secret_refs(
+    effective_auth_configs = _effective_provider_auth_configs(
         gateway=gateway,
         config_data=config_data,
     )
+    effective_secret_refs = _merged_provider_secret_refs(
+        gateway=gateway,
+        config_data=config_data,
+        auth_configs=effective_auth_configs,
+    )
+    runtime_auth_lookup = {
+        item.provider_id: item for item in _config_provider_auth_configs(config_data or {})
+    }
     runtime_verified_models: dict[str, int] = {}
     for entry in catalog:
         if entry.selectable:
@@ -754,20 +928,46 @@ def _provider_runtime_summaries(
     secret_refs_by_provider: dict[str, list[GatewayProviderSecretRef]] = {}
     for secret_ref in effective_secret_refs:
         secret_refs_by_provider.setdefault(secret_ref.provider_id, []).append(secret_ref)
+    auth_lookup = {item.provider_id: item for item in effective_auth_configs}
     ids = {
         *runtime_verified_models.keys(),
         *model_counts.keys(),
         *(provider.id for provider in effective_configs),
+        *auth_lookup.keys(),
+        *runtime_auth_lookup.keys(),
     }
     provider_lookup = {provider.id: provider for provider in effective_configs}
     summaries: list[GatewayRuntimeProviderSummary] = []
     for provider_id in sorted(ids):
         provider_config = provider_lookup.get(provider_id)
+        provider_auth = auth_lookup.get(provider_id) or runtime_auth_lookup.get(provider_id)
+        provider_secret_refs = secret_refs_by_provider.get(provider_id, [])
         unresolved_secret_refs: list[str] = []
-        for secret_ref in secret_refs_by_provider.get(provider_id, []):
+        for secret_ref in provider_secret_refs:
             _value, error = _resolve_secret_ref_value(secret_ref.ref, config_data=config_data or {})
             if error:
                 unresolved_secret_refs.append(f"{secret_ref.purpose} ({secret_ref.ref})")
+        auth_mode = _infer_provider_auth_mode(
+            auth_config=provider_auth,
+            secret_refs=provider_secret_refs,
+        )
+        verified_model_count = runtime_verified_models.get(provider_id, 0)
+        connected_profile = (
+            provider_auth.profile_id
+            if provider_auth is not None and provider_auth.auth_mode in {"oauth", "login"}
+            else None
+        )
+        requires_login = False
+        auth_state = "configured"
+        if auth_mode in {"oauth", "login"}:
+            if connected_profile is None:
+                requires_login = True
+                auth_state = "requires-login"
+            elif verified_model_count > 0:
+                auth_state = "verified"
+        elif auth_mode in {"api-key", "token"}:
+            if verified_model_count > 0 and not unresolved_secret_refs:
+                auth_state = "verified"
         summaries.append(
             GatewayRuntimeProviderSummary(
                 id=provider_id,
@@ -777,12 +977,16 @@ def _provider_runtime_summaries(
                     if provider_config and provider_config.label
                     else _catalog_provider_label(provider_id)
                 ),
+                auth_mode=auth_mode,
+                auth_state=auth_state,
+                requires_login=requires_login,
+                connected_profile=connected_profile,
                 verification_state=(
-                    "runtime" if runtime_verified_models.get(provider_id, 0) > 0 else "configured"
+                    "runtime" if verified_model_count > 0 else "configured"
                 ),
                 configured_model_count=model_counts.get(provider_id, 0),
-                verified_model_count=runtime_verified_models.get(provider_id, 0),
-                secret_ref_count=len(secret_refs_by_provider.get(provider_id, [])),
+                verified_model_count=verified_model_count,
+                secret_ref_count=len(provider_secret_refs),
                 unresolved_secret_refs=unresolved_secret_refs,
             ),
         )
@@ -822,12 +1026,24 @@ def _render_managed_provider_patch(
     provider_configs = _load_provider_configs(gateway)
     model_definitions = _load_model_definitions(gateway)
     secret_refs = _load_provider_secret_refs(gateway)
-    if provider_configs is None and model_definitions is None and secret_refs is None:
+    auth_configs = _load_provider_auth_configs(gateway)
+    if (
+        provider_configs is None
+        and model_definitions is None
+        and secret_refs is None
+        and auth_configs is None
+    ):
         return {}, []
     provider_configs = provider_configs or []
     model_definitions = model_definitions or []
-    secret_refs = secret_refs or []
+    auth_configs = auth_configs or []
+    secret_refs = _merged_provider_secret_refs(
+        gateway=gateway,
+        config_data=config_data,
+        auth_configs=auth_configs,
+    )
     provider_lookup = {provider.id: provider for provider in provider_configs}
+    auth_lookup = {item.provider_id: item for item in auth_configs}
     model_defs_by_provider: dict[str, list[GatewayModelDefinition]] = {}
     for definition in model_definitions:
         model_defs_by_provider.setdefault(definition.provider_id, []).append(definition)
@@ -845,11 +1061,13 @@ def _render_managed_provider_patch(
         *provider_lookup.keys(),
         *model_defs_by_provider.keys(),
         *secret_refs_by_provider.keys(),
+        *auth_lookup.keys(),
     }
     warnings: list[str] = []
     providers_patch: dict[str, Any] = {}
     for provider_id in sorted(desired_provider_ids):
         provider_config = provider_lookup.get(provider_id)
+        provider_auth = auth_lookup.get(provider_id)
         provider_patch: dict[str, Any] = {
             "models": [
                 _render_runtime_model_definition(definition, provider_config=provider_config)
@@ -866,24 +1084,144 @@ def _render_managed_provider_patch(
         if provider_config and provider_config.auth_header is not None:
             provider_patch["authHeader"] = provider_config.auth_header
         header_refs: dict[str, dict[str, str]] = {}
+        static_token_ref: dict[str, str] | None = None
         for secret_ref in secret_refs_by_provider.get(provider_id, []):
             resolved, error = _resolve_secret_ref_value(secret_ref.ref, config_data=config_data)
             if error:
                 warnings.append(f"{provider_id} {secret_ref.purpose}: {error}")
                 continue
-            if secret_ref.purpose == "apiKey":
+            if (
+                secret_ref.purpose == "apiKey"
+                and (provider_auth is None or provider_auth.auth_mode == "api-key")
+            ):
                 provider_patch["apiKey"] = resolved
+                continue
+            if secret_ref.purpose == "token" and provider_auth and provider_auth.auth_mode == "token":
+                static_token_ref = resolved
                 continue
             if secret_ref.purpose.startswith("header:"):
                 header_name = secret_ref.purpose.partition(":")[2].strip()
                 if header_name:
                     header_refs[header_name] = resolved
+        if static_token_ref is not None:
+            header_name = (provider_auth.token_header_name or "Authorization").strip()
+            header_prefix = (provider_auth.token_header_prefix or "Bearer").strip()
+            if header_name.lower() == "authorization" and header_prefix.lower() == "bearer":
+                provider_patch["authHeader"] = True
+                provider_patch["apiKey"] = static_token_ref
+            elif header_prefix:
+                warnings.append(
+                    f"{provider_id} token auth custom header prefix is not runtime-renderable; "
+                    "using Authorization bearer header.",
+                )
+                provider_patch["authHeader"] = True
+                provider_patch["apiKey"] = static_token_ref
+            else:
+                header_refs[header_name] = static_token_ref
         if header_refs:
             provider_patch["headers"] = header_refs
         providers_patch[provider_id] = provider_patch
     for provider_id in sorted(current_provider_ids - desired_provider_ids):
         providers_patch[provider_id] = None
     return providers_patch, warnings
+
+
+def _render_managed_auth_patch(
+    *,
+    gateway: Gateway,
+    config_data: dict[str, Any],
+) -> tuple[dict[str, Any], list[str]]:
+    auth_configs = _load_provider_auth_configs(gateway)
+    if auth_configs is None:
+        return {}, []
+
+    auth_section = config_data.get("auth")
+    current_profiles = (
+        dict(auth_section.get("profiles"))
+        if isinstance(auth_section, dict) and isinstance(auth_section.get("profiles"), dict)
+        else {}
+    )
+    current_order = (
+        dict(auth_section.get("order"))
+        if isinstance(auth_section, dict) and isinstance(auth_section.get("order"), dict)
+        else {}
+    )
+    current_managed_profiles_by_provider: dict[str, list[str]] = {}
+    for profile_id, raw_profile in current_profiles.items():
+        if not isinstance(profile_id, str) or not isinstance(raw_profile, dict):
+            continue
+        if raw_profile.get("managedBy") != "mission-control":
+            continue
+        provider_id = raw_profile.get("provider")
+        if not isinstance(provider_id, str) or not provider_id.strip():
+            continue
+        current_managed_profiles_by_provider.setdefault(provider_id.strip(), []).append(profile_id)
+
+    desired_lookup = {item.provider_id: item for item in auth_configs}
+    profiles_patch: dict[str, Any] = {}
+    order_patch: dict[str, Any] = {}
+    warnings: list[str] = []
+    changed = False
+
+    def _set_profile(profile_id: str, value: dict[str, Any]) -> None:
+        nonlocal changed
+        if current_profiles.get(profile_id) != value:
+            profiles_patch[profile_id] = value
+            changed = True
+
+    def _remove_profile(profile_id: str) -> None:
+        nonlocal changed
+        if profile_id in current_profiles:
+            profiles_patch[profile_id] = None
+            changed = True
+
+    def _set_order(provider_id: str, value: list[str] | None) -> None:
+        nonlocal changed
+        if current_order.get(provider_id) != value:
+            order_patch[provider_id] = value
+            changed = True
+
+    for provider_id, auth_config in desired_lookup.items():
+        existing_managed_profile_ids = current_managed_profiles_by_provider.get(provider_id, [])
+        if auth_config.auth_mode in {"oauth", "login"}:
+            profile_id = auth_config.profile_id or f"{provider_id}:managed"
+            profile_payload: dict[str, Any] = {
+                "provider": provider_id,
+                "mode": auth_config.auth_mode,
+                "managedBy": "mission-control",
+            }
+            if auth_config.display_label:
+                profile_payload["displayName"] = auth_config.display_label
+            _set_profile(profile_id, profile_payload)
+            _set_order(provider_id, [profile_id])
+            for existing_profile_id in existing_managed_profile_ids:
+                if existing_profile_id != profile_id:
+                    _remove_profile(existing_profile_id)
+        else:
+            if any(
+                isinstance(raw_profile_id, str) and raw_profile_id in existing_managed_profile_ids
+                for raw_profile_id in current_order.get(provider_id, [])
+                if isinstance(current_order.get(provider_id), list)
+            ):
+                _set_order(provider_id, None)
+            for existing_profile_id in existing_managed_profile_ids:
+                _remove_profile(existing_profile_id)
+
+    for provider_id, profile_ids in current_managed_profiles_by_provider.items():
+        if provider_id in desired_lookup:
+            continue
+        for profile_id in profile_ids:
+            _remove_profile(profile_id)
+        if any(
+            isinstance(raw_profile_id, str) and raw_profile_id in profile_ids
+            for raw_profile_id in current_order.get(provider_id, [])
+            if isinstance(current_order.get(provider_id), list)
+        ):
+            _set_order(provider_id, None)
+
+    if not changed:
+        return {}, warnings
+    return {"profiles": profiles_patch, "order": order_patch}, warnings
 
 
 def _extract_numeric(payload: dict[str, Any], *keys: str) -> int | float | None:
@@ -1207,6 +1545,10 @@ class GatewayRuntimeControlService(OpenClawDBService):
                 gateway=gateway,
                 config_data=config_data,
             ),
+            configured_provider_auth_configs=_effective_provider_auth_configs(
+                gateway=gateway,
+                config_data=config_data,
+            ),
             configured_provider_secret_refs=_effective_provider_secret_refs(
                 gateway=gateway,
                 config_data=config_data,
@@ -1393,6 +1735,11 @@ class GatewayRuntimeControlService(OpenClawDBService):
             gateway=gateway,
             config_data=config_data,
         )
+        managed_auth_patch, auth_warnings = _render_managed_auth_patch(
+            gateway=gateway,
+            config_data=config_data,
+        )
+        toolchain_warnings.extend(auth_warnings)
         providers_changed = _toolchain_drift_detected(
             gateway=gateway,
             config_data=config_data,
@@ -1423,6 +1770,8 @@ class GatewayRuntimeControlService(OpenClawDBService):
                 patch["agents"]["defaults"]["model"] = desired_default_payload
         if managed_provider_patch:
             patch.setdefault("models", {})["providers"] = managed_provider_patch
+        if managed_auth_patch:
+            patch["auth"] = managed_auth_patch
         if desired_tool_policy is not None:
             patch["tools"] = {
                 "profile": desired_tool_policy.profile,
@@ -1494,6 +1843,166 @@ class GatewayRuntimeControlService(OpenClawDBService):
             )
             await self.session.commit()
         return True
+
+    async def _resolve_provider_auth_config(
+        self,
+        *,
+        gateway: Gateway,
+        provider_id: str,
+    ) -> GatewayProviderAuthConfig:
+        _base_hash, config_data = await self._load_gateway_config_with_retry(
+            gateway,
+            context=f"provider auth resolve {provider_id}",
+        )
+        auth_configs = _effective_provider_auth_configs(
+            gateway=gateway,
+            config_data=config_data,
+        )
+        for auth_config in auth_configs:
+            if auth_config.provider_id == provider_id:
+                return auth_config
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"Node does not define a provider auth config for {provider_id}.",
+        )
+
+    async def _provider_auth_action(
+        self,
+        *,
+        gateway: Gateway,
+        provider_id: str,
+        action: str,
+        auth: AuthContext,
+    ) -> GatewayProviderAuthActionResponse:
+        auth_config = await self._resolve_provider_auth_config(
+            gateway=gateway,
+            provider_id=provider_id,
+        )
+        warnings: list[str] = []
+        if auth_config.auth_mode not in {"oauth", "login"}:
+            return GatewayProviderAuthActionResponse(
+                gateway_id=gateway.id,
+                provider_id=provider_id,
+                auth_mode=auth_config.auth_mode,
+                auth_state="configured",
+                connected_profile=None,
+                requires_login=False,
+                message="Interactive provider actions are only supported for oauth/login modes.",
+                warnings=["Interactive provider actions are only supported for oauth/login modes."],
+            )
+        if gateway.node_class == "cloud":
+            runtime = await self.runtime_summary(gateway=gateway)
+            return GatewayProviderAuthActionResponse(
+                gateway_id=gateway.id,
+                provider_id=provider_id,
+                auth_mode=auth_config.auth_mode,
+                auth_state=next(
+                    (item.auth_state for item in runtime.providers if item.id == provider_id),
+                    "configured",
+                ),
+                connected_profile=next(
+                    (item.connected_profile for item in runtime.providers if item.id == provider_id),
+                    None,
+                ),
+                requires_login=False,
+                message="Shared cloud nodes only support service-auth providers.",
+                warnings=["Shared cloud nodes only support service-auth providers."],
+            )
+
+        params: dict[str, Any] = {"providerId": provider_id}
+        if auth_config.profile_id:
+            params["profileId"] = auth_config.profile_id
+        if auth_config.display_label:
+            params["displayName"] = auth_config.display_label
+
+        status_value: str = "pending-login"
+        try:
+            await openclaw_call(
+                f"providers.{action}",
+                params,
+                config=_gateway_client_config(gateway),
+            )
+        except OpenClawGatewayError as exc:
+            warnings.append(str(exc))
+            status_value = "blocked"
+
+        runtime = await self.runtime_summary(gateway=gateway)
+        provider_runtime = next((item for item in runtime.providers if item.id == provider_id), None)
+        if action == "disconnect":
+            status_value = "ok" if status_value != "blocked" else "blocked"
+        elif provider_runtime and provider_runtime.auth_state == "verified":
+            status_value = "ok"
+        elif provider_runtime and provider_runtime.requires_login:
+            status_value = "pending-login"
+        elif status_value != "blocked":
+            status_value = "ok"
+
+        record_activity(
+            self.session,
+            event_type=f"gateway.provider.{action}",
+            message=f"{action.title()} provider auth for {provider_id} on gateway {gateway.name}.",
+            entity_type="gateway",
+            entity_id=str(gateway.id),
+            details={"provider_id": provider_id, "status": status_value, "warnings": warnings},
+            **actor_fields_from_auth(auth),
+        )
+        await self.session.commit()
+        return GatewayProviderAuthActionResponse(
+            gateway_id=gateway.id,
+            provider_id=provider_id,
+            auth_mode=(provider_runtime.auth_mode if provider_runtime else auth_config.auth_mode),
+            auth_state=(
+                provider_runtime.auth_state
+                if provider_runtime is not None
+                else ("requires-login" if status_value == "pending-login" else "configured")
+            ),
+            connected_profile=(provider_runtime.connected_profile if provider_runtime else None),
+            requires_login=(provider_runtime.requires_login if provider_runtime else False),
+            message=f"Provider {provider_id} {status_value}.",
+            warnings=warnings,
+        )
+
+    async def connect_provider_auth(
+        self,
+        *,
+        gateway: Gateway,
+        provider_id: str,
+        auth: AuthContext,
+    ) -> GatewayProviderAuthActionResponse:
+        return await self._provider_auth_action(
+            gateway=gateway,
+            provider_id=provider_id,
+            action="connect",
+            auth=auth,
+        )
+
+    async def refresh_provider_auth(
+        self,
+        *,
+        gateway: Gateway,
+        provider_id: str,
+        auth: AuthContext,
+    ) -> GatewayProviderAuthActionResponse:
+        return await self._provider_auth_action(
+            gateway=gateway,
+            provider_id=provider_id,
+            action="refresh",
+            auth=auth,
+        )
+
+    async def disconnect_provider_auth(
+        self,
+        *,
+        gateway: Gateway,
+        provider_id: str,
+        auth: AuthContext,
+    ) -> GatewayProviderAuthActionResponse:
+        return await self._provider_auth_action(
+            gateway=gateway,
+            provider_id=provider_id,
+            action="disconnect",
+            auth=auth,
+        )
 
     async def pull_gateway_usage(
         self,
