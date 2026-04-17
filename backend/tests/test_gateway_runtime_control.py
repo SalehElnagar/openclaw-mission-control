@@ -3,6 +3,7 @@
 
 from __future__ import annotations
 
+import json
 from types import SimpleNamespace
 from uuid import uuid4
 
@@ -249,6 +250,45 @@ async def test_available_models_respect_enabled_model_refs(
 
 
 @pytest.mark.asyncio
+async def test_cloud_available_models_default_to_starter_pack_model(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    gateway = Gateway(
+        organization_id=uuid4(),
+        name="gateway",
+        node_class="cloud",
+        url="ws://gateway.example/ws",
+        workspace_root="/tmp/workspaces",
+        model_profiles={},
+    )
+    service = GatewayRuntimeControlService(session=object())  # type: ignore[arg-type]
+
+    async def _fake_runtime_catalog(_gateway: Gateway) -> list[object]:
+        return [
+            runtime_control.GatewayRuntimeCatalogEntry(
+                ref=STARTER_PACK_PRIMARY_MODEL_REF,
+                provider="microsoft-foundry",
+                provider_label="Azure Foundry",
+                label="Azure Foundry GPT-5.4 Mini",
+                selectable=True,
+            ),
+            runtime_control.GatewayRuntimeCatalogEntry(
+                ref="openai-codex/gpt-5.4",
+                provider="openai-codex",
+                provider_label="Codex",
+                label="Codex GPT-5.4",
+                selectable=True,
+            ),
+        ]
+
+    monkeypatch.setattr(service, "runtime_catalog", _fake_runtime_catalog)
+
+    refs = await service.available_models(gateway)
+
+    assert refs == [STARTER_PACK_PRIMARY_MODEL_REF]
+
+
+@pytest.mark.asyncio
 async def test_runtime_catalog_filters_to_supported_selectable_models(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -416,6 +456,87 @@ async def test_assert_model_policies_supported_rejects_models_outside_enabled_se
 
     assert excinfo.value.status_code == 422
     assert "Node-enabled models do not include" in str(excinfo.value.detail)
+
+
+@pytest.mark.asyncio
+async def test_sync_model_policies_prunes_runtime_catalog_to_enabled_models(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    class _SessionStub:
+        def add(self, _value: object) -> None:
+            return None
+
+        async def commit(self) -> None:
+            return None
+
+    gateway = Gateway(
+        organization_id=uuid4(),
+        name="gateway",
+        node_class="cloud",
+        url="ws://gateway.example/ws",
+        workspace_root="/tmp/workspaces",
+        default_model_profile="general",
+        enabled_model_refs=[STARTER_PACK_PRIMARY_MODEL_REF],
+        model_profiles={
+            "general": {
+                "primary_model": STARTER_PACK_PRIMARY_MODEL_REF,
+                "fallback_models": [],
+            }
+        },
+    )
+    service = GatewayRuntimeControlService(session=_SessionStub())  # type: ignore[arg-type]
+    captured: dict[str, object] = {}
+
+    async def _fake_load_gateway_config_with_retry(
+        _gateway: Gateway,
+        *,
+        context: str,
+    ) -> tuple[str | None, dict[str, object]]:
+        assert "gateway runtime sync" in context
+        return (
+            "hash",
+            {
+                "agents": {
+                    "defaults": {
+                        "models": {
+                            STARTER_PACK_PRIMARY_MODEL_REF: {},
+                            "openai-codex/gpt-5.4": {"alias": "Codex"},
+                        }
+                    },
+                    "list": [],
+                }
+            },
+        )
+
+    async def _fake_available_models(_gateway: Gateway) -> list[str]:
+        return [STARTER_PACK_PRIMARY_MODEL_REF]
+
+    async def _fake_openclaw_call(
+        method: str,
+        params: dict[str, object] | None = None,
+        *,
+        config: object,
+    ) -> object:
+        assert method == "config.patch"
+        assert config is not None
+        assert params is not None
+        captured["patch"] = json.loads(str(params["raw"]))
+        return {}
+
+    monkeypatch.setattr(
+        service,
+        "_load_gateway_config_with_retry",
+        _fake_load_gateway_config_with_retry,
+    )
+    monkeypatch.setattr(service, "available_models", _fake_available_models)
+    monkeypatch.setattr(runtime_control, "openclaw_call", _fake_openclaw_call)
+
+    changed = await service.sync_model_policies(gateway=gateway, agents=[], auth=None)
+
+    assert changed is True
+    patch = captured["patch"]
+    assert isinstance(patch, dict)
+    assert patch["agents"]["defaults"]["models"] == {STARTER_PACK_PRIMARY_MODEL_REF: {}}
 
 
 @pytest.mark.asyncio

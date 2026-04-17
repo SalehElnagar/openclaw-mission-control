@@ -123,6 +123,30 @@ def _effective_enabled_model_refs(
     runtime_available = _dedupe_models(runtime_available_models)
     configured = _configured_enabled_model_refs(gateway)
     if not configured:
+        if gateway.node_class == "cloud":
+            runtime_available_set = set(runtime_available)
+            preferred_refs: list[str] = []
+            profiles = _load_model_profiles(gateway)
+            for profile_name in PROFILE_NAMES:
+                selection = _profile_selection(profiles, profile_name)
+                if selection is None or selection.primary_model is None:
+                    continue
+                preferred_refs.append(selection.primary_model)
+                preferred_refs.extend(selection.fallback_models)
+            preferred_enabled = [
+                ref for ref in _dedupe_models(preferred_refs) if ref in runtime_available_set
+            ]
+            if preferred_enabled:
+                return preferred_enabled
+            default_selection = resolve_default_model_selection(gateway)
+            fallback_refs: list[str] = [STARTER_PACK_PRIMARY_MODEL_REF]
+            if default_selection is not None and default_selection.primary_model:
+                fallback_refs.append(default_selection.primary_model)
+                fallback_refs.extend(default_selection.fallback_models)
+            fallback_refs.append(DEFAULT_PRIMARY_MODEL_REF)
+            for fallback_ref in _dedupe_models(fallback_refs):
+                if fallback_ref in runtime_available_set:
+                    return [fallback_ref]
         return runtime_available
     runtime_available_set = set(runtime_available)
     return [ref for ref in configured if ref in runtime_available_set]
@@ -746,7 +770,7 @@ class GatewayRuntimeControlService(OpenClawDBService):
         if not isinstance(defaults, dict):
             defaults = {}
         existing_catalog = defaults.get("models")
-        catalog: dict[str, Any] = (
+        existing_catalog_map: dict[str, Any] = (
             dict(existing_catalog) if isinstance(existing_catalog, dict) else {}
         )
         existing_list = agents_section.get("list")
@@ -776,11 +800,11 @@ class GatewayRuntimeControlService(OpenClawDBService):
                 detail=f"Unsupported runtime models: {', '.join(unsupported)}",
             )
 
-        catalog_changed = False
-        for ref in sorted(desired_refs):
-            if ref not in catalog:
-                catalog[ref] = {}
-                catalog_changed = True
+        catalog: dict[str, Any] = {}
+        for ref in sorted(available):
+            raw_entry = existing_catalog_map.get(ref)
+            catalog[ref] = dict(raw_entry) if isinstance(raw_entry, dict) else {}
+        catalog_changed = catalog != existing_catalog_map
 
         list_changed = False
         updated_list: list[object] = []

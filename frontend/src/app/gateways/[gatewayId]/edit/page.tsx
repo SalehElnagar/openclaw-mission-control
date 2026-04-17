@@ -134,6 +134,7 @@ export default function EditGatewayPage() {
   const resolvedEnabledModelRefs =
     enabledModelRefs ??
     loadedGateway?.enabled_model_refs ??
+    runtimeQuery.data?.data.enabled_model_refs ??
     verifiedModelRefs.map((entry) => entry.ref);
   const normalizedEnabledModelRefsForSave =
     verifiedModelRefs.length > 0
