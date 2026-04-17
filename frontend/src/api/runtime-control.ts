@@ -145,6 +145,15 @@ export type GatewayUsagePullResponse = {
 
 export type GatewayProviderAuthAction = "connect" | "refresh" | "disconnect";
 
+export type GatewayProviderAuthChallenge = {
+  title?: string | null;
+  message?: string | null;
+  instructions: string[];
+  action_label?: string | null;
+  action_url?: string | null;
+  code?: string | null;
+};
+
 export type GatewayProviderAuthActionResponse = {
   gateway_id: string;
   provider_id: string;
@@ -153,6 +162,7 @@ export type GatewayProviderAuthActionResponse = {
   connected_profile?: string | null;
   requires_login?: boolean | null;
   message?: string | null;
+  challenge?: GatewayProviderAuthChallenge | null;
   warnings: string[];
 };
 

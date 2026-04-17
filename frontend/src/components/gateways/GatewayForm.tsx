@@ -445,9 +445,9 @@ export function GatewayForm({
               <p className="text-xs text-muted">
                 The guided flow is the default path: choose a provider preset,
                 choose the auth method for this node, attach the secret once or
-                connect later for interactive providers, then choose models from
-                a checklist. Raw provider fields stay available under Advanced
-                runtime.
+                stage interactive sign-in, then save the node so Mission Control
+                can start the provider handoff from the node detail page. Raw
+                provider fields stay available under Advanced runtime.
               </p>
             </div>
             <TabsList>
@@ -674,8 +674,9 @@ export function GatewayForm({
               <p className="text-xs text-muted">
                 Choose the auth mode Mission Control should manage for each
                 provider. Service-auth uses stored secrets, while `oauth` and
-                `login` run on the node session and continue with
-                connect/refresh/disconnect actions on the node detail page.
+                `login` run on the node session and start from the node detail
+                page after save, with connect/refresh/disconnect controls kept
+                there afterward.
               </p>
             </div>
             <div className="mt-4 space-y-3">
@@ -849,9 +850,9 @@ export function GatewayForm({
                       ) : (
                         <p className="mt-3 text-xs text-muted">
                           This provider uses interactive auth. Mission Control
-                          will show connect/refresh/disconnect controls on the
-                          node detail page after save, and cloud nodes run that
-                          sign-in against the remote node session.
+                          will start the sign-in handoff on the node detail page
+                          after save, and cloud nodes run that sign-in against
+                          the remote node session.
                         </p>
                       )}
                     </div>

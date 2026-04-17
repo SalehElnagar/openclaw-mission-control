@@ -250,8 +250,11 @@ function integrationStatus(
     return { label: "Error", variant: "danger" };
   }
   if (authMode === "oauth" || authMode === "login") {
+    if (!runtime) {
+      return { label: "Sign-in required", variant: "warning" };
+    }
     if (runtime?.requires_login || runtime?.auth_state === "requires-login") {
-      return { label: "Needs login", variant: "warning" };
+      return { label: "Sign-in required", variant: "warning" };
     }
   } else if (
     (authMode === "api-key" || authMode === "token") &&
@@ -813,10 +816,11 @@ export function PresetIntegrationEditor({
     if (!purpose) {
       return (
         <div className="rounded-lg border border-[color:var(--border)] bg-[color:var(--surface)] px-4 py-3 text-sm text-muted">
-          Interactive auth runs on the{" "}
+          Interactive sign-in runs on the{" "}
           {nodeClass === "cloud" ? "remote cloud" : "selected"} node session.
-          Save this integration, then save the node and continue from the node
-          detail page to connect, refresh, or disconnect the provider session.
+          Save this integration into the node form first. When you save the
+          node, Mission Control will open the node detail page and start the
+          provider sign-in handoff there.
         </div>
       );
     }
@@ -1340,9 +1344,12 @@ export function PresetIntegrationEditor({
                 </div>
                 <p className="mt-3 text-xs text-muted">
                   {interactiveAuth
-                    ? nodeClass === "cloud"
-                      ? "Interactive auth continues from the node detail page after you save this cloud node. The sign-in session is stored on the remote node."
-                      : "Interactive auth continues from the node detail page after you save this local node."
+                    ? runtime?.auth_state === "verified" &&
+                      runtime?.requires_login !== true
+                      ? "Interactive sign-in is already verified for this node."
+                      : nodeClass === "cloud"
+                        ? "Sign-in required after node save. Mission Control will take you to the node detail page and start the remote cloud session flow there."
+                        : "Sign-in required after node save. Mission Control will take you to the node detail page and start the local node session flow there."
                     : hasServiceSecret
                       ? "Service-auth details are staged in this form and will be stored when you save the node."
                       : "Open Configure to attach the service secret before you save this node."}
@@ -1376,8 +1383,10 @@ export function PresetIntegrationEditor({
             </div>
             <DialogFooter className="mt-6">
               <p className="mr-auto text-xs text-muted">
-                Save this integration first, then save the node to persist the
-                provider auth and model changes.
+                {editorIntegration.authMode === "oauth" ||
+                editorIntegration.authMode === "login"
+                  ? "Save this integration first. When you save the node, Mission Control will open the node detail page and start the sign-in handoff there."
+                  : "Save this integration first, then save the node to persist the provider auth and model changes."}
               </p>
               <Button
                 type="button"

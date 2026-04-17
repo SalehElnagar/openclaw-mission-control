@@ -1201,6 +1201,118 @@ async def test_connect_provider_auth_uses_gateway_rpc_for_local_login(
 
 
 @pytest.mark.asyncio
+async def test_connect_provider_auth_returns_normalized_challenge_payload(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    class _SessionStub:
+        def add(self, _value: object) -> None:
+            return None
+
+        async def commit(self) -> None:
+            return None
+
+    gateway = Gateway(
+        organization_id=uuid4(),
+        name="gateway",
+        node_class="cloud",
+        url="ws://gateway.example/ws",
+        workspace_root="/tmp/workspaces",
+        provider_auth_configs=[
+            {
+                "provider_id": "github-copilot",
+                "auth_mode": "oauth",
+                "profile_id": "github-copilot:managed",
+                "display_label": "GitHub Copilot",
+            }
+        ],
+    )
+    service = GatewayRuntimeControlService(session=_SessionStub())  # type: ignore[arg-type]
+
+    async def _fake_load_gateway_config_with_retry(
+        _gateway: Gateway,
+        *,
+        context: str,
+    ) -> tuple[str | None, dict[str, object]]:
+        assert "provider auth resolve" in context
+        return ("hash", {})
+
+    async def _fake_runtime_summary(*, gateway: Gateway) -> runtime_control.GatewayRuntimeSummary:
+        return runtime_control.GatewayRuntimeSummary(
+            gateway_id=gateway.id,
+            node_class=gateway.node_class,
+            runtime_sync_generation=1,
+            providers=[
+                runtime_control.GatewayRuntimeProviderSummary(
+                    id="github-copilot",
+                    provider_type="github-copilot",
+                    label="GitHub Copilot",
+                    auth_mode="oauth",
+                    auth_state="requires-login",
+                    requires_login=True,
+                    verification_state="configured",
+                    configured_model_count=2,
+                    verified_model_count=0,
+                )
+            ],
+        )
+
+    async def _fake_openclaw_call(
+        method: str,
+        params: dict[str, object] | None = None,
+        *,
+        config: object,
+    ) -> object:
+        assert method == "providers.connect"
+        assert params == {
+            "providerId": "github-copilot",
+            "profileId": "github-copilot:managed",
+            "displayName": "GitHub Copilot",
+        }
+        assert config is not None
+        return {
+            "challenge": {
+                "title": "GitHub Copilot sign-in",
+                "instructions": [
+                    "Open the authorization page.",
+                    "Approve the node session.",
+                ],
+                "actionUrl": "https://github.com/login/device",
+                "buttonLabel": "Open GitHub",
+                "userCode": "ABCD-EFGH",
+            }
+        }
+
+    monkeypatch.setattr(
+        service,
+        "_load_gateway_config_with_retry",
+        _fake_load_gateway_config_with_retry,
+    )
+    monkeypatch.setattr(service, "runtime_summary", _fake_runtime_summary)
+    monkeypatch.setattr(runtime_control, "openclaw_call", _fake_openclaw_call)
+
+    response = await service.connect_provider_auth(
+        gateway=gateway,
+        provider_id="github-copilot",
+        auth=AuthContext(
+            actor_type="user",
+            user=SimpleNamespace(id=uuid4(), preferred_name=None, name="User", email=None),
+        ),
+    )
+
+    assert response.auth_state == "requires-login"
+    assert response.requires_login is True
+    assert response.challenge is not None
+    assert response.challenge.title == "GitHub Copilot sign-in"
+    assert response.challenge.instructions == [
+        "Open the authorization page.",
+        "Approve the node session.",
+    ]
+    assert response.challenge.action_label == "Open GitHub"
+    assert response.challenge.action_url == "https://github.com/login/device"
+    assert response.challenge.code == "ABCD-EFGH"
+
+
+@pytest.mark.asyncio
 async def test_reconcile_gateway_runtime_backfills_gateway_starter_pack(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

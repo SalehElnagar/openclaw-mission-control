@@ -18,6 +18,7 @@ from app.schemas.gateway_runtime import (
     GatewayModelCost,
     GatewayModelDefinition,
     GatewayModelProfiles,
+    GatewayProviderAuthChallenge,
     GatewayProviderAuthConfig,
     GatewayProviderConfig,
     GatewayProviderSecretRef,
@@ -103,6 +104,172 @@ KNOWN_MODEL_LABELS: dict[str, str] = {
     "google-antigravity/claude-opus-4-6-thinking": "Antigravity Claude Opus 4.6 Thinking",
     "antigravity/operator": "Antigravity Operator",
 }
+
+PROVIDER_AUTH_CHALLENGE_TITLE_KEYS = (
+    "title",
+    "label",
+    "displayName",
+    "display_label",
+    "providerLabel",
+    "provider_label",
+)
+PROVIDER_AUTH_CHALLENGE_MESSAGE_KEYS = (
+    "message",
+    "detail",
+    "description",
+    "instruction",
+)
+PROVIDER_AUTH_CHALLENGE_INSTRUCTION_KEYS = (
+    "instructions",
+    "steps",
+    "prompts",
+)
+PROVIDER_AUTH_CHALLENGE_ACTION_LABEL_KEYS = (
+    "actionLabel",
+    "action_label",
+    "buttonLabel",
+    "button_label",
+    "ctaLabel",
+    "cta_label",
+    "openLabel",
+    "open_label",
+)
+PROVIDER_AUTH_CHALLENGE_ACTION_URL_KEYS = (
+    "actionUrl",
+    "action_url",
+    "authUrl",
+    "auth_url",
+    "browserUrl",
+    "browser_url",
+    "loginUrl",
+    "login_url",
+    "verificationUrl",
+    "verification_url",
+    "verificationUri",
+    "verification_uri",
+    "url",
+)
+PROVIDER_AUTH_CHALLENGE_CODE_KEYS = (
+    "code",
+    "userCode",
+    "user_code",
+    "deviceCode",
+    "device_code",
+    "oneTimeCode",
+    "one_time_code",
+    "pin",
+)
+
+
+def _normalize_text_value(value: object) -> str | None:
+    if not isinstance(value, str):
+        return None
+    normalized = value.strip()
+    return normalized or None
+
+
+def _extract_text_from_candidates(
+    candidates: list[dict[str, Any]],
+    keys: tuple[str, ...],
+) -> str | None:
+    for candidate in candidates:
+        for key in keys:
+            normalized = _normalize_text_value(candidate.get(key))
+            if normalized:
+                return normalized
+    return None
+
+
+def _extract_instruction_list(value: object) -> list[str]:
+    if isinstance(value, str):
+        normalized = value.strip()
+        return [normalized] if normalized else []
+    if not isinstance(value, list):
+        return []
+    instructions: list[str] = []
+    for item in value:
+        normalized = _normalize_text_value(item)
+        if normalized:
+            instructions.append(normalized)
+    return instructions
+
+
+def _extract_instructions_from_candidates(
+    candidates: list[dict[str, Any]],
+) -> list[str]:
+    instructions: list[str] = []
+    for candidate in candidates:
+        for key in PROVIDER_AUTH_CHALLENGE_INSTRUCTION_KEYS:
+            instructions.extend(_extract_instruction_list(candidate.get(key)))
+        for key in PROVIDER_AUTH_CHALLENGE_MESSAGE_KEYS:
+            value = candidate.get(key)
+            if isinstance(value, list):
+                instructions.extend(_extract_instruction_list(value))
+    deduped: list[str] = []
+    for instruction in instructions:
+        if instruction not in deduped:
+            deduped.append(instruction)
+    return deduped
+
+
+def _provider_auth_challenge_candidates(payload: object) -> list[dict[str, Any]]:
+    if not isinstance(payload, dict):
+        return []
+    candidates = [payload]
+    for key in ("challenge", "browser", "verification", "device", "oauth", "login"):
+        nested = payload.get(key)
+        if isinstance(nested, dict):
+            candidates.append(nested)
+    return candidates
+
+
+def _normalize_provider_auth_challenge(
+    payload: object,
+) -> GatewayProviderAuthChallenge | None:
+    if isinstance(payload, str):
+        normalized = _normalize_text_value(payload)
+        return GatewayProviderAuthChallenge(message=normalized) if normalized else None
+
+    candidates = _provider_auth_challenge_candidates(payload)
+    if not candidates:
+        return None
+
+    instructions = _extract_instructions_from_candidates(candidates)
+    challenge = GatewayProviderAuthChallenge(
+        title=_extract_text_from_candidates(
+            candidates,
+            PROVIDER_AUTH_CHALLENGE_TITLE_KEYS,
+        ),
+        message=_extract_text_from_candidates(
+            candidates,
+            PROVIDER_AUTH_CHALLENGE_MESSAGE_KEYS,
+        ),
+        instructions=instructions,
+        action_label=_extract_text_from_candidates(
+            candidates,
+            PROVIDER_AUTH_CHALLENGE_ACTION_LABEL_KEYS,
+        ),
+        action_url=_extract_text_from_candidates(
+            candidates,
+            PROVIDER_AUTH_CHALLENGE_ACTION_URL_KEYS,
+        ),
+        code=_extract_text_from_candidates(
+            candidates,
+            PROVIDER_AUTH_CHALLENGE_CODE_KEYS,
+        ),
+    )
+    if not any(
+        [
+            challenge.title,
+            challenge.message,
+            challenge.instructions,
+            challenge.action_label,
+            challenge.action_url,
+            challenge.code,
+        ],
+    ):
+        return None
+    return challenge
 
 
 def _gateway_client_config(gateway: Gateway) -> GatewayClientConfig:
@@ -1013,9 +1180,7 @@ async def _provider_runtime_summaries(
                 auth_state=auth_state,
                 requires_login=requires_login,
                 connected_profile=connected_profile,
-                verification_state=(
-                    "runtime" if verified_model_count > 0 else "configured"
-                ),
+                verification_state=("runtime" if verified_model_count > 0 else "configured"),
                 configured_model_count=model_counts.get(provider_id, 0),
                 verified_model_count=verified_model_count,
                 secret_ref_count=len(provider_secret_refs),
@@ -1130,13 +1295,16 @@ async def _render_managed_provider_patch(
             if error:
                 warnings.append(f"{provider_id} {secret_ref.purpose}: {error}")
                 continue
-            if (
-                secret_ref.purpose == "apiKey"
-                and (provider_auth is None or provider_auth.auth_mode == "api-key")
+            if secret_ref.purpose == "apiKey" and (
+                provider_auth is None or provider_auth.auth_mode == "api-key"
             ):
                 provider_patch["apiKey"] = resolved
                 continue
-            if secret_ref.purpose == "token" and provider_auth and provider_auth.auth_mode == "token":
+            if (
+                secret_ref.purpose == "token"
+                and provider_auth
+                and provider_auth.auth_mode == "token"
+            ):
                 static_token_ref = resolved
                 continue
             if secret_ref.purpose.startswith("header:"):
@@ -1935,6 +2103,7 @@ class GatewayRuntimeControlService(OpenClawDBService):
                 connected_profile=None,
                 requires_login=False,
                 message="Interactive provider actions are only supported for oauth/login modes.",
+                challenge=None,
                 warnings=["Interactive provider actions are only supported for oauth/login modes."],
             )
         params: dict[str, Any] = {"providerId": provider_id}
@@ -1944,18 +2113,23 @@ class GatewayRuntimeControlService(OpenClawDBService):
             params["displayName"] = auth_config.display_label
 
         status_value: str = "pending-login"
+        challenge: GatewayProviderAuthChallenge | None = None
         try:
-            await openclaw_call(
+            action_payload = await openclaw_call(
                 f"providers.{action}",
                 params,
                 config=_gateway_client_config(gateway),
             )
+            if action == "connect":
+                challenge = _normalize_provider_auth_challenge(action_payload)
         except OpenClawGatewayError as exc:
             warnings.append(str(exc))
             status_value = "blocked"
 
         runtime = await self.runtime_summary(gateway=gateway)
-        provider_runtime = next((item for item in runtime.providers if item.id == provider_id), None)
+        provider_runtime = next(
+            (item for item in runtime.providers if item.id == provider_id), None
+        )
         if action == "disconnect":
             status_value = "ok" if status_value != "blocked" else "blocked"
         elif provider_runtime and provider_runtime.auth_state == "verified":
@@ -1987,6 +2161,7 @@ class GatewayRuntimeControlService(OpenClawDBService):
             connected_profile=(provider_runtime.connected_profile if provider_runtime else None),
             requires_login=(provider_runtime.requires_login if provider_runtime else False),
             message=f"Provider {provider_id} {status_value}.",
+            challenge=challenge,
             warnings=warnings,
         )
 

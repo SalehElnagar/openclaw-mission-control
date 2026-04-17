@@ -142,6 +142,9 @@ describe("PresetIntegrationEditor", () => {
     expect(
       screen.getByRole("button", { name: "Configure" }),
     ).toBeInTheDocument();
+    expect(
+      screen.getByText(/Sign-in required after node save/i),
+    ).toBeInTheDocument();
     expect(screen.getByText("2 selected")).toBeInTheDocument();
     expect(screen.getByText("1 enabled")).toBeInTheDocument();
   });

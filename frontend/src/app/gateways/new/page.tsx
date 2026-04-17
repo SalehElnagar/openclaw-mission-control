@@ -2,7 +2,7 @@
 
 export const dynamic = "force-dynamic";
 
-import { useState } from "react";
+import { useMemo, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
 import { useQuery } from "@tanstack/react-query";
 
@@ -28,6 +28,10 @@ import {
   type GatewayCheckStatus,
   validateGatewayUrl,
 } from "@/lib/gateway-form";
+import {
+  buildGatewayConnectRedirectPath,
+  findPendingInteractiveProviderIds,
+} from "@/lib/gateway-interactive-auth";
 import type { NodeClass } from "@/lib/node-scope";
 
 function sanitizeProviderConfigs(
@@ -179,9 +183,9 @@ export default function NewGatewayPage() {
   >("general");
   const [modelProfiles, setModelProfiles] = useState<GatewayModelProfiles>({});
   const [enabledModelRefs, setEnabledModelRefs] = useState<string[]>([]);
-  const [providerConfigs, setProviderConfigs] = useState<GatewayProviderConfig[]>(
-    [],
-  );
+  const [providerConfigs, setProviderConfigs] = useState<
+    GatewayProviderConfig[]
+  >([]);
   const [providerAuthConfigs, setProviderAuthConfigs] = useState<
     GatewayProviderAuthConfig[]
   >([]);
@@ -206,6 +210,7 @@ export default function NewGatewayPage() {
   );
 
   const [error, setError] = useState<string | null>(null);
+  const pendingInteractiveProviderIdsRef = useRef<string[]>([]);
 
   const toolchainCatalogQuery = useQuery({
     queryKey: ["toolchain-catalog"],
@@ -218,7 +223,12 @@ export default function NewGatewayPage() {
     mutation: {
       onSuccess: (result) => {
         if (result.status === 200) {
-          router.push(`/gateways/${result.data.id}`);
+          router.push(
+            buildGatewayConnectRedirectPath(
+              result.data.id,
+              pendingInteractiveProviderIdsRef.current,
+            ),
+          );
         }
       },
       onError: (err) => {
@@ -234,6 +244,13 @@ export default function NewGatewayPage() {
     Boolean(name.trim()) &&
     Boolean(gatewayUrl.trim()) &&
     Boolean(workspaceRoot.trim());
+  const pendingInteractiveProviderIds = useMemo(
+    () =>
+      findPendingInteractiveProviderIds({
+        nextAuthConfigs: sanitizeProviderAuthConfigs(providerAuthConfigs) ?? [],
+      }),
+    [providerAuthConfigs],
+  );
 
   const handleSubmit = async (event: React.FormEvent<HTMLFormElement>) => {
     event.preventDefault();
@@ -270,6 +287,7 @@ export default function NewGatewayPage() {
     }
 
     setError(null);
+    pendingInteractiveProviderIdsRef.current = pendingInteractiveProviderIds;
     createMutation.mutate({
       data: {
         name: name.trim(),
@@ -281,13 +299,15 @@ export default function NewGatewayPage() {
         allow_insecure_tls: allowInsecureTls,
         default_model_profile: defaultModelProfile,
         model_profiles: modelProfiles,
-        enabled_model_refs: enabledModelRefs.length > 0 ? enabledModelRefs : null,
+        enabled_model_refs:
+          enabledModelRefs.length > 0 ? enabledModelRefs : null,
         tool_profile: toolProfile,
         provider_configs: sanitizeProviderConfigs(providerConfigs),
         provider_auth_configs: sanitizeProviderAuthConfigs(providerAuthConfigs),
         model_definitions: sanitizeModelDefinitions(modelDefinitions),
         provider_secret_refs: sanitizeProviderSecretRefs(providerSecretRefs),
-        provider_secret_inputs: sanitizeProviderSecretInputs(providerSecretInputs),
+        provider_secret_inputs:
+          sanitizeProviderSecretInputs(providerSecretInputs),
       },
     });
   };
@@ -330,8 +350,16 @@ export default function NewGatewayPage() {
         canSubmit={canSubmit}
         workspaceRootPlaceholder={DEFAULT_WORKSPACE_ROOT}
         cancelLabel="Cancel"
-        submitLabel="Create gateway"
-        submitBusyLabel="Creating…"
+        submitLabel={
+          pendingInteractiveProviderIds.length > 0
+            ? "Create node and connect"
+            : "Create gateway"
+        }
+        submitBusyLabel={
+          pendingInteractiveProviderIds.length > 0
+            ? "Creating and connecting…"
+            : "Creating…"
+        }
         onSubmit={handleSubmit}
         onCancel={() => router.push("/gateways")}
         onNameChange={setName}

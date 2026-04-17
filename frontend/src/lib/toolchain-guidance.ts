@@ -69,6 +69,6 @@ export const getPresetSummary = (
     return summary;
   }
   return preset.kind === "local-interactive"
-    ? "Connect this provider interactively after saving the node."
+    ? "Save the node to start this provider's interactive sign-in handoff."
     : "Mission Control manages the provider metadata and model catalog for this integration.";
 };

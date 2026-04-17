@@ -2,8 +2,13 @@
 
 export const dynamic = "force-dynamic";
 
-import { useMemo, useState } from "react";
-import { useParams, useRouter } from "next/navigation";
+import { startTransition, useEffect, useMemo, useRef, useState } from "react";
+import {
+  useParams,
+  usePathname,
+  useRouter,
+  useSearchParams,
+} from "next/navigation";
 
 import { useAuth } from "@/auth/clerk";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
@@ -49,6 +54,7 @@ import {
 import {
   aggregateUsage,
   getGatewayRuntime,
+  type GatewayProviderAuthChallenge,
   type GatewayRuntimeCatalogEntry,
   type GatewayRuntimeProviderSummary,
   mutateGatewayProviderAuth,
@@ -57,6 +63,10 @@ import {
   reconcileGatewayRuntime,
 } from "@/api/runtime-control";
 import { formatTimestamp } from "@/lib/formatters";
+import {
+  isInteractiveProviderAuthMode,
+  readPendingInteractiveProviderIds,
+} from "@/lib/gateway-interactive-auth";
 import { buildGatewayRuntimeView } from "@/lib/gateway-runtime-view";
 import { createOptimisticListDeleteMutation } from "@/lib/list-delete";
 import {
@@ -141,14 +151,56 @@ const providerAuthStateVariant = (
   return "outline";
 };
 
+const interactiveProgressLabel = (
+  status: InteractiveConnectProgress["status"],
+): string => {
+  switch (status) {
+    case "queued":
+      return "Queued";
+    case "starting":
+      return "Starting sign-in";
+    case "pending":
+      return "Action needed";
+    case "verified":
+      return "Verified";
+    case "error":
+      return "Needs attention";
+  }
+};
+
+const interactiveProgressVariant = (
+  status: InteractiveConnectProgress["status"],
+): "outline" | "warning" | "success" | "danger" => {
+  switch (status) {
+    case "queued":
+    case "starting":
+      return "outline";
+    case "pending":
+      return "warning";
+    case "verified":
+      return "success";
+    case "error":
+      return "danger";
+  }
+};
+
 type ProviderAuthRecord = {
   providerId: string;
   authConfig: GatewayProviderAuthConfig | null;
   runtime: GatewayRuntimeProviderSummary | null;
 };
 
+type InteractiveConnectProgress = {
+  providerId: string;
+  status: "queued" | "starting" | "pending" | "verified" | "error";
+  message?: string | null;
+  challenge?: GatewayProviderAuthChallenge | null;
+};
+
 export default function GatewayDetailPage() {
   const router = useRouter();
+  const pathname = usePathname();
+  const searchParams = useSearchParams();
   const queryClient = useQueryClient();
   const params = useParams();
   const { isSignedIn } = useAuth();
@@ -159,6 +211,13 @@ export default function GatewayDetailPage() {
 
   const { isAdmin } = useOrganizationMembership(isSignedIn);
   const [deleteTarget, setDeleteTarget] = useState<AgentRead | null>(null);
+  const [pendingConnectProviderIds, setPendingConnectProviderIds] = useState<
+    string[]
+  >([]);
+  const [interactiveConnectProgress, setInteractiveConnectProgress] = useState<
+    Record<string, InteractiveConnectProgress>
+  >({});
+  const hydratedQueueSignatureRef = useRef<string>("");
   const agentsKey = getListAgentsApiV1AgentsGetQueryKey(
     gatewayId ? { gateway_id: gatewayId } : undefined,
   );
@@ -346,19 +405,57 @@ export default function GatewayDetailPage() {
     },
   });
   const providerAuthMutation = useMutation({
-    mutationFn: ({
-      providerId,
-      action,
-    }: {
+    mutationFn: (variables?: {
       providerId: string;
       action: "connect" | "refresh" | "disconnect";
-    }) => mutateGatewayProviderAuth(gatewayId ?? "", providerId, action),
-    onSuccess: (result) => {
-      if (result.status !== 200) return;
-      setControlMessage(
-        result.data.message ??
-          `Provider ${result.data.provider_id} ${result.data.auth_state ?? "updated"}.`,
+      source?: "manual" | "auto-queue";
+    }) => {
+      if (!variables) {
+        throw new Error("Provider auth action payload is required.");
+      }
+      return mutateGatewayProviderAuth(
+        gatewayId ?? "",
+        variables.providerId,
+        variables.action,
       );
+    },
+    onSuccess: (
+      result,
+      variables?: {
+        providerId: string;
+        action: "connect" | "refresh" | "disconnect";
+        source?: "manual" | "auto-queue";
+      },
+    ) => {
+      if (result.status !== 200) return;
+      const responseMessage =
+        result.data.message ??
+        `Provider ${result.data.provider_id} ${result.data.auth_state ?? "updated"}.`;
+      const progressStatus: InteractiveConnectProgress["status"] =
+        result.data.auth_state === "verified" &&
+        result.data.requires_login !== true
+          ? "verified"
+          : result.data.challenge ||
+              result.data.requires_login ||
+              result.data.auth_state === "requires-login"
+            ? "pending"
+            : "pending";
+
+      if (variables?.action === "connect" && variables.providerId) {
+        setInteractiveConnectProgress((current) => ({
+          ...current,
+          [variables.providerId]: {
+            providerId: variables.providerId,
+            status: progressStatus,
+            message: responseMessage,
+            challenge: result.data.challenge ?? null,
+          },
+        }));
+        setPendingConnectProviderIds((current) =>
+          current.filter((providerId) => providerId !== variables.providerId),
+        );
+      }
+      setControlMessage(responseMessage);
       queryClient.invalidateQueries({
         queryKey: ["gateway-runtime", gatewayId],
       });
@@ -368,7 +465,28 @@ export default function GatewayDetailPage() {
         ),
       });
     },
-    onError: (err: Error) => {
+    onError: (
+      err: Error,
+      variables?: {
+        providerId: string;
+        action: "connect" | "refresh" | "disconnect";
+        source?: "manual" | "auto-queue";
+      },
+    ) => {
+      if (variables?.action === "connect" && variables.providerId) {
+        setInteractiveConnectProgress((current) => ({
+          ...current,
+          [variables.providerId]: {
+            providerId: variables.providerId,
+            status: "error",
+            message: err.message || "Provider auth action failed.",
+            challenge: null,
+          },
+        }));
+        setPendingConnectProviderIds((current) =>
+          current.filter((providerId) => providerId !== variables.providerId),
+        );
+      }
       setControlMessage(err.message || "Provider auth action failed.");
     },
   });
@@ -551,6 +669,165 @@ export default function GatewayDetailPage() {
       managedProviderIds.has(record.providerId),
     );
   }, [providerAuthRecords, runtimeView.managedProviderIds]);
+  const providerAuthRecordById = useMemo(
+    () =>
+      new Map(providerAuthRecords.map((record) => [record.providerId, record])),
+    [providerAuthRecords],
+  );
+  const pendingConnectProviderIdsFromUrl = useMemo(
+    () => readPendingInteractiveProviderIds(searchParams),
+    [searchParams],
+  );
+  const interactiveProvidersNeedingLogin = useMemo(
+    () =>
+      managedProviderAuthRecords
+        .filter((record) =>
+          isInteractiveProviderAuthMode(
+            record.authConfig?.auth_mode ?? record.runtime?.auth_mode ?? null,
+          ),
+        )
+        .filter(
+          (record) =>
+            record.runtime?.requires_login ||
+            record.runtime?.auth_state === "requires-login",
+        )
+        .map((record) => record.providerId),
+    [managedProviderAuthRecords],
+  );
+  const interactivePanelProviderIds = useMemo(
+    () =>
+      Array.from(
+        new Set([
+          ...pendingConnectProviderIds,
+          ...interactiveProvidersNeedingLogin,
+          ...Object.keys(interactiveConnectProgress),
+        ]),
+      ),
+    [
+      interactiveConnectProgress,
+      interactiveProvidersNeedingLogin,
+      pendingConnectProviderIds,
+    ],
+  );
+  const shouldShowInteractivePanel = useMemo(
+    () =>
+      pendingConnectProviderIds.length > 0 ||
+      interactiveProvidersNeedingLogin.length > 0 ||
+      Object.values(interactiveConnectProgress).some(
+        (progress) => progress.status !== "verified",
+      ),
+    [
+      interactiveConnectProgress,
+      interactiveProvidersNeedingLogin.length,
+      pendingConnectProviderIds.length,
+    ],
+  );
+
+  useEffect(() => {
+    if (!pendingConnectProviderIdsFromUrl.length) {
+      return;
+    }
+    const signature = pendingConnectProviderIdsFromUrl.join(",");
+    if (hydratedQueueSignatureRef.current === signature) {
+      return;
+    }
+    hydratedQueueSignatureRef.current = signature;
+    startTransition(() => {
+      setPendingConnectProviderIds((current) =>
+        Array.from(new Set([...current, ...pendingConnectProviderIdsFromUrl])),
+      );
+      setInteractiveConnectProgress((current) => {
+        const next = { ...current };
+        pendingConnectProviderIdsFromUrl.forEach((providerId) => {
+          next[providerId] = next[providerId] ?? {
+            providerId,
+            status: "queued",
+          };
+        });
+        return next;
+      });
+    });
+
+    const nextParams = new URLSearchParams(searchParams.toString());
+    nextParams.delete("connectProvider");
+    const nextQuery = nextParams.toString();
+    router.replace(nextQuery ? `${pathname}?${nextQuery}` : pathname);
+  }, [pathname, pendingConnectProviderIdsFromUrl, router, searchParams]);
+
+  useEffect(() => {
+    const nextProviderId = pendingConnectProviderIds[0];
+    if (
+      !gatewayId ||
+      !isSignedIn ||
+      !isAdmin ||
+      !nextProviderId ||
+      providerAuthMutation.isPending
+    ) {
+      return;
+    }
+
+    const nextRecord = providerAuthRecordById.get(nextProviderId) ?? null;
+    const authMode =
+      nextRecord?.authConfig?.auth_mode ??
+      nextRecord?.runtime?.auth_mode ??
+      null;
+    if (authMode && !isInteractiveProviderAuthMode(authMode)) {
+      startTransition(() => {
+        setPendingConnectProviderIds((current) =>
+          current.filter((providerId) => providerId !== nextProviderId),
+        );
+      });
+      return;
+    }
+    if (
+      nextRecord?.runtime?.auth_state === "verified" &&
+      nextRecord.runtime.requires_login !== true
+    ) {
+      startTransition(() => {
+        setInteractiveConnectProgress((current) => ({
+          ...current,
+          [nextProviderId]: {
+            providerId: nextProviderId,
+            status: "verified",
+            message: "Sign-in is already verified on this node.",
+            challenge: null,
+          },
+        }));
+        setPendingConnectProviderIds((current) =>
+          current.filter((providerId) => providerId !== nextProviderId),
+        );
+      });
+      return;
+    }
+    if (interactiveConnectProgress[nextProviderId]?.status === "starting") {
+      return;
+    }
+
+    startTransition(() => {
+      setInteractiveConnectProgress((current) => ({
+        ...current,
+        [nextProviderId]: {
+          providerId: nextProviderId,
+          status: "starting",
+          message: "Starting provider sign-in on the node runtime…",
+          challenge: current[nextProviderId]?.challenge ?? null,
+        },
+      }));
+    });
+    providerAuthMutation.mutate({
+      providerId: nextProviderId,
+      action: "connect",
+      source: "auto-queue",
+    });
+  }, [
+    gatewayId,
+    interactiveConnectProgress,
+    isAdmin,
+    isSignedIn,
+    pendingConnectProviderIds,
+    providerAuthMutation,
+    providerAuthRecordById,
+  ]);
   const handleDelete = () => {
     if (!deleteTarget) return;
     deleteMutation.mutate({ agentId: deleteTarget.id });
@@ -910,6 +1187,139 @@ export default function GatewayDetailPage() {
                   <div>
                     <p className="text-xs uppercase text-quiet">Modules</p>
                     <div className="mt-2 space-y-3">
+                      {shouldShowInteractivePanel ? (
+                        <div className="rounded-lg border border-[color:var(--border)] bg-[color:var(--surface-muted)] p-3">
+                          <div className="flex flex-wrap items-center justify-between gap-3">
+                            <div>
+                              <p className="text-xs uppercase text-quiet">
+                                Interactive sign-in
+                              </p>
+                              <p className="mt-1 text-xs text-muted">
+                                {gatewayNodeClass === "cloud"
+                                  ? "Mission Control starts sign-in against the remote node session after save, then keeps each provider profile here for refresh or disconnect."
+                                  : "Mission Control starts sign-in against this local node session after save, then keeps each provider profile here for refresh or disconnect."}
+                              </p>
+                            </div>
+                            <span className="text-xs text-muted">
+                              {pendingConnectProviderIds.length > 0
+                                ? `${pendingConnectProviderIds.length} queued`
+                                : "Monitoring provider auth"}
+                            </span>
+                          </div>
+                          <div className="mt-3 space-y-2">
+                            {interactivePanelProviderIds.map((providerId) => {
+                              const record =
+                                providerAuthRecordById.get(providerId) ?? null;
+                              const progress =
+                                interactiveConnectProgress[providerId] ?? null;
+                              const label =
+                                record?.authConfig?.display_label?.trim() ||
+                                record?.runtime?.label ||
+                                providerId;
+                              const fallbackProgressStatus:
+                                | InteractiveConnectProgress["status"]
+                                | null =
+                                record?.runtime?.auth_state === "verified" &&
+                                record.runtime.requires_login !== true
+                                  ? "verified"
+                                  : record?.runtime?.requires_login ||
+                                      record?.runtime?.auth_state ===
+                                        "requires-login"
+                                    ? "pending"
+                                    : null;
+                              const progressStatus =
+                                progress?.status ??
+                                fallbackProgressStatus ??
+                                "queued";
+                              const progressMessage =
+                                progress?.message ??
+                                (fallbackProgressStatus === "verified"
+                                  ? "Sign-in is already verified on this node."
+                                  : fallbackProgressStatus === "pending"
+                                    ? "This provider still needs an interactive sign-in on the node."
+                                    : "Queued to start from this page.");
+                              const challenge = progress?.challenge ?? null;
+
+                              return (
+                                <div
+                                  key={providerId}
+                                  className="rounded-md border border-[color:var(--border)] bg-[color:var(--surface)] px-3 py-3"
+                                >
+                                  <div className="flex flex-wrap items-start justify-between gap-3">
+                                    <div className="min-w-0">
+                                      <p className="text-sm font-medium text-strong">
+                                        {label}
+                                      </p>
+                                      <p className="mt-1 text-xs text-muted">
+                                        {providerId}
+                                        {record?.authConfig?.profile_id
+                                          ? ` · profile ${record.authConfig.profile_id}`
+                                          : ""}
+                                      </p>
+                                    </div>
+                                    <Badge
+                                      variant={interactiveProgressVariant(
+                                        progressStatus,
+                                      )}
+                                    >
+                                      {interactiveProgressLabel(progressStatus)}
+                                    </Badge>
+                                  </div>
+                                  <p className="mt-2 text-xs text-muted">
+                                    {progressMessage}
+                                  </p>
+                                  {challenge?.title ? (
+                                    <p className="mt-2 text-xs font-medium text-strong">
+                                      {challenge.title}
+                                    </p>
+                                  ) : null}
+                                  {challenge?.message ? (
+                                    <p className="mt-2 text-xs text-muted">
+                                      {challenge.message}
+                                    </p>
+                                  ) : null}
+                                  {challenge?.instructions?.length ? (
+                                    <div className="mt-2 space-y-1 text-xs text-muted">
+                                      {challenge.instructions.map(
+                                        (instruction) => (
+                                          <p
+                                            key={`${providerId}-${instruction}`}
+                                          >
+                                            {instruction}
+                                          </p>
+                                        ),
+                                      )}
+                                    </div>
+                                  ) : null}
+                                  {challenge?.code ? (
+                                    <div className="mt-2 rounded-md border border-[color:var(--border)] bg-[color:var(--surface-muted)] px-3 py-2">
+                                      <p className="text-[11px] uppercase tracking-wide text-quiet">
+                                        Verification code
+                                      </p>
+                                      <p className="mt-1 font-mono text-sm text-strong">
+                                        {challenge.code}
+                                      </p>
+                                    </div>
+                                  ) : null}
+                                  {challenge?.action_url ? (
+                                    <div className="mt-2">
+                                      <a
+                                        href={challenge.action_url}
+                                        target="_blank"
+                                        rel="noreferrer"
+                                        className="text-xs font-medium text-[color:var(--accent)] underline underline-offset-4"
+                                      >
+                                        {challenge.action_label ??
+                                          "Open sign-in link"}
+                                      </a>
+                                    </div>
+                                  ) : null}
+                                </div>
+                              );
+                            })}
+                          </div>
+                        </div>
+                      ) : null}
                       <div className="rounded-lg border border-[color:var(--border)] bg-[color:var(--surface-muted)] p-3">
                         <div className="flex items-center justify-between gap-3">
                           <p className="text-xs uppercase text-quiet">
@@ -1011,6 +1421,7 @@ export default function GatewayDetailPage() {
                                           providerAuthMutation.mutate({
                                             providerId: record.providerId,
                                             action: "connect",
+                                            source: "manual",
                                           })
                                         }
                                       >
@@ -1027,6 +1438,7 @@ export default function GatewayDetailPage() {
                                           providerAuthMutation.mutate({
                                             providerId: record.providerId,
                                             action: "refresh",
+                                            source: "manual",
                                           })
                                         }
                                       >
@@ -1043,6 +1455,7 @@ export default function GatewayDetailPage() {
                                           providerAuthMutation.mutate({
                                             providerId: record.providerId,
                                             action: "disconnect",
+                                            source: "manual",
                                           })
                                         }
                                       >
@@ -1052,9 +1465,9 @@ export default function GatewayDetailPage() {
                                   ) : authMode === "oauth" ||
                                     authMode === "login" ? (
                                     <p className="mt-3 text-xs text-muted">
-                                      Interactive auth runs on the node session.
-                                      Use Connect, Refresh, or Disconnect here
-                                      to manage the saved provider profile.
+                                      {gatewayNodeClass === "cloud"
+                                        ? "Interactive sign-in runs on the remote node session. Use Connect, Refresh, or Disconnect here to manage the saved provider profile."
+                                        : "Interactive sign-in runs on the local node session. Use Connect, Refresh, or Disconnect here to manage the saved provider profile."}
                                     </p>
                                   ) : null}
                                 </div>

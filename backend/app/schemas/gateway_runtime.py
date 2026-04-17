@@ -668,6 +668,17 @@ class GatewayRuntimeSyncResponse(SQLModel):
     warnings: list[str] = Field(default_factory=list)
 
 
+class GatewayProviderAuthChallenge(SQLModel):
+    """Normalized provider challenge metadata returned by interactive auth."""
+
+    title: str | None = None
+    message: str | None = None
+    instructions: list[str] = Field(default_factory=list)
+    action_label: str | None = None
+    action_url: str | None = None
+    code: str | None = None
+
+
 class GatewayProviderAuthActionResponse(SQLModel):
     """Result returned after a provider auth lifecycle action."""
 
@@ -678,6 +689,7 @@ class GatewayProviderAuthActionResponse(SQLModel):
     connected_profile: str | None = None
     requires_login: bool = False
     message: str | None = None
+    challenge: GatewayProviderAuthChallenge | None = None
     warnings: list[str] = Field(default_factory=list)
 
 

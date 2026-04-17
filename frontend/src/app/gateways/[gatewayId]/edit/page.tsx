@@ -2,7 +2,7 @@
 
 export const dynamic = "force-dynamic";
 
-import { useMemo, useState } from "react";
+import { useMemo, useRef, useState } from "react";
 import { useParams, useRouter } from "next/navigation";
 
 import { useAuth } from "@/auth/clerk";
@@ -33,6 +33,10 @@ import {
   validateGatewayUrl,
 } from "@/lib/gateway-form";
 import { getGatewayRuntime } from "@/api/runtime-control";
+import {
+  buildGatewayConnectRedirectPath,
+  findPendingInteractiveProviderIds,
+} from "@/lib/gateway-interactive-auth";
 import type { NodeClass } from "@/lib/node-scope";
 
 function sanitizeProviderConfigs(
@@ -166,7 +170,10 @@ function sanitizeProviderSecretInputs(
   return sanitized.length > 0 ? sanitized : null;
 }
 
-function pickManagedList<T>(saved: T[] | null | undefined, observed: T[] | null | undefined): T[] {
+function pickManagedList<T>(
+  saved: T[] | null | undefined,
+  observed: T[] | null | undefined,
+): T[] {
   if ((saved?.length ?? 0) > 0) {
     return saved ?? [];
   }
@@ -208,9 +215,9 @@ export default function EditGatewayPage() {
   const [modelProfiles, setModelProfiles] = useState<
     GatewayUpdate["model_profiles"] | undefined
   >(undefined);
-  const [enabledModelRefs, setEnabledModelRefs] = useState<string[] | undefined>(
-    undefined,
-  );
+  const [enabledModelRefs, setEnabledModelRefs] = useState<
+    string[] | undefined
+  >(undefined);
   const [providerConfigs, setProviderConfigs] = useState<
     GatewayProviderConfig[] | undefined
   >(undefined);
@@ -238,6 +245,7 @@ export default function EditGatewayPage() {
   );
 
   const [error, setError] = useState<string | null>(null);
+  const pendingInteractiveProviderIdsRef = useRef<string[]>([]);
 
   const gatewayQuery = useGetGatewayApiV1GatewaysGatewayIdGet<
     getGatewayApiV1GatewaysGatewayIdGetResponse,
@@ -254,7 +262,12 @@ export default function EditGatewayPage() {
     mutation: {
       onSuccess: (result) => {
         if (result.status === 200) {
-          router.push(`/gateways/${result.data.id}`);
+          router.push(
+            buildGatewayConnectRedirectPath(
+              result.data.id,
+              pendingInteractiveProviderIdsRef.current,
+            ),
+          );
         }
       },
       onError: (err) => {
@@ -340,9 +353,10 @@ export default function EditGatewayPage() {
       ),
     [resolvedModelDefinitions],
   );
-  const availableModelRefs = configuredModelRefs.length > 0
-    ? configuredModelRefs
-    : verifiedModelRefs.map((entry) => entry.ref);
+  const availableModelRefs =
+    configuredModelRefs.length > 0
+      ? configuredModelRefs
+      : verifiedModelRefs.map((entry) => entry.ref);
   const resolvedProviderSecretRefs =
     providerSecretRefs ??
     pickManagedList(
@@ -359,7 +373,7 @@ export default function EditGatewayPage() {
       ? resolvedEnabledModelRefs.length < availableModelRefs.length
         ? resolvedEnabledModelRefs
         : null
-      : loadedGateway?.enabled_model_refs ?? null;
+      : (loadedGateway?.enabled_model_refs ?? null);
 
   const isLoading =
     gatewayQuery.isLoading ||
@@ -371,6 +385,20 @@ export default function EditGatewayPage() {
     Boolean(resolvedName.trim()) &&
     Boolean(resolvedGatewayUrl.trim()) &&
     Boolean(resolvedWorkspaceRoot.trim());
+  const pendingInteractiveProviderIds = useMemo(
+    () =>
+      findPendingInteractiveProviderIds({
+        nextAuthConfigs:
+          sanitizeProviderAuthConfigs(resolvedProviderAuthConfigs) ?? [],
+        previousAuthConfigs: loadedGateway?.provider_auth_configs ?? [],
+        runtimeProviders: runtimeSummary?.providers ?? [],
+      }),
+    [
+      loadedGateway?.provider_auth_configs,
+      resolvedProviderAuthConfigs,
+      runtimeSummary?.providers,
+    ],
+  );
 
   const handleSubmit = async (event: React.FormEvent<HTMLFormElement>) => {
     event.preventDefault();
@@ -391,7 +419,10 @@ export default function EditGatewayPage() {
       setError("Workspace root is required.");
       return;
     }
-    if (availableModelRefs.length > 0 && resolvedEnabledModelRefs.length === 0) {
+    if (
+      availableModelRefs.length > 0 &&
+      resolvedEnabledModelRefs.length === 0
+    ) {
       setError("Enable at least one node model for agents.");
       return;
     }
@@ -411,6 +442,7 @@ export default function EditGatewayPage() {
     }
 
     setError(null);
+    pendingInteractiveProviderIdsRef.current = pendingInteractiveProviderIds;
 
     const payload: GatewayUpdate = {
       name: resolvedName.trim(),
@@ -447,9 +479,7 @@ export default function EditGatewayPage() {
         forceRedirectUrl: `/gateways/${gatewayId}/edit`,
       }}
       title={
-        resolvedName.trim()
-          ? `Edit node — ${resolvedName.trim()}`
-          : "Edit node"
+        resolvedName.trim() ? `Edit node — ${resolvedName.trim()}` : "Edit node"
       }
       description="Update connection, model policy, and capability defaults for this node."
       isAdmin={isAdmin}
@@ -494,8 +524,16 @@ export default function EditGatewayPage() {
         canSubmit={canSubmit}
         workspaceRootPlaceholder={DEFAULT_WORKSPACE_ROOT}
         cancelLabel="Back"
-        submitLabel="Save changes"
-        submitBusyLabel="Saving…"
+        submitLabel={
+          pendingInteractiveProviderIds.length > 0
+            ? "Save changes and connect"
+            : "Save changes"
+        }
+        submitBusyLabel={
+          pendingInteractiveProviderIds.length > 0
+            ? "Saving and connecting…"
+            : "Saving…"
+        }
         onSubmit={handleSubmit}
         onCancel={() => router.push("/gateways")}
         onNameChange={setName}
@@ -538,7 +576,10 @@ export default function EditGatewayPage() {
             const patched = { ...source };
             (["general", "coder", "budget"] as const).forEach((profile) => {
               const selection = source?.[profile];
-              if (!selection?.primary_model || nextRefs.has(selection.primary_model)) {
+              if (
+                !selection?.primary_model ||
+                nextRefs.has(selection.primary_model)
+              ) {
                 return;
               }
               patched[profile] = {
