@@ -25,6 +25,10 @@
 
 # OS / editor
 .DS_Store
+._*
+**/._*
+__MACOSX
+**/__MACOSX
 *.swp
 *.swo
 

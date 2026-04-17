@@ -7,3 +7,7 @@ npm-debug.log*
 .env
 .env.*
 .git
+._*
+**/._*
+__MACOSX
+**/__MACOSX

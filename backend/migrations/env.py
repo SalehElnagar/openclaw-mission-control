@@ -12,6 +12,7 @@ from sqlalchemy import engine_from_config, pool
 from sqlmodel import SQLModel
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
+MIGRATIONS_DIR = Path(__file__).resolve().parent / "versions"
 if str(PROJECT_ROOT) not in sys.path:
     sys.path.append(str(PROJECT_ROOT))
 
@@ -41,11 +42,21 @@ def get_url() -> str:
     return _normalize_database_url(settings.database_url)
 
 
+def _prune_sidecar_migration_files() -> None:
+    """Remove macOS AppleDouble sidecars so Alembic only loads real migrations."""
+    for path in MIGRATIONS_DIR.glob("._*.py"):
+        try:
+            path.unlink()
+        except FileNotFoundError:
+            continue
+
+
 config.set_main_option("sqlalchemy.url", get_url())
 
 
 def run_migrations_offline() -> None:
     """Run migrations in offline mode without DB engine connectivity."""
+    _prune_sidecar_migration_files()
     context.configure(
         url=get_url(),
         target_metadata=target_metadata,
@@ -59,6 +70,7 @@ def run_migrations_offline() -> None:
 
 def run_migrations_online() -> None:
     """Run migrations in online mode using a live DB connection."""
+    _prune_sidecar_migration_files()
     configuration = config.get_section(config.config_ini_section) or {}
     configuration["sqlalchemy.url"] = get_url()
 
