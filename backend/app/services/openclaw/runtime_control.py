@@ -2349,6 +2349,10 @@ class GatewayRuntimeControlService(OpenClawDBService):
                 else _cloud_auth_helper_challenge(snapshot)
             ),
         )
+        if snapshot.status != "verified":
+            response.auth_state = "requires-login"
+            response.requires_login = True
+            response.connected_profile = response.connected_profile or auth_config.profile_id
         if snapshot.status == "verified" and response.auth_state == "verified":
             status_value = "ok"
         elif snapshot.status == "disconnected":

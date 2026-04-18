@@ -428,18 +428,28 @@ export default function GatewayDetailPage() {
       auth_state?: GatewayRuntimeProviderSummary["auth_state"];
       requires_login?: boolean | null;
       challenge?: GatewayProviderAuthChallenge | null;
+      warnings?: string[];
     },
   ) => {
     const responseMessage =
       result.message ?? `Provider ${providerId} ${result.auth_state ?? "updated"}.`;
+    const hasChallenge = Boolean(result.challenge);
+    const hasWarnings = (result.warnings?.length ?? 0) > 0;
+    const looksBlocked =
+      hasWarnings ||
+      /could not|failed|error|denied|unknown option|missing prerequisite/i.test(
+        responseMessage,
+      );
     const progressStatus: InteractiveConnectProgress["status"] =
-      result.auth_state === "verified" && result.requires_login !== true
-        ? "verified"
-        : result.challenge ||
-            result.requires_login ||
-            result.auth_state === "requires-login"
-          ? "pending"
-          : "error";
+      hasChallenge
+        ? "pending"
+        : looksBlocked
+          ? "error"
+          : result.auth_state === "verified" && result.requires_login !== true
+            ? "verified"
+            : result.requires_login || result.auth_state === "requires-login"
+              ? "pending"
+              : "error";
 
     if (action === "disconnect") {
       setInteractiveConnectProgress((current) => {
@@ -509,6 +519,7 @@ export default function GatewayDetailPage() {
           auth_state: result.data.auth_state,
           requires_login: result.data.requires_login,
           challenge: result.data.challenge ?? null,
+          warnings: result.data.warnings ?? [],
         });
       }
     },
@@ -572,6 +583,7 @@ export default function GatewayDetailPage() {
         auth_state: result.data.auth_state,
         requires_login: result.data.requires_login,
         challenge: result.data.challenge ?? null,
+        warnings: result.data.warnings ?? [],
       });
       setInteractiveChallengeInputs((current) => ({
         ...current,
