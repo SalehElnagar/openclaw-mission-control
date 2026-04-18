@@ -20,6 +20,7 @@ from app.models.skills import GatewayInstalledSkill
 from app.schemas.common import OkResponse
 from app.schemas.gateway_runtime import (
     GatewayProviderAuthActionResponse,
+    GatewayProviderAuthChallengeInputRequest,
     GatewayRuntimeSummary,
     GatewayRuntimeSyncRequest,
     GatewayRuntimeSyncResponse,
@@ -435,6 +436,33 @@ async def disconnect_gateway_provider_auth(
     return await GatewayRuntimeControlService(session).disconnect_provider_auth(
         gateway=gateway,
         provider_id=provider_id,
+        auth=auth,
+    )
+
+
+@router.post(
+    "/{gateway_id}/providers/{provider_id}/challenge-input",
+    response_model=GatewayProviderAuthActionResponse,
+)
+async def submit_gateway_provider_challenge_input(
+    gateway_id: UUID,
+    provider_id: str,
+    payload: GatewayProviderAuthChallengeInputRequest,
+    session: AsyncSession = SESSION_DEP,
+    auth: AuthContext = AUTH_DEP,
+    ctx: OrganizationContext = ORG_ADMIN_DEP,
+) -> GatewayProviderAuthActionResponse:
+    """Submit follow-up input for an active interactive provider auth session."""
+    service = GatewayAdminLifecycleService(session)
+    gateway = await service.require_gateway(
+        gateway_id=gateway_id,
+        organization_id=ctx.organization.id,
+    )
+    return await GatewayRuntimeControlService(session).submit_provider_auth_challenge_input(
+        gateway=gateway,
+        provider_id=provider_id,
+        session_id=payload.session_id,
+        input_text=payload.input_text,
         auth=auth,
     )
 

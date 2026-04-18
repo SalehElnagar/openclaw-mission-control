@@ -19,6 +19,7 @@ from app.models.gateways import Gateway
 from app.models.organizations import Organization
 from app.schemas.gateway_runtime import GatewayRuntimeSyncRequest
 from app.services.openclaw import runtime_control
+from app.services.openclaw.auth_helper import OpenClawAuthHelperChallengeSnapshot
 from app.services.openclaw.gateway_agent_pack import MAIN_AGENT_SPEC, STARTER_PACK_PRIMARY_MODEL_REF
 from app.services.openclaw.gateway_rpc import OpenClawGatewayError
 from app.services.openclaw.runtime_control import (
@@ -485,6 +486,58 @@ async def test_runtime_summary_exposes_provider_auth_status(
     assert provider.label == "Google Gemini CLI"
     assert provider.connected_profile == "google-gemini-cli:managed"
     assert provider.auth_state == "verified"
+
+
+@pytest.mark.asyncio
+async def test_runtime_summary_marks_interactive_provider_requires_login_without_verified_models(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    gateway = Gateway(
+        organization_id=uuid4(),
+        name="gateway",
+        node_class="cloud",
+        url="ws://gateway.example/ws",
+        workspace_root="/tmp/workspaces",
+        provider_auth_configs=[
+            {
+                "provider_id": "google-gemini-cli",
+                "auth_mode": "login",
+                "profile_id": "google-gemini-cli:managed",
+            }
+        ],
+    )
+    service = GatewayRuntimeControlService(session=object())  # type: ignore[arg-type]
+
+    async def _fake_runtime_catalog(_gateway: Gateway) -> list[object]:
+        return []
+
+    async def _fake_load_gateway_config(_gateway: Gateway) -> tuple[str | None, dict[str, object]]:
+        return (
+            "hash",
+            {
+                "auth": {
+                    "profiles": {
+                        "google-gemini-cli:managed": {
+                            "provider": "google-gemini-cli",
+                            "mode": "oauth",
+                        }
+                    },
+                    "order": {
+                        "google-gemini-cli": ["google-gemini-cli:managed"],
+                    },
+                }
+            },
+        )
+
+    monkeypatch.setattr(service, "runtime_catalog", _fake_runtime_catalog)
+    monkeypatch.setattr(service, "_load_gateway_config", _fake_load_gateway_config)
+
+    summary = await service.runtime_summary(gateway=gateway)
+
+    provider = summary.providers[0]
+    assert provider.connected_profile == "google-gemini-cli:managed"
+    assert provider.auth_state == "requires-login"
+    assert provider.requires_login is True
 
 
 @pytest.mark.asyncio
@@ -1331,7 +1384,7 @@ async def test_reconcile_gateway_runtime_repairs_stuck_agents(
 
 
 @pytest.mark.asyncio
-async def test_connect_provider_auth_uses_gateway_rpc_for_cloud_login(
+async def test_connect_provider_auth_uses_cloud_auth_helper_for_cloud_login(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     class _SessionStub:
@@ -1386,16 +1439,39 @@ async def test_connect_provider_auth_uses_gateway_rpc_for_cloud_login(
             ],
         )
 
-    async def _fake_openclaw_call(
-        method: str,
-        params: dict[str, object] | None = None,
+    class _FakeHelperClient:
+        async def start_session(
+            self,
+            *,
+            gateway_id: str,
+            provider_id: str,
+            provider_label: str | None = None,
+            session_id: str | None = None,
+        ) -> runtime_control.OpenClawAuthHelperSessionSnapshot:
+            captured["gateway_id"] = gateway_id
+            captured["provider_id"] = provider_id
+            captured["provider_label"] = provider_label
+            captured["session_id"] = session_id
+            return runtime_control.OpenClawAuthHelperSessionSnapshot(
+                session_id="session-cloud-1",
+                provider_id=provider_id,
+                status="verified",
+                message="Cloud sign-in verified.",
+            )
+
+    async def _fake_reconcile_gateway_runtime(
         *,
-        config: object,
-    ) -> object:
-        captured["method"] = method
-        captured["params"] = params
-        assert config is not None
-        return {}
+        gateway: Gateway,
+        auth: AuthContext,
+        request: runtime_control.GatewayRuntimeSyncRequest,
+    ) -> runtime_control.GatewayRuntimeSyncResponse:
+        assert gateway.id is not None
+        assert auth.actor_type == "user"
+        assert request.sync_models is True
+        return runtime_control.GatewayRuntimeSyncResponse(
+            gateway_id=gateway.id,
+            sync_generation=1,
+        )
 
     monkeypatch.setattr(
         service,
@@ -1403,7 +1479,16 @@ async def test_connect_provider_auth_uses_gateway_rpc_for_cloud_login(
         _fake_load_gateway_config_with_retry,
     )
     monkeypatch.setattr(service, "runtime_summary", _fake_runtime_summary)
-    monkeypatch.setattr(runtime_control, "openclaw_call", _fake_openclaw_call)
+    monkeypatch.setattr(
+        runtime_control,
+        "_cloud_auth_helper_client",
+        lambda: _FakeHelperClient(),
+    )
+    monkeypatch.setattr(
+        service,
+        "reconcile_gateway_runtime",
+        _fake_reconcile_gateway_runtime,
+    )
 
     response = await service.connect_provider_auth(
         gateway=gateway,
@@ -1414,12 +1499,12 @@ async def test_connect_provider_auth_uses_gateway_rpc_for_cloud_login(
         ),
     )
 
-    assert captured["method"] == "providers.connect"
-    assert captured["params"] == {
-        "providerId": "google-gemini-cli",
-        "profileId": "google-gemini-cli:managed",
-    }
+    assert captured["gateway_id"] == str(gateway.id)
+    assert captured["provider_id"] == "google-gemini-cli"
+    assert captured["provider_label"] is None
+    assert captured["session_id"] is None
     assert response.auth_state == "verified"
+    assert gateway.provider_auth_sessions is None
 
 
 @pytest.mark.asyncio
@@ -1570,31 +1655,40 @@ async def test_connect_provider_auth_returns_normalized_challenge_payload(
             ],
         )
 
-    async def _fake_openclaw_call(
-        method: str,
-        params: dict[str, object] | None = None,
-        *,
-        config: object,
-    ) -> object:
-        assert method == "providers.connect"
-        assert params == {
-            "providerId": "github-copilot",
-            "profileId": "github-copilot:managed",
-            "displayName": "GitHub Copilot",
-        }
-        assert config is not None
-        return {
-            "challenge": {
-                "title": "GitHub Copilot sign-in",
-                "instructions": [
-                    "Open the authorization page.",
-                    "Approve the node session.",
-                ],
-                "actionUrl": "https://github.com/login/device",
-                "buttonLabel": "Open GitHub",
-                "userCode": "ABCD-EFGH",
-            }
-        }
+    class _FakeHelperClient:
+        async def start_session(
+            self,
+            *,
+            gateway_id: str,
+            provider_id: str,
+            provider_label: str | None = None,
+            session_id: str | None = None,
+        ) -> runtime_control.OpenClawAuthHelperSessionSnapshot:
+            assert gateway_id == str(gateway.id)
+            assert provider_id == "github-copilot"
+            assert provider_label == "GitHub Copilot"
+            assert session_id is None
+            return runtime_control.OpenClawAuthHelperSessionSnapshot(
+                session_id="session-copilot-1",
+                provider_id=provider_id,
+                status="waiting-for-browser",
+                message="Waiting for browser approval.",
+                challenge=OpenClawAuthHelperChallengeSnapshot(
+                    session_id="session-copilot-1",
+                    kind="device-code",
+                    title="GitHub Copilot sign-in",
+                    message="Approve the node session.",
+                    instructions=[
+                        "Open the authorization page.",
+                        "Approve the node session.",
+                    ],
+                    action_label="Open GitHub",
+                    action_url="https://github.com/login/device",
+                    code="ABCD-EFGH",
+                    needs_input=False,
+                    poll_after_ms=3000,
+                ),
+            )
 
     monkeypatch.setattr(
         service,
@@ -1602,7 +1696,11 @@ async def test_connect_provider_auth_returns_normalized_challenge_payload(
         _fake_load_gateway_config_with_retry,
     )
     monkeypatch.setattr(service, "runtime_summary", _fake_runtime_summary)
-    monkeypatch.setattr(runtime_control, "openclaw_call", _fake_openclaw_call)
+    monkeypatch.setattr(
+        runtime_control,
+        "_cloud_auth_helper_client",
+        lambda: _FakeHelperClient(),
+    )
 
     response = await service.connect_provider_auth(
         gateway=gateway,
@@ -1624,6 +1722,138 @@ async def test_connect_provider_auth_returns_normalized_challenge_payload(
     assert response.challenge.action_label == "Open GitHub"
     assert response.challenge.action_url == "https://github.com/login/device"
     assert response.challenge.code == "ABCD-EFGH"
+    assert response.challenge.session_id == "session-copilot-1"
+    assert response.challenge.kind == "device-code"
+    assert response.challenge.poll_after_ms == 3000
+    assert gateway.provider_auth_sessions is not None
+    assert gateway.provider_auth_sessions["github-copilot"]["session_id"] == "session-copilot-1"
+
+
+@pytest.mark.asyncio
+async def test_submit_provider_auth_challenge_input_uses_cloud_helper_session(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    class _SessionStub:
+        def add(self, _value: object) -> None:
+            return None
+
+        async def commit(self) -> None:
+            return None
+
+    gateway = Gateway(
+        organization_id=uuid4(),
+        name="gateway",
+        node_class="cloud",
+        url="ws://gateway.example/ws",
+        workspace_root="/tmp/workspaces",
+        provider_auth_configs=[
+            {
+                "provider_id": "google-gemini-cli",
+                "auth_mode": "login",
+                "profile_id": "google-gemini-cli:managed",
+            }
+        ],
+        provider_auth_sessions={
+            "google-gemini-cli": {
+                "session_id": "session-gemini-1",
+                "provider_id": "google-gemini-cli",
+                "status": "waiting-for-input",
+            }
+        },
+    )
+    service = GatewayRuntimeControlService(session=_SessionStub())  # type: ignore[arg-type]
+    captured: dict[str, object] = {}
+
+    async def _fake_load_gateway_config_with_retry(
+        _gateway: Gateway,
+        *,
+        context: str,
+    ) -> tuple[str | None, dict[str, object]]:
+        assert "provider auth resolve" in context
+        return ("hash", {})
+
+    async def _fake_runtime_summary(*, gateway: Gateway) -> runtime_control.GatewayRuntimeSummary:
+        return runtime_control.GatewayRuntimeSummary(
+            gateway_id=gateway.id,
+            node_class=gateway.node_class,
+            runtime_sync_generation=1,
+            providers=[
+                runtime_control.GatewayRuntimeProviderSummary(
+                    id="google-gemini-cli",
+                    provider_type="google-gemini-cli",
+                    label="Google Gemini CLI",
+                    auth_mode="login",
+                    auth_state="verified",
+                    connected_profile="google-gemini-cli:managed",
+                    verification_state="runtime",
+                    configured_model_count=3,
+                    verified_model_count=3,
+                )
+            ],
+        )
+
+    class _FakeHelperClient:
+        async def submit_challenge_input(
+            self,
+            *,
+            session_id: str,
+            input_text: str,
+        ) -> runtime_control.OpenClawAuthHelperSessionSnapshot:
+            captured["session_id"] = session_id
+            captured["input_text"] = input_text
+            return runtime_control.OpenClawAuthHelperSessionSnapshot(
+                session_id=session_id,
+                provider_id="google-gemini-cli",
+                status="verified",
+                message="Gemini sign-in verified.",
+            )
+
+    async def _fake_reconcile_gateway_runtime(
+        *,
+        gateway: Gateway,
+        auth: AuthContext,
+        request: runtime_control.GatewayRuntimeSyncRequest,
+    ) -> runtime_control.GatewayRuntimeSyncResponse:
+        assert gateway.id is not None
+        assert auth.actor_type == "user"
+        assert request.sync_models is True
+        return runtime_control.GatewayRuntimeSyncResponse(
+            gateway_id=gateway.id,
+            sync_generation=1,
+        )
+
+    monkeypatch.setattr(
+        service,
+        "_load_gateway_config_with_retry",
+        _fake_load_gateway_config_with_retry,
+    )
+    monkeypatch.setattr(service, "runtime_summary", _fake_runtime_summary)
+    monkeypatch.setattr(
+        runtime_control,
+        "_cloud_auth_helper_client",
+        lambda: _FakeHelperClient(),
+    )
+    monkeypatch.setattr(
+        service,
+        "reconcile_gateway_runtime",
+        _fake_reconcile_gateway_runtime,
+    )
+
+    response = await service.submit_provider_auth_challenge_input(
+        gateway=gateway,
+        provider_id="google-gemini-cli",
+        session_id="session-gemini-1",
+        input_text="http://localhost:8085/oauth2callback?code=abc",
+        auth=AuthContext(
+            actor_type="user",
+            user=SimpleNamespace(id=uuid4(), preferred_name=None, name="User", email=None),
+        ),
+    )
+
+    assert captured["session_id"] == "session-gemini-1"
+    assert captured["input_text"] == "http://localhost:8085/oauth2callback?code=abc"
+    assert response.auth_state == "verified"
+    assert gateway.provider_auth_sessions is None
 
 
 @pytest.mark.asyncio

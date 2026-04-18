@@ -39,6 +39,10 @@ class Gateway(QueryModel, table=True):
         default=None,
         sa_column=Column(JSON),
     )
+    provider_auth_sessions: dict[str, Any] | None = Field(
+        default=None,
+        sa_column=Column(JSON),
+    )
     provider_secret_refs: list[dict[str, Any]] | None = Field(
         default=None,
         sa_column=Column(JSON),

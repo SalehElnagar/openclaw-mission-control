@@ -17,6 +17,7 @@ import { DashboardPageLayout } from "@/components/templates/DashboardPageLayout"
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { ConfirmActionDialog } from "@/components/ui/confirm-action-dialog";
+import { Input } from "@/components/ui/input";
 
 import { ApiError } from "@/api/mutator";
 import {
@@ -57,6 +58,7 @@ import {
   type GatewayProviderAuthChallenge,
   type GatewayRuntimeCatalogEntry,
   type GatewayRuntimeProviderSummary,
+  submitGatewayProviderAuthChallengeInput,
   mutateGatewayProviderAuth,
   listGatewayAudit,
   pullGatewayTelemetry,
@@ -197,6 +199,17 @@ type InteractiveConnectProgress = {
   challenge?: GatewayProviderAuthChallenge | null;
 };
 
+const interactiveProgressNeedsPolling = (
+  progress?: InteractiveConnectProgress | null,
+): boolean =>
+  progress?.status === "pending" &&
+  progress.challenge?.needs_input !== true &&
+  Boolean(progress.challenge?.session_id);
+
+const interactiveProgressResolved = (
+  progress?: InteractiveConnectProgress | null,
+): boolean => progress?.status === "verified" || progress?.status === "error";
+
 export default function GatewayDetailPage() {
   const router = useRouter();
   const pathname = usePathname();
@@ -216,6 +229,9 @@ export default function GatewayDetailPage() {
   >([]);
   const [interactiveConnectProgress, setInteractiveConnectProgress] = useState<
     Record<string, InteractiveConnectProgress>
+  >({});
+  const [interactiveChallengeInputs, setInteractiveChallengeInputs] = useState<
+    Record<string, string>
   >({});
   const hydratedQueueSignatureRef = useRef<string>("");
   const agentsKey = getListAgentsApiV1AgentsGetQueryKey(
@@ -404,6 +420,65 @@ export default function GatewayDetailPage() {
       });
     },
   });
+  const applyProviderAuthResult = (
+    providerId: string,
+    action: "connect" | "refresh" | "disconnect" | "challenge-input",
+    result: {
+      message?: string | null;
+      auth_state?: GatewayRuntimeProviderSummary["auth_state"];
+      requires_login?: boolean | null;
+      challenge?: GatewayProviderAuthChallenge | null;
+    },
+  ) => {
+    const responseMessage =
+      result.message ?? `Provider ${providerId} ${result.auth_state ?? "updated"}.`;
+    const progressStatus: InteractiveConnectProgress["status"] =
+      result.auth_state === "verified" && result.requires_login !== true
+        ? "verified"
+        : result.challenge ||
+            result.requires_login ||
+            result.auth_state === "requires-login"
+          ? "pending"
+          : "error";
+
+    if (action === "disconnect") {
+      setInteractiveConnectProgress((current) => {
+        const next = { ...current };
+        delete next[providerId];
+        return next;
+      });
+      setInteractiveChallengeInputs((current) => {
+        const next = { ...current };
+        delete next[providerId];
+        return next;
+      });
+      setPendingConnectProviderIds((current) =>
+        current.filter((queuedProviderId) => queuedProviderId !== providerId),
+      );
+    } else {
+      setInteractiveConnectProgress((current) => ({
+        ...current,
+        [providerId]: {
+          providerId,
+          status: progressStatus,
+          message: responseMessage,
+          challenge: result.challenge ?? null,
+        },
+      }));
+      if (progressStatus === "verified" || progressStatus === "error") {
+        setPendingConnectProviderIds((current) =>
+          current.filter((queuedProviderId) => queuedProviderId !== providerId),
+        );
+      }
+    }
+    setControlMessage(responseMessage);
+    queryClient.invalidateQueries({
+      queryKey: ["gateway-runtime", gatewayId],
+    });
+    queryClient.invalidateQueries({
+      queryKey: getGetGatewayApiV1GatewaysGatewayIdGetQueryKey(gatewayId ?? ""),
+    });
+  };
   const providerAuthMutation = useMutation({
     mutationFn: (variables?: {
       providerId: string;
@@ -428,42 +503,14 @@ export default function GatewayDetailPage() {
       },
     ) => {
       if (result.status !== 200) return;
-      const responseMessage =
-        result.data.message ??
-        `Provider ${result.data.provider_id} ${result.data.auth_state ?? "updated"}.`;
-      const progressStatus: InteractiveConnectProgress["status"] =
-        result.data.auth_state === "verified" &&
-        result.data.requires_login !== true
-          ? "verified"
-          : result.data.challenge ||
-              result.data.requires_login ||
-              result.data.auth_state === "requires-login"
-            ? "pending"
-            : "pending";
-
-      if (variables?.action === "connect" && variables.providerId) {
-        setInteractiveConnectProgress((current) => ({
-          ...current,
-          [variables.providerId]: {
-            providerId: variables.providerId,
-            status: progressStatus,
-            message: responseMessage,
-            challenge: result.data.challenge ?? null,
-          },
-        }));
-        setPendingConnectProviderIds((current) =>
-          current.filter((providerId) => providerId !== variables.providerId),
-        );
+      if (variables?.providerId) {
+        applyProviderAuthResult(variables.providerId, variables.action, {
+          message: result.data.message,
+          auth_state: result.data.auth_state,
+          requires_login: result.data.requires_login,
+          challenge: result.data.challenge ?? null,
+        });
       }
-      setControlMessage(responseMessage);
-      queryClient.invalidateQueries({
-        queryKey: ["gateway-runtime", gatewayId],
-      });
-      queryClient.invalidateQueries({
-        queryKey: getGetGatewayApiV1GatewaysGatewayIdGetQueryKey(
-          gatewayId ?? "",
-        ),
-      });
     },
     onError: (
       err: Error,
@@ -473,7 +520,7 @@ export default function GatewayDetailPage() {
         source?: "manual" | "auto-queue";
       },
     ) => {
-      if (variables?.action === "connect" && variables.providerId) {
+      if (variables?.providerId) {
         setInteractiveConnectProgress((current) => ({
           ...current,
           [variables.providerId]: {
@@ -488,6 +535,67 @@ export default function GatewayDetailPage() {
         );
       }
       setControlMessage(err.message || "Provider auth action failed.");
+    },
+  });
+  const providerAuthChallengeInputMutation = useMutation<
+    Awaited<ReturnType<typeof submitGatewayProviderAuthChallengeInput>>,
+    Error,
+    {
+      providerId: string;
+      sessionId: string;
+      inputText: string;
+    }
+  >({
+    mutationFn: (variables) => {
+      return submitGatewayProviderAuthChallengeInput(
+        gatewayId ?? "",
+        variables.providerId,
+        {
+          session_id: variables.sessionId,
+          input_text: variables.inputText,
+        },
+      );
+    },
+    onSuccess: (
+      result,
+      variables: {
+        providerId: string;
+        sessionId: string;
+        inputText: string;
+      },
+    ) => {
+      if (result.status !== 200) {
+        return;
+      }
+      applyProviderAuthResult(variables.providerId, "challenge-input", {
+        message: result.data.message,
+        auth_state: result.data.auth_state,
+        requires_login: result.data.requires_login,
+        challenge: result.data.challenge ?? null,
+      });
+      setInteractiveChallengeInputs((current) => ({
+        ...current,
+        [variables.providerId]:
+          result.data.challenge?.needs_input === true ? variables.inputText : "",
+      }));
+    },
+    onError: (
+      err: Error,
+      variables: { providerId: string; sessionId: string; inputText: string },
+    ) => {
+      setInteractiveConnectProgress((current) => ({
+        ...current,
+        [variables.providerId]: {
+          providerId: variables.providerId,
+          status: "error",
+          message: err.message || "Provider auth input failed.",
+          challenge: current[variables.providerId]?.challenge ?? null,
+        },
+      }));
+      setPendingConnectProviderIds((current) =>
+        current.filter((providerId) => providerId !== variables.providerId),
+      );
+      setControlMessage(err.message || "Provider auth input failed.");
     },
   });
   const installSkillMutation =
@@ -747,12 +855,38 @@ export default function GatewayDetailPage() {
         return next;
       });
     });
+  }, [pendingConnectProviderIdsFromUrl]);
 
+  useEffect(() => {
+    if (!pendingConnectProviderIdsFromUrl.length) {
+      return;
+    }
+    const allUrlProvidersSettled = pendingConnectProviderIdsFromUrl.every(
+      (providerId) => {
+        const progress = interactiveConnectProgress[providerId] ?? null;
+        const runtimeRecord = providerAuthRecordById.get(providerId)?.runtime;
+        return (
+          interactiveProgressResolved(progress) ||
+          (runtimeRecord?.auth_state === "verified" &&
+            runtimeRecord.requires_login !== true)
+        );
+      },
+    );
+    if (!allUrlProvidersSettled) {
+      return;
+    }
     const nextParams = new URLSearchParams(searchParams.toString());
     nextParams.delete("connectProvider");
     const nextQuery = nextParams.toString();
     router.replace(nextQuery ? `${pathname}?${nextQuery}` : pathname);
-  }, [pathname, pendingConnectProviderIdsFromUrl, router, searchParams]);
+  }, [
+    interactiveConnectProgress,
+    pathname,
+    pendingConnectProviderIdsFromUrl,
+    providerAuthRecordById,
+    router,
+    searchParams,
+  ]);
 
   useEffect(() => {
     const nextProviderId = pendingConnectProviderIds[0];
@@ -761,7 +895,8 @@ export default function GatewayDetailPage() {
       !isSignedIn ||
       !isAdmin ||
       !nextProviderId ||
-      providerAuthMutation.isPending
+      providerAuthMutation.isPending ||
+      providerAuthChallengeInputMutation.isPending
     ) {
       return;
     }
@@ -772,6 +907,14 @@ export default function GatewayDetailPage() {
       nextRecord?.runtime?.auth_mode ??
       null;
     if (authMode && !isInteractiveProviderAuthMode(authMode)) {
+      startTransition(() => {
+        setPendingConnectProviderIds((current) =>
+          current.filter((providerId) => providerId !== nextProviderId),
+        );
+      });
+      return;
+    }
+    if (interactiveProgressResolved(interactiveConnectProgress[nextProviderId])) {
       startTransition(() => {
         setPendingConnectProviderIds((current) =>
           current.filter((providerId) => providerId !== nextProviderId),
@@ -799,7 +942,10 @@ export default function GatewayDetailPage() {
       });
       return;
     }
-    if (interactiveConnectProgress[nextProviderId]?.status === "starting") {
+    if (
+      interactiveConnectProgress[nextProviderId]?.status === "starting" ||
+      interactiveConnectProgress[nextProviderId]?.status === "pending"
+    ) {
       return;
     }
 
@@ -827,6 +973,40 @@ export default function GatewayDetailPage() {
     pendingConnectProviderIds,
     providerAuthMutation,
     providerAuthRecordById,
+  ]);
+
+  useEffect(() => {
+    const pollingTarget = interactivePanelProviderIds.find((providerId) =>
+      interactiveProgressNeedsPolling(interactiveConnectProgress[providerId]),
+    );
+    if (
+      !gatewayId ||
+      !isSignedIn ||
+      !isAdmin ||
+      !pollingTarget ||
+      providerAuthMutation.isPending ||
+      providerAuthChallengeInputMutation.isPending
+    ) {
+      return;
+    }
+    const pollAfterMs =
+      interactiveConnectProgress[pollingTarget]?.challenge?.poll_after_ms ??
+      3_000;
+    const timeout = window.setTimeout(() => {
+      providerAuthMutation.mutate({
+        providerId: pollingTarget,
+        action: "refresh",
+        source: "auto-queue",
+      });
+    }, Math.max(pollAfterMs, 750));
+    return () => window.clearTimeout(timeout);
+  }, [
+    gatewayId,
+    interactiveConnectProgress,
+    interactivePanelProviderIds,
+    isAdmin,
+    isSignedIn,
+    providerAuthMutation,
   ]);
   const handleDelete = () => {
     if (!deleteTarget) return;
@@ -1239,6 +1419,8 @@ export default function GatewayDetailPage() {
                                     ? "This provider still needs an interactive sign-in on the node."
                                     : "Queued to start from this page.");
                               const challenge = progress?.challenge ?? null;
+                              const challengeInputValue =
+                                interactiveChallengeInputs[providerId] ?? "";
 
                               return (
                                 <div
@@ -1313,6 +1495,65 @@ export default function GatewayDetailPage() {
                                           "Open sign-in link"}
                                       </a>
                                     </div>
+                                  ) : null}
+                                  {challenge?.needs_input &&
+                                  challenge?.session_id ? (
+                                    <form
+                                      className="mt-3 space-y-2"
+                                      onSubmit={(event) => {
+                                        event.preventDefault();
+                                        if (
+                                          !challenge.session_id ||
+                                          providerAuthChallengeInputMutation.isPending
+                                        ) {
+                                          return;
+                                        }
+                                        providerAuthChallengeInputMutation.mutate(
+                                          {
+                                            providerId,
+                                            sessionId: challenge.session_id,
+                                            inputText: challengeInputValue,
+                                          },
+                                        );
+                                      }}
+                                    >
+                                      <label
+                                        htmlFor={`provider-auth-input-${providerId}`}
+                                        className="text-[11px] uppercase tracking-wide text-quiet"
+                                      >
+                                        {challenge.input_label ??
+                                          "Paste the callback URL"}
+                                      </label>
+                                      <Input
+                                        id={`provider-auth-input-${providerId}`}
+                                        type="text"
+                                        value={challengeInputValue}
+                                        placeholder="http://localhost:8085/oauth2callback?..."
+                                        onChange={(event) =>
+                                          setInteractiveChallengeInputs(
+                                            (current) => ({
+                                              ...current,
+                                              [providerId]: event.target.value,
+                                            }),
+                                          )
+                                        }
+                                      />
+                                      <div className="flex justify-end">
+                                        <Button
+                                          type="submit"
+                                          size="sm"
+                                          disabled={
+                                            providerAuthChallengeInputMutation.isPending ||
+                                            challengeInputValue.trim().length ===
+                                              0
+                                          }
+                                        >
+                                          {providerAuthChallengeInputMutation.isPending
+                                            ? "Submitting…"
+                                            : "Submit"}
+                                        </Button>
+                                      </div>
+                                    </form>
                                   ) : null}
                                 </div>
                               );
@@ -1415,7 +1656,8 @@ export default function GatewayDetailPage() {
                                         variant="outline"
                                         size="sm"
                                         disabled={
-                                          providerAuthMutation.isPending
+                                          providerAuthMutation.isPending ||
+                                          providerAuthChallengeInputMutation.isPending
                                         }
                                         onClick={() =>
                                           providerAuthMutation.mutate({
@@ -1432,7 +1674,8 @@ export default function GatewayDetailPage() {
                                         variant="outline"
                                         size="sm"
                                         disabled={
-                                          providerAuthMutation.isPending
+                                          providerAuthMutation.isPending ||
+                                          providerAuthChallengeInputMutation.isPending
                                         }
                                         onClick={() =>
                                           providerAuthMutation.mutate({
@@ -1449,7 +1692,8 @@ export default function GatewayDetailPage() {
                                         variant="outline"
                                         size="sm"
                                         disabled={
-                                          providerAuthMutation.isPending
+                                          providerAuthMutation.isPending ||
+                                          providerAuthChallengeInputMutation.isPending
                                         }
                                         onClick={() =>
                                           providerAuthMutation.mutate({

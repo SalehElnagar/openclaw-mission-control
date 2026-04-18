@@ -204,10 +204,24 @@ def test_toolchain_catalog_exposes_guided_presets() -> None:
     assert copilot is not None
     assert copilot.supported_auth_modes == ["oauth", "login"]
     assert copilot.node_classes == ["cloud", "local"]
+    assert [model.model_id for model in copilot.models] == [
+        "gpt-4o",
+        "gpt-4.1",
+        "gpt-5",
+        "gpt-5.4",
+        "claude-sonnet-4-6",
+        "gemini-2.5-pro",
+    ]
     gemini_cli = provider_preset_by_id("google-gemini-cli")
     assert gemini_cli is not None
     assert gemini_cli.supported_auth_modes == ["login"]
     assert gemini_cli.node_classes == ["cloud", "local"]
+    assert [model.model_id for model in gemini_cli.models] == [
+        "gemini-3-flash-preview",
+        "gemini-3.1-pro-preview",
+        "gemini-2.5-flash",
+        "gemini-2.5-pro",
+    ]
 
 
 @pytest.mark.asyncio

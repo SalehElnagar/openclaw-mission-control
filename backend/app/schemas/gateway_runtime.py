@@ -671,12 +671,24 @@ class GatewayRuntimeSyncResponse(SQLModel):
 class GatewayProviderAuthChallenge(SQLModel):
     """Normalized provider challenge metadata returned by interactive auth."""
 
+    session_id: str | None = None
+    kind: str | None = None
     title: str | None = None
     message: str | None = None
     instructions: list[str] = Field(default_factory=list)
     action_label: str | None = None
     action_url: str | None = None
     code: str | None = None
+    needs_input: bool = False
+    input_label: str | None = None
+    poll_after_ms: int | None = None
+
+
+class GatewayProviderAuthChallengeInputRequest(SQLModel):
+    """User-supplied interactive auth session input."""
+
+    session_id: str
+    input_text: str
 
 
 class GatewayProviderAuthActionResponse(SQLModel):

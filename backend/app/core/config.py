@@ -88,6 +88,7 @@ class Settings(BaseSettings):
     managed_secret_backend: str = "database"
     managed_secret_encryption_key: str = ""
     azure_key_vault_url: str = ""
+    openclaw_auth_helper_socket_path: str = ""
 
     # Logging
     log_level: str = "INFO"

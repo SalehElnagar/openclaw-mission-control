@@ -10,6 +10,7 @@ from fastapi import HTTPException, status
 from sqlmodel import col
 
 from app.core.auth import AuthContext
+from app.core.config import settings
 from app.core.time import utcnow
 from app.models.agents import Agent
 from app.models.boards import Board
@@ -42,6 +43,11 @@ from app.schemas.gateway_runtime import (
 from app.schemas.telemetry import UsageSampleCreate
 from app.services.activity_log import actor_fields_from_auth, record_activity
 from app.services.gateway_secret_store import GatewaySecretStoreService
+from app.services.openclaw.auth_helper import (
+    OpenClawAuthHelperClient,
+    OpenClawAuthHelperError,
+    OpenClawAuthHelperSessionSnapshot,
+)
 from app.services.openclaw.db_service import OpenClawDBService
 from app.services.openclaw.gateway_agent_pack import (
     MAIN_AGENT_SPEC,
@@ -265,6 +271,95 @@ def _normalize_provider_auth_challenge(
     ):
         return None
     return challenge
+
+
+def _gateway_provider_auth_session_records(gateway: Gateway) -> dict[str, dict[str, Any]]:
+    raw = gateway.provider_auth_sessions
+    if not isinstance(raw, dict):
+        return {}
+    records: dict[str, dict[str, Any]] = {}
+    for provider_id, payload in raw.items():
+        if not isinstance(provider_id, str) or not provider_id.strip():
+            continue
+        if not isinstance(payload, dict):
+            continue
+        records[provider_id.strip()] = dict(payload)
+    return records
+
+
+def _gateway_provider_auth_session_id(gateway: Gateway, provider_id: str) -> str | None:
+    payload = _gateway_provider_auth_session_records(gateway).get(provider_id)
+    if not isinstance(payload, dict):
+        return None
+    session_id = payload.get("session_id")
+    return session_id.strip() if isinstance(session_id, str) and session_id.strip() else None
+
+
+def _store_gateway_provider_auth_session(
+    gateway: Gateway,
+    *,
+    provider_id: str,
+    snapshot: OpenClawAuthHelperSessionSnapshot,
+) -> None:
+    sessions = _gateway_provider_auth_session_records(gateway)
+    sessions[provider_id] = {
+        "session_id": snapshot.session_id,
+        "provider_id": snapshot.provider_id,
+        "status": snapshot.status,
+        "message": snapshot.message,
+        "challenge_kind": snapshot.challenge.kind if snapshot.challenge else None,
+        "needs_input": (snapshot.challenge.needs_input if snapshot.challenge else False),
+        "updated_at": utcnow().isoformat(),
+    }
+    gateway.provider_auth_sessions = sessions
+
+
+def _clear_gateway_provider_auth_session(gateway: Gateway, *, provider_id: str) -> None:
+    sessions = _gateway_provider_auth_session_records(gateway)
+    if provider_id in sessions:
+        sessions.pop(provider_id, None)
+        gateway.provider_auth_sessions = sessions or None
+
+
+def _cloud_auth_helper_client() -> OpenClawAuthHelperClient:
+    socket_path = settings.openclaw_auth_helper_socket_path.strip()
+    if not socket_path:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="Cloud interactive auth helper is not configured on this Mission Control runtime.",
+        )
+    try:
+        return OpenClawAuthHelperClient(socket_path=socket_path)
+    except OpenClawAuthHelperError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail=str(exc),
+        ) from exc
+
+
+def _cloud_auth_helper_challenge(
+    snapshot: OpenClawAuthHelperSessionSnapshot,
+) -> GatewayProviderAuthChallenge | None:
+    helper_challenge = snapshot.challenge
+    if helper_challenge is None:
+        return None
+    return GatewayProviderAuthChallenge(
+        session_id=helper_challenge.session_id or snapshot.session_id,
+        kind=helper_challenge.kind,
+        title=helper_challenge.title,
+        message=helper_challenge.message,
+        instructions=list(helper_challenge.instructions),
+        action_label=helper_challenge.action_label,
+        action_url=helper_challenge.action_url,
+        code=helper_challenge.code,
+        needs_input=helper_challenge.needs_input,
+        input_label=helper_challenge.input_label,
+        poll_after_ms=helper_challenge.poll_after_ms,
+    )
+
+
+def _cloud_auth_session_is_terminal(snapshot: OpenClawAuthHelperSessionSnapshot) -> bool:
+    return snapshot.status in {"verified", "error", "cancelled", "disconnected"}
 
 
 def _gateway_client_config(gateway: Gateway) -> GatewayClientConfig:
@@ -1156,10 +1251,10 @@ async def _provider_runtime_summaries(
         requires_login = False
         auth_state = "configured"
         if auth_mode in {"oauth", "login"}:
-            if connected_profile is None:
+            if connected_profile is None or verified_model_count <= 0:
                 requires_login = True
                 auth_state = "requires-login"
-            elif verified_model_count > 0:
+            else:
                 auth_state = "verified"
         elif auth_mode in {"api-key", "token"}:
             if verified_model_count > 0 and not unresolved_secret_refs:
@@ -2137,7 +2232,233 @@ class GatewayRuntimeControlService(OpenClawDBService):
             detail=f"Node does not define a provider auth config for {provider_id}.",
         )
 
-    async def _provider_auth_action(
+    async def _record_provider_auth_activity(
+        self,
+        *,
+        gateway: Gateway,
+        provider_id: str,
+        action: str,
+        status_value: str,
+        warnings: list[str],
+        auth: AuthContext,
+    ) -> None:
+        record_activity(
+            self.session,
+            event_type=f"gateway.provider.{action}",
+            message=f"{action.replace('-', ' ').title()} provider auth for {provider_id} on gateway {gateway.name}.",
+            entity_type="gateway",
+            entity_id=str(gateway.id),
+            details={"provider_id": provider_id, "status": status_value, "warnings": warnings},
+            **actor_fields_from_auth(auth),
+        )
+        await self.session.commit()
+
+    async def _provider_auth_response_from_runtime_state(
+        self,
+        *,
+        gateway: Gateway,
+        provider_id: str,
+        auth_config: GatewayProviderAuthConfig,
+        message: str,
+        warnings: list[str] | None = None,
+        challenge: GatewayProviderAuthChallenge | None = None,
+    ) -> GatewayProviderAuthActionResponse:
+        runtime = await self.runtime_summary(gateway=gateway)
+        provider_runtime = next(
+            (item for item in runtime.providers if item.id == provider_id),
+            None,
+        )
+        if provider_runtime is not None:
+            return GatewayProviderAuthActionResponse(
+                gateway_id=gateway.id,
+                provider_id=provider_id,
+                auth_mode=provider_runtime.auth_mode or auth_config.auth_mode,
+                auth_state=provider_runtime.auth_state,
+                connected_profile=provider_runtime.connected_profile,
+                requires_login=provider_runtime.requires_login,
+                message=message,
+                challenge=challenge,
+                warnings=list(warnings or []),
+            )
+        requires_login = auth_config.auth_mode in {"oauth", "login"}
+        return GatewayProviderAuthActionResponse(
+            gateway_id=gateway.id,
+            provider_id=provider_id,
+            auth_mode=auth_config.auth_mode,
+            auth_state=("requires-login" if requires_login else "configured"),
+            connected_profile=auth_config.profile_id,
+            requires_login=requires_login,
+            message=message,
+            challenge=challenge,
+            warnings=list(warnings or []),
+        )
+
+    async def _cloud_provider_auth_response(
+        self,
+        *,
+        gateway: Gateway,
+        provider_id: str,
+        auth_config: GatewayProviderAuthConfig,
+        snapshot: OpenClawAuthHelperSessionSnapshot,
+        action: str,
+        auth: AuthContext,
+    ) -> GatewayProviderAuthActionResponse:
+        warnings = list(snapshot.warnings)
+        if _cloud_auth_session_is_terminal(snapshot):
+            _clear_gateway_provider_auth_session(gateway, provider_id=provider_id)
+        else:
+            _store_gateway_provider_auth_session(
+                gateway,
+                provider_id=provider_id,
+                snapshot=snapshot,
+            )
+        self.session.add(gateway)
+        if snapshot.status == "verified":
+            await self.reconcile_gateway_runtime(
+                gateway=gateway,
+                auth=auth,
+                request=GatewayRuntimeSyncRequest(
+                    repair_stuck_agents=False,
+                    sync_models=True,
+                    wake_agents=False,
+                ),
+            )
+        else:
+            await self.session.commit()
+
+        response = await self._provider_auth_response_from_runtime_state(
+            gateway=gateway,
+            provider_id=provider_id,
+            auth_config=auth_config,
+            message=(
+                snapshot.message
+                or (
+                    "Provider sign-in verified on the remote node."
+                    if snapshot.status == "verified"
+                    else (
+                        "Provider sign-in is waiting for interactive action on the remote node."
+                        if snapshot.status not in {"error", "cancelled", "disconnected"}
+                        else "Provider sign-in needs attention on the remote node."
+                    )
+                )
+            ),
+            warnings=warnings,
+            challenge=(
+                None
+                if snapshot.status in {"verified", "disconnected"}
+                else _cloud_auth_helper_challenge(snapshot)
+            ),
+        )
+        if snapshot.status == "verified" and response.auth_state == "verified":
+            status_value = "ok"
+        elif snapshot.status == "disconnected":
+            status_value = "ok"
+        elif snapshot.status in {"error", "cancelled"}:
+            status_value = "blocked"
+        else:
+            status_value = "pending-login"
+        await self._record_provider_auth_activity(
+            gateway=gateway,
+            provider_id=provider_id,
+            action=action,
+            status_value=status_value,
+            warnings=warnings,
+            auth=auth,
+        )
+        return response
+
+    async def _cloud_provider_auth_action(
+        self,
+        *,
+        gateway: Gateway,
+        provider_id: str,
+        action: str,
+        auth: AuthContext,
+    ) -> GatewayProviderAuthActionResponse:
+        auth_config = await self._resolve_provider_auth_config(
+            gateway=gateway,
+            provider_id=provider_id,
+        )
+        if auth_config.auth_mode not in {"oauth", "login"}:
+            return GatewayProviderAuthActionResponse(
+                gateway_id=gateway.id,
+                provider_id=provider_id,
+                auth_mode=auth_config.auth_mode,
+                auth_state="configured",
+                connected_profile=None,
+                requires_login=False,
+                message="Interactive provider actions are only supported for oauth/login modes.",
+                challenge=None,
+                warnings=["Interactive provider actions are only supported for oauth/login modes."],
+            )
+
+        existing_session_id = _gateway_provider_auth_session_id(gateway, provider_id)
+        client = _cloud_auth_helper_client()
+        try:
+            if action == "connect":
+                snapshot = await client.start_session(
+                    gateway_id=str(gateway.id),
+                    provider_id=provider_id,
+                    provider_label=auth_config.display_label,
+                    session_id=existing_session_id,
+                )
+            elif action == "refresh":
+                if existing_session_id is None:
+                    response = await self._provider_auth_response_from_runtime_state(
+                        gateway=gateway,
+                        provider_id=provider_id,
+                        auth_config=auth_config,
+                        message="No active cloud sign-in session is running. Use Connect to start one.",
+                    )
+                    await self._record_provider_auth_activity(
+                        gateway=gateway,
+                        provider_id=provider_id,
+                        action=action,
+                        status_value="idle",
+                        warnings=[],
+                        auth=auth,
+                    )
+                    return response
+                snapshot = await client.refresh_session(session_id=existing_session_id)
+            elif action == "disconnect":
+                snapshot = await client.disconnect_provider(
+                    gateway_id=str(gateway.id),
+                    provider_id=provider_id,
+                    session_id=existing_session_id,
+                )
+            else:
+                raise HTTPException(
+                    status_code=status.HTTP_400_BAD_REQUEST,
+                    detail=f"Unsupported provider auth action: {action}.",
+                )
+        except OpenClawAuthHelperError as exc:
+            warnings = [str(exc)]
+            response = await self._provider_auth_response_from_runtime_state(
+                gateway=gateway,
+                provider_id=provider_id,
+                auth_config=auth_config,
+                message=str(exc),
+                warnings=warnings,
+            )
+            await self._record_provider_auth_activity(
+                gateway=gateway,
+                provider_id=provider_id,
+                action=action,
+                status_value="blocked",
+                warnings=warnings,
+                auth=auth,
+            )
+            return response
+        return await self._cloud_provider_auth_response(
+            gateway=gateway,
+            provider_id=provider_id,
+            auth_config=auth_config,
+            snapshot=snapshot,
+            action=action,
+            auth=auth,
+        )
+
+    async def _local_provider_auth_action(
         self,
         *,
         gateway: Gateway,
@@ -2195,17 +2516,7 @@ class GatewayRuntimeControlService(OpenClawDBService):
         elif status_value != "blocked":
             status_value = "ok"
 
-        record_activity(
-            self.session,
-            event_type=f"gateway.provider.{action}",
-            message=f"{action.title()} provider auth for {provider_id} on gateway {gateway.name}.",
-            entity_type="gateway",
-            entity_id=str(gateway.id),
-            details={"provider_id": provider_id, "status": status_value, "warnings": warnings},
-            **actor_fields_from_auth(auth),
-        )
-        await self.session.commit()
-        return GatewayProviderAuthActionResponse(
+        response = GatewayProviderAuthActionResponse(
             gateway_id=gateway.id,
             provider_id=provider_id,
             auth_mode=(provider_runtime.auth_mode if provider_runtime else auth_config.auth_mode),
@@ -2219,6 +2530,37 @@ class GatewayRuntimeControlService(OpenClawDBService):
             message=f"Provider {provider_id} {status_value}.",
             challenge=challenge,
             warnings=warnings,
+        )
+        await self._record_provider_auth_activity(
+            gateway=gateway,
+            provider_id=provider_id,
+            action=action,
+            status_value=status_value,
+            warnings=warnings,
+            auth=auth,
+        )
+        return response
+
+    async def _provider_auth_action(
+        self,
+        *,
+        gateway: Gateway,
+        provider_id: str,
+        action: str,
+        auth: AuthContext,
+    ) -> GatewayProviderAuthActionResponse:
+        if gateway.node_class == "cloud":
+            return await self._cloud_provider_auth_action(
+                gateway=gateway,
+                provider_id=provider_id,
+                action=action,
+                auth=auth,
+            )
+        return await self._local_provider_auth_action(
+            gateway=gateway,
+            provider_id=provider_id,
+            action=action,
+            auth=auth,
         )
 
     async def connect_provider_auth(
@@ -2260,6 +2602,75 @@ class GatewayRuntimeControlService(OpenClawDBService):
             gateway=gateway,
             provider_id=provider_id,
             action="disconnect",
+            auth=auth,
+        )
+
+    async def submit_provider_auth_challenge_input(
+        self,
+        *,
+        gateway: Gateway,
+        provider_id: str,
+        session_id: str,
+        input_text: str,
+        auth: AuthContext,
+    ) -> GatewayProviderAuthActionResponse:
+        auth_config = await self._resolve_provider_auth_config(
+            gateway=gateway,
+            provider_id=provider_id,
+        )
+        if gateway.node_class != "cloud":
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="Interactive challenge input is only supported for cloud node auth-helper sessions.",
+            )
+        active_session_id = _gateway_provider_auth_session_id(gateway, provider_id)
+        if active_session_id is None:
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail=f"No active provider auth session exists for {provider_id}.",
+            )
+        normalized_session_id = session_id.strip()
+        if normalized_session_id != active_session_id:
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail="The submitted auth challenge input does not match the active provider session.",
+            )
+        normalized_input = input_text.strip()
+        if not normalized_input:
+            raise HTTPException(
+                status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
+                detail="Interactive auth input must be non-empty.",
+            )
+        client = _cloud_auth_helper_client()
+        try:
+            snapshot = await client.submit_challenge_input(
+                session_id=normalized_session_id,
+                input_text=normalized_input,
+            )
+        except OpenClawAuthHelperError as exc:
+            warnings = [str(exc)]
+            response = await self._provider_auth_response_from_runtime_state(
+                gateway=gateway,
+                provider_id=provider_id,
+                auth_config=auth_config,
+                message=str(exc),
+                warnings=warnings,
+            )
+            await self._record_provider_auth_activity(
+                gateway=gateway,
+                provider_id=provider_id,
+                action="challenge-input",
+                status_value="blocked",
+                warnings=warnings,
+                auth=auth,
+            )
+            return response
+        return await self._cloud_provider_auth_response(
+            gateway=gateway,
+            provider_id=provider_id,
+            auth_config=auth_config,
+            snapshot=snapshot,
+            action="challenge-input",
             auth=auth,
         )
 

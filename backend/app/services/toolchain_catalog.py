@@ -176,6 +176,18 @@ def toolchain_catalog() -> ToolchainCatalogResponse:
                 kind="advanced-capable",
                 models=[
                     ToolchainCatalogModelPreset(
+                        model_id="openai/gpt-5",
+                        label="OpenAI GPT-5",
+                        api_mode="openai-completions",
+                        input_modalities=["text"],
+                    ),
+                    ToolchainCatalogModelPreset(
+                        model_id="openai/gpt-5-mini",
+                        label="OpenAI GPT-5 Mini",
+                        api_mode="openai-completions",
+                        input_modalities=["text"],
+                    ),
+                    ToolchainCatalogModelPreset(
                         model_id="openai/gpt-4.1",
                         label="OpenAI GPT-4.1",
                         api_mode="openai-completions",
@@ -205,6 +217,16 @@ def toolchain_catalog() -> ToolchainCatalogResponse:
                 kind="local-interactive",
                 models=[
                     ToolchainCatalogModelPreset(
+                        model_id="gpt-4o",
+                        label="GPT-4o",
+                        input_modalities=["text"],
+                    ),
+                    ToolchainCatalogModelPreset(
+                        model_id="gpt-4.1",
+                        label="GPT-4.1",
+                        input_modalities=["text"],
+                    ),
+                    ToolchainCatalogModelPreset(
                         model_id="gpt-5",
                         label="GPT-5",
                         input_modalities=["text"],
@@ -213,6 +235,18 @@ def toolchain_catalog() -> ToolchainCatalogResponse:
                         model_id="gpt-5.4",
                         label="GPT-5.4",
                         input_modalities=["text"],
+                    ),
+                    ToolchainCatalogModelPreset(
+                        model_id="claude-sonnet-4-6",
+                        label="Claude Sonnet 4.6",
+                        input_modalities=["text"],
+                        enabled_by_default=False,
+                    ),
+                    ToolchainCatalogModelPreset(
+                        model_id="gemini-2.5-pro",
+                        label="Gemini 2.5 Pro",
+                        input_modalities=["text"],
+                        enabled_by_default=False,
                     ),
                 ],
             ),
@@ -232,9 +266,25 @@ def toolchain_catalog() -> ToolchainCatalogResponse:
                 kind="local-interactive",
                 models=[
                     ToolchainCatalogModelPreset(
+                        model_id="gemini-3-flash-preview",
+                        label="Gemini 3 Flash Preview",
+                        input_modalities=["text"],
+                    ),
+                    ToolchainCatalogModelPreset(
                         model_id="gemini-3.1-pro-preview",
                         label="Gemini 3.1 Pro Preview",
                         input_modalities=["text"],
+                    ),
+                    ToolchainCatalogModelPreset(
+                        model_id="gemini-2.5-flash",
+                        label="Gemini 2.5 Flash",
+                        input_modalities=["text"],
+                    ),
+                    ToolchainCatalogModelPreset(
+                        model_id="gemini-2.5-pro",
+                        label="Gemini 2.5 Pro",
+                        input_modalities=["text"],
+                        enabled_by_default=False,
                     ),
                 ],
             ),

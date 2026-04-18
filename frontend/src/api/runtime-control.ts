@@ -146,12 +146,17 @@ export type GatewayUsagePullResponse = {
 export type GatewayProviderAuthAction = "connect" | "refresh" | "disconnect";
 
 export type GatewayProviderAuthChallenge = {
+  session_id?: string | null;
+  kind?: string | null;
   title?: string | null;
   message?: string | null;
   instructions: string[];
   action_label?: string | null;
   action_url?: string | null;
   code?: string | null;
+  needs_input?: boolean | null;
+  input_label?: string | null;
+  poll_after_ms?: number | null;
 };
 
 export type GatewayProviderAuthActionResponse = {
@@ -164,6 +169,11 @@ export type GatewayProviderAuthActionResponse = {
   message?: string | null;
   challenge?: GatewayProviderAuthChallenge | null;
   warnings: string[];
+};
+
+export type GatewayProviderAuthChallengeInputRequest = {
+  session_id: string;
+  input_text: string;
 };
 
 export type UsageAggregateBucket = {
@@ -239,6 +249,19 @@ export const mutateGatewayProviderAuth = async (
   customFetch<ApiEnvelope<GatewayProviderAuthActionResponse>>(
     `/api/v1/gateways/${gatewayId}/providers/${providerId}/${action}`,
     { method: "POST" },
+  );
+
+export const submitGatewayProviderAuthChallengeInput = async (
+  gatewayId: string,
+  providerId: string,
+  payload: GatewayProviderAuthChallengeInputRequest,
+): Promise<ApiEnvelope<GatewayProviderAuthActionResponse>> =>
+  customFetch<ApiEnvelope<GatewayProviderAuthActionResponse>>(
+    `/api/v1/gateways/${gatewayId}/providers/${providerId}/challenge-input`,
+    {
+      method: "POST",
+      body: JSON.stringify(payload),
+    },
   );
 
 export const listGatewayAudit = async (
